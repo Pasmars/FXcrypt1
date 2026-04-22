@@ -13,6 +13,34 @@
     />
   </head>
   <body>
+    <div class="menu-nav">
+      <button id="menuBtn" class="menu-btn" title="Menu" aria-label="Open menu">
+        <span class="menu-icon">
+          <span></span>
+          <span></span>
+          <span></span>
+        </span>
+      </button>
+    </div>
+    <div id="sideMenu" class="side-menu">
+      <div class="side-menu-header">
+        <span class="side-menu-title">Menu</span>
+        <button
+          id="closeMenuBtn"
+          class="close-menu-btn"
+          aria-label="Close menu"
+        >
+          &times;
+        </button>
+      </div>
+      <ul class="side-menu-list">
+        <li><a href="profile.html">My Profile</a></li>
+        <li><a href="prices.html">Crypto Prices</a></li>
+        <li>
+          <button id="sideLogoutBtn" class="side-logout-btn">Logout</button>
+        </li>
+      </ul>
+    </div>
     <div class="profile-nav">
       <a href="profile.html" class="profile-btn" title="View Profile">
         <span id="profileInitials"></span>
@@ -131,34 +159,82 @@
       <div id="result"></div>
     </div>
     <script>
-      // Authentication Check
-      function checkAuth() {
-        const currentUser = localStorage.getItem("currentUser");
-        if (!currentUser) {
-          window.location.href = "login.html";
-          return;
+      document.addEventListener("DOMContentLoaded", function () {
+        // Authentication Check
+        function checkAuth() {
+          const currentUser = localStorage.getItem("currentUser");
+          if (!currentUser) {
+            window.location.href = "login.html";
+            return;
+          }
+
+          const user = JSON.parse(currentUser);
+          document.getElementById("userEmail").textContent =
+            `${user.firstName} ${user.lastName}`;
+          document.getElementById("logoutBtn").style.display = "block";
+
+          // Set profile initials
+          const initials = (
+            user.firstName.charAt(0) + user.lastName.charAt(0)
+          ).toUpperCase();
+          document.getElementById("profileInitials").textContent = initials;
+
+          document
+            .getElementById("logoutBtn")
+            .addEventListener("click", function () {
+              localStorage.removeItem("currentUser");
+              window.location.href = "login.html";
+            });
         }
 
-        const user = JSON.parse(currentUser);
-        document.getElementById("userEmail").textContent =
-          `${user.firstName} ${user.lastName}`;
-        document.getElementById("logoutBtn").style.display = "block";
+        checkAuth();
 
-        // Set profile initials
-        const initials = (
-          user.firstName.charAt(0) + user.lastName.charAt(0)
-        ).toUpperCase();
-        document.getElementById("profileInitials").textContent = initials;
-
-        document
-          .getElementById("logoutBtn")
-          .addEventListener("click", function () {
+        // Menu open/close logic (responsive and touch-friendly)
+        const menuBtn = document.getElementById("menuBtn");
+        const sideMenu = document.getElementById("sideMenu");
+        const closeMenuBtn = document.getElementById("closeMenuBtn");
+        if (menuBtn && sideMenu && closeMenuBtn) {
+          const openMenu = (e) => {
+            e.stopPropagation();
+            sideMenu.classList.add("open");
+          };
+          const closeMenu = (e) => {
+            e.stopPropagation();
+            sideMenu.classList.remove("open");
+          };
+          menuBtn.addEventListener("click", openMenu);
+          menuBtn.addEventListener("touchstart", openMenu);
+          closeMenuBtn.addEventListener("click", closeMenu);
+          closeMenuBtn.addEventListener("touchstart", closeMenu);
+          // Close menu on outside click (mouse or touch)
+          document.addEventListener("mousedown", function (e) {
+            if (
+              sideMenu.classList.contains("open") &&
+              !sideMenu.contains(e.target) &&
+              e.target !== menuBtn
+            ) {
+              sideMenu.classList.remove("open");
+            }
+          });
+          document.addEventListener("touchstart", function (e) {
+            if (
+              sideMenu.classList.contains("open") &&
+              !sideMenu.contains(e.target) &&
+              e.target !== menuBtn
+            ) {
+              sideMenu.classList.remove("open");
+            }
+          });
+        }
+        // Logout from menu
+        const sideLogoutBtn = document.getElementById("sideLogoutBtn");
+        if (sideLogoutBtn) {
+          sideLogoutBtn.onclick = function () {
             localStorage.removeItem("currentUser");
             window.location.href = "login.html";
-          });
-      }
-
-      checkAuth();
+          };
+        }
+      });
     </script>
     <script src="script.js"></script>
     <script>
