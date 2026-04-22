@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#00c853" />
+    <link rel="manifest" href="manifest.json" />
+    <title>User Profile - FXcrypt</title>
+    <link rel="stylesheet" href="style.css" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      .profile-container {
+        background-color: #1a1a1a;
+        padding: 40px;
+        border-radius: 10px;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        max-width: 600px;
+        margin: 40px auto;
+      }
+
+      .profile-header {
+        text-align: center;
+        margin-bottom: 30px;
+      }
+
+      .profile-icon {
+        width: 100px;
+        height: 100px;
+        background-color: #00c853;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin: 0 auto 20px;
+        font-size: 48px;
+        color: #000;
+        font-weight: bold;
+      }
+
+      .profile-header h2 {
+        color: #ffffff;
+        margin: 15px 0 5px 0;
+      }
+
+      .profile-header p {
+        color: #aaa;
+        margin: 0;
+      }
+
+      .profile-details {
+        background-color: #2a2a2a;
+        padding: 20px;
+        border-radius: 8px;
+        margin-bottom: 20px;
+      }
+
+      .detail-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 15px 0;
+        border-bottom: 1px solid #333;
+      }
+
+      .detail-row:last-child {
+        border-bottom: none;
+      }
+
+      .detail-label {
+        font-weight: 600;
+        color: #00c853;
+      }
+
+      .detail-value {
+        color: #ffffff;
+      }
+
+      .back-btn {
+        padding: 12px 24px;
+        background-color: #333;
+        color: #fff;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 600;
+        transition: background-color 0.3s;
+        display: block;
+        margin: 20px auto 0;
+      }
+
+      .back-btn:hover {
+        background-color: #444;
+      }
+
+      .profile-nav {
+        position: fixed;
+        top: 20px;
+        left: 20px;
+        z-index: 1000;
+      }
+
+      .profile-nav a {
+        display: inline-block;
+        width: 40px;
+        height: 40px;
+        background-color: #00c853;
+        border-radius: 50%;
+        text-align: center;
+        line-height: 40px;
+        color: #000;
+        text-decoration: none;
+        font-weight: bold;
+        font-size: 20px;
+        transition: background-color 0.3s;
+      }
+
+      .profile-nav a:hover {
+        background-color: #00b847;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="profile-nav">
+      <a href="index.html" title="Back to Dashboard">←</a>
+    </div>
+
+    <div class="profile-container">
+      <div class="profile-header">
+        <div class="profile-icon" id="profileIcon"></div>
+        <h2 id="userFullName"></h2>
+        <p id="userEmailDisplay"></p>
+      </div>
+
+      <div class="profile-details">
+        <div class="detail-row">
+          <span class="detail-label">Email:</span>
+          <span class="detail-value" id="detailEmail"></span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">First Name:</span>
+          <span class="detail-value" id="detailFirstName"></span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Last Name:</span>
+          <span class="detail-value" id="detailLastName"></span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Phone:</span>
+          <span class="detail-value" id="detailPhone"></span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Member Since:</span>
+          <span class="detail-value" id="detailJoinDate"></span>
+        </div>
+      </div>
+
+      <button class="back-btn" onclick="window.location.href = 'index.html'">
+        Back to Dashboard
+      </button>
+    </div>
+
+    <script>
+      function loadUserProfile() {
+        const currentUser = localStorage.getItem("currentUser");
+        if (!currentUser) {
+          window.location.href = "login.html";
+          return;
+        }
+
+        const user = JSON.parse(currentUser);
+
+        // Generate initials for profile icon
+        const initials = (
+          user.firstName.charAt(0) + user.lastName.charAt(0)
+        ).toUpperCase();
+        document.getElementById("profileIcon").textContent = initials;
+
+        // Fill in profile details
+        document.getElementById("userFullName").textContent =
+          `${user.firstName} ${user.lastName}`;
+        document.getElementById("userEmailDisplay").textContent = user.email;
+        document.getElementById("detailEmail").textContent = user.email;
+        document.getElementById("detailFirstName").textContent = user.firstName;
+        document.getElementById("detailLastName").textContent = user.lastName;
+        document.getElementById("detailPhone").textContent = user.phone;
+
+        // Member since date
+        const joinDate = new Date().toLocaleDateString();
+        document.getElementById("detailJoinDate").textContent = joinDate;
+      }
+
+      loadUserProfile();
+    </script>
+    <script>
+      if ("serviceWorker" in navigator) {
+        window.addEventListener("load", function () {
+          navigator.serviceWorker.register("service-worker.js");
+        });
+      }
+    </script>
+  </body>
+</html>

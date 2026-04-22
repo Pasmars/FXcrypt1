@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#00c853" />
+    <link rel="manifest" href="manifest.json" />
+    <title>FXcrypt - PnL Calculator for Forex and Crypto</title>
+    <link rel="stylesheet" href="style.css" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div class="profile-nav">
+      <a href="profile.html" class="profile-btn" title="View Profile">
+        <span id="profileInitials"></span>
+      </a>
+    </div>
+    <div class="container">
+      <img
+        src="logo.svg"
+        alt="FXcrypt Logo"
+        style="display: block; margin: 0 auto 20px; width: 200px; height: auto"
+      />
+      <nav class="menu-tabs">
+        <a href="index.html" class="tab active">PnL Calculator</a>
+        <a href="prices.html" class="tab">Crypto Prices</a>
+        <div
+          style="
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+          "
+        >
+          <span id="userEmail" style="color: #aaa; font-size: 14px"></span>
+          <button id="logoutBtn" class="logout-btn" style="display: none">
+            Logout
+          </button>
+        </div>
+      </nav>
+      <form id="pnlForm">
+        <label for="tradeType">Trade Type:</label>
+        <select id="tradeType">
+          <option value="crypto">Crypto</option>
+          <option value="forex">Forex</option>
+        </select>
+        <label for="entryPrice">Entry Price:</label>
+        <input type="number" id="entryPrice" step="any" required />
+        <label for="exitPrice">Exit Price:</label>
+        <input type="number" id="exitPrice" step="any" required />
+        <label for="quantity" id="quantityLabel">Quantity:</label>
+        <input type="number" id="quantity" step="any" required />
+        <label for="capital">Capital Used:</label>
+        <input type="number" id="capital" step="any" required />
+        <div id="cryptoOptions" style="display: block" class="crypto-options">
+          <div class="form-row">
+            <label for="positionType">Position Type:</label>
+            <select id="positionType">
+              <option value="long">Long</option>
+              <option value="short">Short</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="leverage">Leverage:</label>
+            <input type="number" id="leverage" step="any" value="1" min="1" />
+          </div>
+        </div>
+        <div id="forexOptions" style="display: none" class="forex-options">
+          <div class="form-row">
+            <label for="lotSize">Lot Size:</label>
+            <input type="number" id="lotSize" step="any" value="1" />
+          </div>
+          <div class="form-row">
+            <label for="contractSize">Contract Size:</label>
+            <input type="number" id="contractSize" step="any" value="100000" />
+          </div>
+          <div class="form-row">
+            <label for="exchangeRate">Exchange Rate:</label>
+            <input type="number" id="exchangeRate" step="any" value="1" />
+          </div>
+          <div class="converter-section">
+            <h3>Currency Converter</h3>
+            <div class="form-row">
+              <label for="fromCurrency">From:</label>
+              <select id="fromCurrency">
+                <option value="USD">USD</option>
+                <option value="EUR">EUR</option>
+                <option value="GBP">GBP</option>
+                <option value="JPY">JPY</option>
+                <option value="AUD">AUD</option>
+                <option value="CAD">CAD</option>
+                <option value="CHF">CHF</option>
+                <option value="CNY">CNY</option>
+                <option value="INR">INR</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label for="toCurrency">To:</label>
+              <select id="toCurrency">
+                <option value="EUR">EUR</option>
+                <option value="USD">USD</option>
+                <option value="GBP">GBP</option>
+                <option value="JPY">JPY</option>
+                <option value="AUD">AUD</option>
+                <option value="CAD">CAD</option>
+                <option value="CHF">CHF</option>
+                <option value="CNY">CNY</option>
+                <option value="INR">INR</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label for="convertAmount">Amount:</label>
+              <input
+                type="number"
+                id="convertAmount"
+                step="any"
+                placeholder="Enter amount"
+              />
+            </div>
+            <button type="button" id="convertBtn" class="convert-button">
+              Convert
+            </button>
+            <div id="converterResult" class="converter-result"></div>
+          </div>
+        </div>
+        <button type="submit">Calculate PnL</button>
+      </form>
+      <div id="result"></div>
+    </div>
+    <script>
+      // Authentication Check
+      function checkAuth() {
+        const currentUser = localStorage.getItem("currentUser");
+        if (!currentUser) {
+          window.location.href = "login.html";
+          return;
+        }
+
+        const user = JSON.parse(currentUser);
+        document.getElementById("userEmail").textContent =
+          `${user.firstName} ${user.lastName}`;
+        document.getElementById("logoutBtn").style.display = "block";
+
+        // Set profile initials
+        const initials = (
+          user.firstName.charAt(0) + user.lastName.charAt(0)
+        ).toUpperCase();
+        document.getElementById("profileInitials").textContent = initials;
+
+        document
+          .getElementById("logoutBtn")
+          .addEventListener("click", function () {
+            localStorage.removeItem("currentUser");
+            window.location.href = "login.html";
+          });
+      }
+
+      checkAuth();
+    </script>
+    <script src="script.js"></script>
+    <script>
+      if ("serviceWorker" in navigator) {
+        window.addEventListener("load", function () {
+          navigator.serviceWorker.register("service-worker.js");
+        });
+      }
+    </script>
+  </body>
+</html>

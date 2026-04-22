@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#00c853" />
+    <link rel="manifest" href="manifest.json" />
+    <title>Crypto Prices - FXcrypt</title>
+    <link rel="stylesheet" href="style.css" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div class="profile-nav">
+      <a href="profile.html" class="profile-btn" title="View Profile">
+        <span id="profileInitials"></span>
+      </a>
+    </div>
+    <div class="container">
+      <img
+        src="logo.svg"
+        alt="FXcrypt Logo"
+        style="display: block; margin: 0 auto 20px; width: 200px; height: auto"
+      />
+      <nav class="menu-tabs">
+        <a href="index.html" class="tab">PnL Calculator</a>
+        <a href="prices.html" class="tab active">Crypto Prices</a>
+        <div
+          style="
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+          "
+        >
+          <span id="userEmail" style="color: #aaa; font-size: 14px"></span>
+          <button id="logoutBtn" class="logout-btn" style="display: none">
+            Logout
+          </button>
+        </div>
+      </nav>
+      <div id="pricesSection">
+        <h3>Top 5 Crypto Prices</h3>
+        <button id="fetchPricesBtn">Fetch Prices</button>
+        <ul id="pricesList"></ul>
+      </div>
+    </div>
+    <script>
+      // Authentication Check
+      function checkAuth() {
+        const currentUser = localStorage.getItem("currentUser");
+        if (!currentUser) {
+          window.location.href = "login.html";
+          return;
+        }
+
+        const user = JSON.parse(currentUser);
+        document.getElementById("userEmail").textContent =
+          `${user.firstName} ${user.lastName}`;
+        document.getElementById("logoutBtn").style.display = "block";
+
+        // Set profile initials
+        const initials = (
+          user.firstName.charAt(0) + user.lastName.charAt(0)
+        ).toUpperCase();
+        document.getElementById("profileInitials").textContent = initials;
+
+        document
+          .getElementById("logoutBtn")
+          .addEventListener("click", function () {
+            localStorage.removeItem("currentUser");
+            window.location.href = "login.html";
+          });
+      }
+
+      checkAuth();
+
+      document
+        .getElementById("fetchPricesBtn")
+        .addEventListener("click", async function () {
+          const list = document.getElementById("pricesList");
+          list.innerHTML = "Loading...";
+
+          try {
+            const response = await fetch(
+              "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,binancecoin,cardano,solana&vs_currencies=usd",
+            );
+            if (!response.ok) {
+              throw new Error("Failed to fetch prices");
+            }
+            const data = await response.json();
+            list.innerHTML = "";
+
+            const sortedCoins = Object.entries(data).sort(
+              ([, a], [, b]) => b.usd - a.usd,
+            );
+
+            for (const [coin, info] of sortedCoins) {
+              const li = document.createElement("li");
+              li.textContent = `${coin.toUpperCase()}: $${info.usd.toLocaleString()}`;
+              list.appendChild(li);
+            }
+          } catch (error) {
+            list.innerHTML = "Error fetching prices. Please try again.";
+            console.error("Price fetch error:", error);
+          }
+        });
+    </script>
+    <script>
+      if ("serviceWorker" in navigator) {
+        window.addEventListener("load", function () {
+          navigator.serviceWorker.register("service-worker.js");
+        });
+      }
+    </script>
+  </body>
+</html>
