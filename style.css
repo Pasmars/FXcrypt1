@@ -62,11 +62,26 @@ body {
   background-color: #d01041;
 }
 
-.menu-nav {
+/* Top nav bar for horizontal alignment */
+.top-nav-bar {
   position: fixed;
   top: 20px;
-  left: 20px;
-  z-index: 1100;
+  left: 0;
+  width: 100vw;
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+  z-index: 1200;
+  pointer-events: none;
+}
+.menu-nav {
+  margin-left: 20px;
+  pointer-events: auto;
+}
+.profile-nav {
+  margin-right: 20px;
+  pointer-events: auto;
 }
 
 .menu-btn {
@@ -166,12 +181,8 @@ body {
   color: #ff1744;
   font-weight: 700;
 }
-.profile-nav {
-  position: fixed;
-  top: 20px;
-  right: 20px;
-  z-index: 1000;
-}
+
+/* .profile-nav positioning removed, now handled by .top-nav-bar */
 
 .profile-btn {
   display: inline-flex;
