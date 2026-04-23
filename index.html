@@ -13,14 +13,26 @@
     />
   </head>
   <body>
-    <div class="menu-nav">
-      <button id="menuBtn" class="menu-btn" title="Menu" aria-label="Open menu">
-        <span class="menu-icon">
-          <span></span>
-          <span></span>
-          <span></span>
-        </span>
-      </button>
+    <div class="top-nav-bar">
+      <div class="menu-nav">
+        <button
+          id="menuBtn"
+          class="menu-btn"
+          title="Menu"
+          aria-label="Open menu"
+        >
+          <span class="menu-icon">
+            <span></span>
+            <span></span>
+            <span></span>
+          </span>
+        </button>
+      </div>
+      <div class="profile-nav">
+        <a href="profile.html" class="profile-btn" title="View Profile">
+          <span id="profileInitials"></span>
+        </a>
+      </div>
     </div>
     <div id="sideMenu" class="side-menu">
       <div class="side-menu-header">
@@ -41,11 +53,7 @@
         </li>
       </ul>
     </div>
-    <div class="profile-nav">
-      <a href="profile.html" class="profile-btn" title="View Profile">
-        <span id="profileInitials"></span>
-      </a>
-    </div>
+    <!-- profile-nav moved into top-nav-bar above for horizontal alignment -->
     <div class="container">
       <img
         src="logo.svg"
