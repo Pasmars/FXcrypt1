@@ -1,7 +1,7 @@
 body {
-  font-family: "Roboto", sans-serif;
-  background-color: #0d0d0d;
-  color: #ffffff;
+  font-family: "Inter", "Roboto", sans-serif;
+  background-color: #0B0E11;
+  color: #EAECEF;
   margin: 0;
   padding: 20px;
   padding-top: 80px;
@@ -12,38 +12,42 @@ body {
 }
 
 .container {
-  background-color: #1a1a1a;
+  background-color: #1E2329;
   padding: 30px;
-  border-radius: 10px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
-  max-width: 500px;
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+  max-width: 480px;
   width: 100%;
+  border: 1px solid #2B3139;
 }
 
 .menu-tabs {
   display: flex;
   justify-content: center;
   margin-bottom: 20px;
+  border-bottom: 1px solid #2B3139;
+  padding-bottom: 8px;
 }
 
 .tab {
-  padding: 10px 20px;
-  background-color: #2a2a2a;
-  color: #ffffff;
+  padding: 8px 16px;
+  background-color: transparent;
+  color: #848E9C;
   text-decoration: none;
-  border-radius: 5px 5px 0 0;
+  border-radius: 4px;
   margin: 0 5px;
-  border: 1px solid #333;
-  border-bottom: none;
+  border: none;
+  font-weight: 500;
+  transition: all 0.2s;
 }
 
 .tab.active {
-  background-color: #00c853;
-  color: #000;
+  background-color: #2B3139;
+  color: #EAECEF;
 }
 
-.tab:hover {
-  background-color: #333;
+.tab:hover:not(.active) {
+  color: #EAECEF;
 }
 
 .logout-btn {
@@ -219,41 +223,49 @@ form {
 }
 
 label {
-  margin-top: 15px;
-  margin-bottom: 5px;
+  display: block;
+  margin-top: 16px;
+  margin-bottom: 6px;
+  font-size: 13px;
+  color: #848E9C;
   font-weight: 500;
 }
 
 input,
 select {
   padding: 12px;
-  border: 1px solid #333;
-  border-radius: 5px;
-  background-color: #2a2a2a;
-  color: #ffffff;
-  font-size: 16px;
+  border: 1px solid #2B3139;
+  border-radius: 4px;
+  background-color: #2B3139;
+  color: #EAECEF;
+  font-size: 14px;
+  width: 100%;
+  box-sizing: border-box;
+  transition: border-color 0.2s;
 }
 
 input:focus,
 select:focus {
   outline: none;
-  border-color: #00c853;
+  border-color: #FCD535;
 }
 
-button {
-  margin-top: 20px;
-  padding: 12px;
-  background-color: #00c853;
-  color: white;
-  border: 2px solid #ffd700;
-  border-radius: 5px;
+button[type="submit"] {
+  margin-top: 24px;
+  padding: 14px;
+  background-color: #FCD535;
+  color: #181A20;
+  border: none;
+  border-radius: 4px;
   cursor: pointer;
   font-size: 16px;
-  font-weight: 500;
+  font-weight: 600;
+  transition: opacity 0.2s;
+  width: 100%;
 }
 
-button:hover {
-  background-color: #00a844;
+button[type="submit"]:hover {
+  opacity: 0.9;
 }
 
 #result {
@@ -264,18 +276,18 @@ button:hover {
 }
 
 .positive {
-  color: #00c853;
+  color: #0ECB81;
 }
 
 .negative {
-  color: #ff1744;
+  color: #F6465D;
 }
 
 .forex-options {
   margin-top: 20px;
   padding: 15px;
-  background-color: #2a2a2a;
-  border-radius: 5px;
+  background-color: transparent;
+  border-radius: 4px;
 }
 
 .form-row {
@@ -304,19 +316,18 @@ button:hover {
 }
 
 .crypto-options {
-  margin-top: 20px;
-  padding: 15px;
-  background-color: #2a2a2a;
-  border-radius: 5px;
+  margin-top: 16px;
+  padding: 0;
+  background-color: transparent;
 }
 
 .crypto-options .form-row select {
   flex: 1;
   padding: 10px;
-  background-color: #1a1a1a;
-  border: 1px solid #333;
+  background-color: #2B3139;
+  border: 1px solid #2B3139;
   border-radius: 3px;
-  color: #ffffff;
+  color: #EAECEF;
 }
 
 #quantityLabel {
@@ -425,4 +436,260 @@ button:hover {
 
 #pricesList li:last-child {
   border-bottom: none;
+}
+
+/* Position Toggles */
+.position-toggles {
+  display: flex;
+  background-color: #1E2329;
+  border-radius: 4px;
+  margin-bottom: 16px;
+  border: 1px solid #2B3139;
+  overflow: hidden;
+}
+.pos-btn {
+  flex: 1;
+  padding: 10px;
+  background-color: transparent;
+  color: #848E9C;
+  font-weight: 500;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: center;
+}
+.pos-btn.long.active {
+  background-color: rgba(14, 203, 129, 0.1);
+  color: #0ECB81;
+}
+.pos-btn.short.active {
+  background-color: rgba(246, 70, 93, 0.1);
+  color: #F6465D;
+}
+
+/* Binance Results */
+.binance-result {
+  margin-top: 24px;
+  padding: 16px;
+  background-color: #2B3139;
+  border-radius: 4px;
+}
+.binance-result-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  font-size: 14px;
+}
+.binance-result-row:last-child {
+  margin-bottom: 0;
+}
+.binance-result-label {
+  color: #848E9C;
+}
+.binance-result-value {
+  color: #EAECEF;
+  font-weight: 500;
+}
+.text-red {
+  color: #F6465D !important;
+}
+
+/* Authentication & Profile Pages (Migrated from inline) */
+.auth-container, .profile-container {
+  background-color: #1E2329;
+  padding: 40px;
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+  width: 100%;
+  max-width: 480px;
+  border: 1px solid #2B3139;
+}
+
+.auth-form {
+  width: 100%;
+}
+
+.auth-form h2, .profile-header h2 {
+  text-align: center;
+  margin-bottom: 30px;
+  color: #EAECEF;
+}
+
+.logo {
+  text-align: center;
+  margin-bottom: 30px;
+}
+
+.logo img {
+  width: 150px;
+  height: auto;
+}
+
+.profile-icon {
+  width: 80px;
+  height: 80px;
+  background-color: #00c853;
+  color: #000;
+  border-radius: 50%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  font-size: 32px;
+  font-weight: bold;
+  margin: 0 auto 20px auto;
+}
+
+.profile-details {
+  background-color: #2B3139;
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 30px;
+}
+
+.detail-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 15px;
+  border-bottom: 1px solid #333;
+  padding-bottom: 5px;
+}
+
+.detail-row:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+
+.detail-label {
+  color: #848E9C;
+  font-weight: 500;
+}
+
+.detail-value {
+  color: #EAECEF;
+  font-weight: 500;
+}
+
+/* Animations & WOW UI Enhancements */
+.container, .auth-container, .profile-container {
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.container:hover, .auth-container:hover, .profile-container:hover {
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+  transform: translateY(-2px);
+}
+
+input, select {
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+input:focus, select:focus {
+  box-shadow: 0 0 0 2px rgba(252, 213, 53, 0.2);
+}
+
+button {
+  transition: background-color 0.3s ease, transform 0.1s ease, opacity 0.2s ease;
+}
+
+button:active {
+  transform: scale(0.98);
+}
+
+.back-btn {
+  padding: 12px 24px;
+  background-color: #2B3139;
+  color: #EAECEF;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  display: block;
+  margin: 20px auto 0;
+  text-decoration: none;
+  text-align: center;
+}
+
+.back-btn:hover {
+  background-color: #3f4752;
+}
+
+.profile-nav {
+  position: fixed;
+  top: 20px;
+  left: 20px;
+  z-index: 1000;
+}
+
+.profile-nav a {
+  display: inline-block;
+  width: 40px;
+  height: 40px;
+  background-color: #00c853;
+  border-radius: 50%;
+  text-align: center;
+  line-height: 40px;
+  color: #000;
+  text-decoration: none;
+  font-weight: bold;
+  font-size: 20px;
+}
+
+.profile-nav a:hover {
+  background-color: #00b847;
+}
+
+/* Responsive Media Queries */
+@media screen and (max-width: 768px) {
+  body {
+    padding: 15px;
+    padding-top: 80px;
+  }
+  .container, .auth-container, .profile-container {
+    padding: 25px;
+  }
+}
+
+@media screen and (max-width: 480px) {
+  body {
+    padding: 10px;
+    padding-top: 70px;
+  }
+  .container, .auth-container, .profile-container {
+    padding: 20px 15px;
+    border-radius: 4px;
+    border: none;
+    box-shadow: none;
+  }
+  .top-nav-bar {
+    top: 10px;
+  }
+  .pos-btn {
+    padding: 8px;
+    font-size: 13px;
+  }
+  .binance-result-row {
+    font-size: 13px;
+  }
+  input, select, button[type="submit"] {
+    padding: 12px;
+    font-size: 14px;
+  }
+  h1 {
+    font-size: 22px;
+  }
+  .side-menu {
+    width: 240px;
+  }
+  .form-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .form-row label {
+    margin-bottom: 5px;
+  }
+  .form-row input, .form-row select {
+    width: 100%;
+  }
 }

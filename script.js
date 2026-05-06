@@ -25,6 +25,20 @@ document.getElementById("tradeType").addEventListener("change", function () {
   }
 });
 
+// Toggle buttons for position type
+const posBtns = document.querySelectorAll(".pos-btn");
+const positionTypeInput = document.getElementById("positionType");
+
+if (posBtns.length > 0 && positionTypeInput) {
+  posBtns.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      posBtns.forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      positionTypeInput.value = btn.dataset.pos;
+    });
+  });
+}
+
 // ==========================================
 // SECTION 2: CURRENCY CONVERTER FUNCTIONALITY
 // Description: Handles the currency converter button click, fetches real-time exchange rates,
@@ -119,6 +133,27 @@ document.getElementById("pnlForm").addEventListener("submit", function (e) {
 
   const roi = capital > 0 ? (pnl / capital) * 100 : 0;
   let resultDiv = document.getElementById("result");
-  resultDiv.className = pnl >= 0 ? "positive" : "negative";
-  resultDiv.innerHTML = `<div class="result-container"><p>Quantity: ${quantity.toFixed(4)}</p><p>PnL: ${pnl.toFixed(2)}</p><p>ROI: ${roi.toFixed(2)}%</p></div>`;
+  const resultClass = pnl >= 0 ? "text-green" : "text-red";
+  const pnlPrefix = pnl > 0 ? "+" : "";
+
+  resultDiv.innerHTML = `
+    <div class="binance-result">
+      <div class="binance-result-row">
+        <span class="binance-result-label">Initial Margin</span>
+        <span class="binance-result-value">${capital.toFixed(2)} USDT</span>
+      </div>
+      <div class="binance-result-row">
+        <span class="binance-result-label">Quantity</span>
+        <span class="binance-result-value">${quantity.toFixed(4)}</span>
+      </div>
+      <div class="binance-result-row">
+        <span class="binance-result-label">PNL</span>
+        <span class="binance-result-value ${resultClass}">${pnlPrefix}${pnl.toFixed(2)} USDT</span>
+      </div>
+      <div class="binance-result-row">
+        <span class="binance-result-label">ROE</span>
+        <span class="binance-result-value ${resultClass}">${pnlPrefix}${roi.toFixed(2)}%</span>
+      </div>
+    </div>
+  `;
 });

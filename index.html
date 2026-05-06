@@ -79,31 +79,29 @@
       </nav>
       <form id="pnlForm">
         <label for="tradeType">Trade Type:</label>
-        <select id="tradeType">
+        <select id="tradeType" style="margin-bottom: 16px;">
           <option value="crypto">Crypto</option>
           <option value="forex">Forex</option>
         </select>
+
+        <div id="cryptoOptions" style="display: block" class="crypto-options">
+          <div class="position-toggles" id="positionToggles">
+            <div class="pos-btn long active" data-pos="long">Long</div>
+            <div class="pos-btn short" data-pos="short">Short</div>
+          </div>
+          <input type="hidden" id="positionType" value="long" />
+          <label for="leverage">Leverage:</label>
+          <input type="number" id="leverage" step="any" value="20" min="1" />
+        </div>
+
         <label for="entryPrice">Entry Price:</label>
         <input type="number" id="entryPrice" step="any" required />
         <label for="exitPrice">Exit Price:</label>
         <input type="number" id="exitPrice" step="any" required />
         <label for="quantity" id="quantityLabel">Quantity:</label>
         <input type="number" id="quantity" step="any" required />
-        <label for="capital">Capital Used:</label>
+        <label for="capital">Margin (Capital):</label>
         <input type="number" id="capital" step="any" required />
-        <div id="cryptoOptions" style="display: block" class="crypto-options">
-          <div class="form-row">
-            <label for="positionType">Position Type:</label>
-            <select id="positionType">
-              <option value="long">Long</option>
-              <option value="short">Short</option>
-            </select>
-          </div>
-          <div class="form-row">
-            <label for="leverage">Leverage:</label>
-            <input type="number" id="leverage" step="any" value="1" min="1" />
-          </div>
-        </div>
         <div id="forexOptions" style="display: none" class="forex-options">
           <div class="form-row">
             <label for="lotSize">Lot Size:</label>
@@ -166,36 +164,31 @@
       </form>
       <div id="result"></div>
     </div>
-    <script>
+    <script type="module">
+      import { setupAuthObserver } from './authObserver.js';
+      import { signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+      import { auth } from './firebase.js';
+
       document.addEventListener("DOMContentLoaded", function () {
-        // Authentication Check
-        function checkAuth() {
-          const currentUser = localStorage.getItem("currentUser");
-          if (!currentUser) {
+        // STEP 6: Auth State Observer
+        setupAuthObserver((user) => {
+          if (!user) {
             window.location.href = "login.html";
             return;
           }
 
-          const user = JSON.parse(currentUser);
-          document.getElementById("userEmail").textContent =
-            `${user.firstName} ${user.lastName}`;
+          document.getElementById("userEmail").textContent = user.email;
           document.getElementById("logoutBtn").style.display = "block";
 
-          // Set profile initials
-          const initials = (
-            user.firstName.charAt(0) + user.lastName.charAt(0)
-          ).toUpperCase();
+          let initials = user.email[0].toUpperCase();
           document.getElementById("profileInitials").textContent = initials;
+        });
 
-          document
-            .getElementById("logoutBtn")
-            .addEventListener("click", function () {
-              localStorage.removeItem("currentUser");
-              window.location.href = "login.html";
-            });
-        }
-
-        checkAuth();
+        document.getElementById("logoutBtn").addEventListener("click", function () {
+          signOut(auth).then(() => {
+            window.location.href = "login.html";
+          });
+        });
 
         // Menu open/close logic (responsive and touch-friendly)
         const menuBtn = document.getElementById("menuBtn");
@@ -238,8 +231,9 @@
         const sideLogoutBtn = document.getElementById("sideLogoutBtn");
         if (sideLogoutBtn) {
           sideLogoutBtn.onclick = function () {
-            localStorage.removeItem("currentUser");
-            window.location.href = "login.html";
+            signOut(auth).then(() => {
+              window.location.href = "login.html";
+            });
           };
         }
       });

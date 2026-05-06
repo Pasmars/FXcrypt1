@@ -47,35 +47,30 @@
         <ul id="pricesList"></ul>
       </div>
     </div>
-    <script>
-      // Authentication Check
-      function checkAuth() {
-        const currentUser = localStorage.getItem("currentUser");
-        if (!currentUser) {
+    <script type="module">
+      import { setupAuthObserver } from './authObserver.js';
+      import { signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+      import { auth } from './firebase.js';
+
+      // STEP 6: Auth State Observer
+      setupAuthObserver((user) => {
+        if (!user) {
           window.location.href = "login.html";
           return;
         }
 
-        const user = JSON.parse(currentUser);
-        document.getElementById("userEmail").textContent =
-          `${user.firstName} ${user.lastName}`;
+        document.getElementById("userEmail").textContent = user.email;
         document.getElementById("logoutBtn").style.display = "block";
 
-        // Set profile initials
-        const initials = (
-          user.firstName.charAt(0) + user.lastName.charAt(0)
-        ).toUpperCase();
+        let initials = user.email[0].toUpperCase();
         document.getElementById("profileInitials").textContent = initials;
+      });
 
-        document
-          .getElementById("logoutBtn")
-          .addEventListener("click", function () {
-            localStorage.removeItem("currentUser");
-            window.location.href = "login.html";
-          });
-      }
-
-      checkAuth();
+      document.getElementById("logoutBtn").addEventListener("click", function () {
+        signOut(auth).then(() => {
+          window.location.href = "login.html";
+        });
+      });
 
       document
         .getElementById("fetchPricesBtn")

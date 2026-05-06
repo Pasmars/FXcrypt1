@@ -9,321 +9,103 @@
       href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap"
       rel="stylesheet"
     />
-    <style>
-      .auth-container {
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        min-height: 100vh;
-      }
-
-      .auth-form {
-        background-color: #1a1a1a;
-        padding: 40px;
-        border-radius: 10px;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
-        width: 100%;
-        max-width: 500px;
-        max-height: 85vh;
-        overflow-y: auto;
-      }
-
-      .auth-form h2 {
-        text-align: center;
-        margin-bottom: 30px;
-        color: #ffffff;
-      }
-
-      .form-group {
-        margin-bottom: 20px;
-      }
-
-      .form-group label {
-        display: block;
-        margin-bottom: 8px;
-        font-weight: 500;
-      }
-
-      .form-group input {
-        width: 100%;
-        padding: 12px;
-        border: 1px solid #333;
-        border-radius: 5px;
-        background-color: #2a2a2a;
-        color: #ffffff;
-        font-size: 16px;
-        box-sizing: border-box;
-      }
-
-      .form-group input:focus {
-        outline: none;
-        border-color: #00c853;
-      }
-
-      .submit-btn {
-        width: 100%;
-        padding: 12px;
-        background-color: #00c853;
-        color: #000;
-        border: none;
-        border-radius: 5px;
-        font-size: 16px;
-        font-weight: 600;
-        cursor: pointer;
-        transition: background-color 0.3s;
-      }
-
-      .submit-btn:hover {
-        background-color: #00b847;
-      }
-
-      .toggle-form {
-        text-align: center;
-        margin-top: 20px;
-        color: #aaa;
-      }
-
-      .toggle-form a {
-        color: #00c853;
-        text-decoration: none;
-        cursor: pointer;
-      }
-
-      .toggle-form a:hover {
-        text-decoration: underline;
-      }
-
-      .error-message {
-        color: #ff1744;
-        font-size: 14px;
-        margin-top: 10px;
-        display: none;
-      }
-
-      .success-message {
-        color: #00c853;
-        font-size: 14px;
-        margin-top: 10px;
-        display: none;
-      }
-
-      #signupForm {
-        display: none;
-      }
-
-      .logo {
-        text-align: center;
-        margin-bottom: 30px;
-      }
-
-      .logo img {
-        width: 150px;
-        height: auto;
-      }
-    </style>
   </head>
-  <body
-    style="
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      min-height: 100vh;
-      background-color: #0d0d0d;
-      margin: 0;
-      padding: 20px;
-    "
-  >
+  <body>
     <div class="auth-form">
       <div class="logo">
         <img src="logo.svg" alt="FXcrypt Logo" />
       </div>
 
-      <!-- Login Form -->
-      <form id="loginForm">
-        <h2>Login</h2>
-        <div class="form-group">
-          <label for="loginEmail">Email:</label>
-          <input type="email" id="loginEmail" required />
-        </div>
-        <div class="form-group">
-          <label for="loginPassword">Password:</label>
-          <input type="password" id="loginPassword" required />
-        </div>
-        <button type="submit" class="submit-btn">Login</button>
-        <div class="error-message" id="loginError"></div>
-        <div class="toggle-form">
-          Don't have an account? <a onclick="toggleForms()">Sign Up</a>
-        </div>
-      </form>
+      <!-- Loading Overlay -->
+      <div id="loadingState" style="display: none; text-align: center; padding: 20px;">
+        <p style="color: #FCD535; font-weight: 500;">Loading...</p>
+      </div>
 
-      <!-- Signup Form -->
-      <form id="signupForm">
-        <h2>Sign Up</h2>
+      <!-- Messages -->
+      <div id="authMessage" style="display: none; padding: 12px; margin-bottom: 20px; border-radius: 4px; text-align: center; font-weight: 500;"></div>
+
+      <!-- Login Form -->
+      <form id="emailAuthForm">
+        <h2>Passwordless Sign-In</h2>
+        <p style="text-align: center; color: #848E9C; margin-bottom: 24px; font-size: 14px;">Enter your email and we'll send you a magic link to securely sign in.</p>
         <div class="form-group">
-          <label for="firstName">First Name:</label>
-          <input type="text" id="firstName" required />
+          <label for="loginEmail">Email Address:</label>
+          <input type="email" id="loginEmail" required placeholder="you@example.com" />
         </div>
-        <div class="form-group">
-          <label for="lastName">Last Name:</label>
-          <input type="text" id="lastName" required />
-        </div>
-        <div class="form-group">
-          <label for="signupEmail">Email:</label>
-          <input type="email" id="signupEmail" required />
-        </div>
-        <div class="form-group">
-          <label for="phone">Phone:</label>
-          <input type="tel" id="phone" required />
-        </div>
-        <div class="form-group">
-          <label for="signupPassword">Password:</label>
-          <input type="password" id="signupPassword" required />
-        </div>
-        <div class="form-group">
-          <label for="confirmPassword">Confirm Password:</label>
-          <input type="password" id="confirmPassword" required />
-        </div>
-        <button type="submit" class="submit-btn">Sign Up</button>
-        <div class="error-message" id="signupError"></div>
-        <div class="success-message" id="signupSuccess"></div>
-        <div class="toggle-form">
-          Already have an account? <a onclick="toggleForms()">Login</a>
-        </div>
+        <button type="submit" class="submit-btn" id="sendLinkBtn" style="margin-top: 10px;">Send Sign-In Link</button>
       </form>
     </div>
 
-    <script>
-      let isLoginFormVisible = true;
+    <script type="module">
+      import { sendSignInLink } from './sendLink.js';
+      import { completeSignIn } from './completeSignIn.js';
+      import { setupAuthObserver } from './authObserver.js';
+      import { isSignInWithEmailLink } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+      import { auth } from './firebase.js';
 
-      function toggleForms() {
-        const loginForm = document.getElementById("loginForm");
-        const signupForm = document.getElementById("signupForm");
+      const emailAuthForm = document.getElementById('emailAuthForm');
+      const loginEmailInput = document.getElementById('loginEmail');
+      const sendLinkBtn = document.getElementById('sendLinkBtn');
+      const loadingState = document.getElementById('loadingState');
+      const authMessage = document.getElementById('authMessage');
 
-        isLoginFormVisible = !isLoginFormVisible;
-
-        if (isLoginFormVisible) {
-          loginForm.style.display = "block";
-          signupForm.style.display = "none";
-        } else {
-          loginForm.style.display = "none";
-          signupForm.style.display = "block";
-        }
-
-        document.getElementById("loginError").style.display = "none";
-        document.getElementById("signupError").style.display = "none";
-        document.getElementById("signupSuccess").style.display = "none";
+      function showMessage(msg, isError = false) {
+        authMessage.style.display = 'block';
+        authMessage.textContent = msg;
+        authMessage.style.backgroundColor = isError ? 'rgba(246, 70, 93, 0.1)' : 'rgba(14, 203, 129, 0.1)';
+        authMessage.style.color = isError ? '#F6465D' : '#0ECB81';
       }
 
-      document
-        .getElementById("loginForm")
-        .addEventListener("submit", function (e) {
-          e.preventDefault();
-          const email = document.getElementById("loginEmail").value;
-          const password = document.getElementById("loginPassword").value;
-          const errorDiv = document.getElementById("loginError");
-
-          if (!email || !password) {
-            errorDiv.textContent = "Please fill in all fields";
-            errorDiv.style.display = "block";
-            return;
+      // STEP 7: An auto-complete sign-in handler on the finish page that runs on page load
+      if (isSignInWithEmailLink(auth, window.location.href)) {
+        emailAuthForm.style.display = 'none';
+        loadingState.style.display = 'block';
+        loadingState.innerHTML = '<p style="color: #FCD535; font-weight: 500;">Completing sign-in securely...</p>';
+        
+        completeSignIn().then(result => {
+          if (result.success) {
+            showMessage("Successfully signed in! Redirecting to dashboard...");
+            loadingState.style.display = 'none';
+            setTimeout(() => {
+              window.location.href = "index.html";
+            }, 1500);
           }
-
-          const users = JSON.parse(localStorage.getItem("users") || "[]");
-          const user = users.find(
-            (u) => u.email === email && u.password === password,
-          );
-
+        }).catch(error => {
+          loadingState.style.display = 'none';
+          emailAuthForm.style.display = 'block';
+          showMessage(error.message, true);
+        });
+      } else {
+        // STEP 6: Detect when a user is already signed in
+        setupAuthObserver((user) => {
           if (user) {
-            localStorage.setItem(
-              "currentUser",
-              JSON.stringify({
-                firstName: user.firstName,
-                lastName: user.lastName,
-                email: user.email,
-                phone: user.phone,
-              }),
-            );
+            // Already signed in, go to dashboard
             window.location.href = "index.html";
-          } else {
-            errorDiv.textContent = "Invalid email or password";
-            errorDiv.style.display = "block";
           }
         });
+      }
 
-      document
-        .getElementById("signupForm")
-        .addEventListener("submit", function (e) {
-          e.preventDefault();
-          const firstName = document.getElementById("firstName").value.trim();
-          const lastName = document.getElementById("lastName").value.trim();
-          const email = document.getElementById("signupEmail").value.trim();
-          const phone = document.getElementById("phone").value.trim();
-          const password = document.getElementById("signupPassword").value;
-          const confirmPassword =
-            document.getElementById("confirmPassword").value;
-          const errorDiv = document.getElementById("signupError");
-          const successDiv = document.getElementById("signupSuccess");
+      // STEP 7: Form submission for sending link
+      emailAuthForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const email = loginEmailInput.value.trim();
+        if (!email) return;
 
-          errorDiv.style.display = "none";
-          successDiv.style.display = "none";
+        sendLinkBtn.disabled = true;
+        sendLinkBtn.textContent = 'Sending...';
+        authMessage.style.display = 'none';
 
-          if (
-            !firstName ||
-            !lastName ||
-            !email ||
-            !phone ||
-            !password ||
-            !confirmPassword
-          ) {
-            errorDiv.textContent = "Please fill in all fields";
-            errorDiv.style.display = "block";
-            return;
-          }
-
-          if (password !== confirmPassword) {
-            errorDiv.textContent = "Passwords do not match";
-            errorDiv.style.display = "block";
-            return;
-          }
-
-          if (password.length < 6) {
-            errorDiv.textContent = "Password must be at least 6 characters";
-            errorDiv.style.display = "block";
-            return;
-          }
-
-          if (!/^\d{10,}$/.test(phone.replace(/\D/g, ""))) {
-            errorDiv.textContent =
-              "Please enter a valid phone number (at least 10 digits)";
-            errorDiv.style.display = "block";
-            return;
-          }
-
-          const users = JSON.parse(localStorage.getItem("users") || "[]");
-          if (users.find((u) => u.email === email)) {
-            errorDiv.textContent = "Email already registered";
-            errorDiv.style.display = "block";
-            return;
-          }
-
-          users.push({ firstName, lastName, email, phone, password });
-          localStorage.setItem("users", JSON.stringify(users));
-          successDiv.textContent =
-            "Account created successfully! Please login.";
-          successDiv.style.display = "block";
-
-          setTimeout(() => {
-            toggleForms();
-            document.getElementById("loginEmail").value = email;
-            document.getElementById("loginPassword").value = "";
-            document.getElementById("firstName").value = "";
-            document.getElementById("lastName").value = "";
-            document.getElementById("signupEmail").value = "";
-            document.getElementById("phone").value = "";
-            document.getElementById("signupPassword").value = "";
-            document.getElementById("confirmPassword").value = "";
-          }, 2000);
-        });
+        try {
+          const result = await sendSignInLink(email);
+          showMessage(result.message, false);
+          emailAuthForm.reset();
+        } catch (error) {
+          showMessage(error.message, true);
+        } finally {
+          sendLinkBtn.disabled = false;
+          sendLinkBtn.textContent = 'Send Sign-In Link';
+        }
+      });
     </script>
   </body>
 </html>
