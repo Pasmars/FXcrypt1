@@ -54,6 +54,8 @@
 
     <script type="module">
       import { setupAuthObserver } from './authObserver.js';
+      import { doc, getDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+      import { db } from './firebase.js';
 
       // STEP 6: Auth State Observer
       setupAuthObserver(async (user) => {
@@ -64,16 +66,44 @@
 
         let joinDate = new Date(user.metadata.creationTime).toLocaleDateString();
 
+        // Fetch additional details from Firestore
+        let firstName = "N/A";
+        let lastName = "N/A";
+        let phone = "N/A";
+        
+        try {
+          const docRef = doc(db, "users", user.uid);
+          const docSnap = await getDoc(docRef);
+          if (docSnap.exists()) {
+            const data = docSnap.data();
+            firstName = data.firstName || "N/A";
+            lastName = data.lastName || "N/A";
+            phone = data.phone || "N/A";
+          } else if (user.displayName) {
+            const parts = user.displayName.split(" ");
+            firstName = parts[0] || "N/A";
+            lastName = parts.slice(1).join(" ") || "N/A";
+          }
+        } catch (e) {
+          console.error("Error fetching user details from Firestore:", e);
+        }
+
         let initials = user.email[0].toUpperCase();
+        if (firstName !== "N/A" || lastName !== "N/A") {
+          initials = ((firstName !== "N/A" ? firstName[0] : "") + (lastName !== "N/A" ? lastName[0] : "")).toUpperCase();
+        }
+
         document.getElementById("profileIcon").textContent = initials;
 
-        // Fill in profile details (Passwordless auth only guarantees email)
-        document.getElementById("userFullName").textContent = user.email;
+        // Fill in profile details
+        let fullName = (firstName !== "N/A" && lastName !== "N/A") ? `${firstName} ${lastName}` : user.email;
+        
+        document.getElementById("userFullName").textContent = fullName;
         document.getElementById("userEmailDisplay").textContent = user.email;
         document.getElementById("detailEmail").textContent = user.email;
-        document.getElementById("detailFirstName").textContent = "N/A";
-        document.getElementById("detailLastName").textContent = "N/A";
-        document.getElementById("detailPhone").textContent = "N/A";
+        document.getElementById("detailFirstName").textContent = firstName;
+        document.getElementById("detailLastName").textContent = lastName;
+        document.getElementById("detailPhone").textContent = phone;
         document.getElementById("detailJoinDate").textContent = joinDate;
       });
     </script>

@@ -11,7 +11,7 @@
     />
   </head>
   <body>
-    <div class="auth-form">
+    <div class="auth-form" style="max-width: 500px; margin: 40px auto;">
       <div class="logo">
         <img src="logo.svg" alt="FXcrypt Logo" />
       </div>
@@ -24,30 +24,71 @@
       <!-- Messages -->
       <div id="authMessage" style="display: none; padding: 12px; margin-bottom: 20px; border-radius: 4px; text-align: center; font-weight: 500;"></div>
 
-      <!-- Login Form -->
+      <!-- Passwordless Form -->
       <form id="emailAuthForm">
-        <h2>Passwordless Sign-In</h2>
-        <p style="text-align: center; color: #848E9C; margin-bottom: 24px; font-size: 14px;">Enter your email and we'll send you a magic link to securely sign in.</p>
+        <h2>Log In</h2>
+        <p style="text-align: center; color: #848E9C; margin-bottom: 24px; font-size: 14px;">Enter your email to receive a magic sign-in link.</p>
         <div class="form-group">
           <label for="loginEmail">Email Address:</label>
           <input type="email" id="loginEmail" required placeholder="you@example.com" />
         </div>
         <button type="submit" class="submit-btn" id="sendLinkBtn" style="margin-top: 10px;">Send Sign-In Link</button>
+        <div style="text-align: center; margin-top: 15px;">
+          <a href="#" id="toggleToPassword" style="color: #0ECB81; text-decoration: none; font-size: 14px;">Log in with Password instead</a>
+        </div>
       </form>
+
+      <!-- Password Login Form -->
+      <form id="passwordAuthForm" style="display: none;">
+        <h2>Log In</h2>
+        <p style="text-align: center; color: #848E9C; margin-bottom: 24px; font-size: 14px;">Enter your email and password to securely sign in.</p>
+        <div class="form-group">
+          <label for="pwdLoginEmail">Email Address:</label>
+          <input type="email" id="pwdLoginEmail" required placeholder="you@example.com" />
+        </div>
+        <div class="form-group">
+          <label for="pwdLoginPassword">Password:</label>
+          <input type="password" id="pwdLoginPassword" required />
+        </div>
+        <button type="submit" class="submit-btn" id="loginWithPwdBtn" style="margin-top: 10px;">Log In</button>
+        <div style="text-align: center; margin-top: 15px;">
+          <a href="#" id="toggleToMagic" style="color: #0ECB81; text-decoration: none; font-size: 14px;">Log in with Magic Link instead</a>
+        </div>
+      </form>
+
+      <div style="text-align: center; margin-top: 25px; color: #848E9C; font-size: 14px;">
+        Don't have an account? <a href="signup.html" style="color: #0ECB81; text-decoration: none; font-weight: 500;">Sign Up</a>
+      </div>
     </div>
 
     <script type="module">
       import { sendSignInLink } from './sendLink.js';
       import { completeSignIn } from './completeSignIn.js';
       import { setupAuthObserver } from './authObserver.js';
-      import { isSignInWithEmailLink } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+      import { isSignInWithEmailLink, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
       import { auth } from './firebase.js';
 
       const emailAuthForm = document.getElementById('emailAuthForm');
+      const passwordAuthForm = document.getElementById('passwordAuthForm');
       const loginEmailInput = document.getElementById('loginEmail');
       const sendLinkBtn = document.getElementById('sendLinkBtn');
       const loadingState = document.getElementById('loadingState');
       const authMessage = document.getElementById('authMessage');
+
+      // Toggles
+      document.getElementById('toggleToPassword').addEventListener('click', (e) => {
+        e.preventDefault();
+        emailAuthForm.style.display = 'none';
+        passwordAuthForm.style.display = 'block';
+        authMessage.style.display = 'none';
+      });
+
+      document.getElementById('toggleToMagic').addEventListener('click', (e) => {
+        e.preventDefault();
+        passwordAuthForm.style.display = 'none';
+        emailAuthForm.style.display = 'block';
+        authMessage.style.display = 'none';
+      });
 
       function showMessage(msg, isError = false) {
         authMessage.style.display = 'block';
@@ -59,6 +100,7 @@
       // STEP 7: An auto-complete sign-in handler on the finish page that runs on page load
       if (isSignInWithEmailLink(auth, window.location.href)) {
         emailAuthForm.style.display = 'none';
+        passwordAuthForm.style.display = 'none';
         loadingState.style.display = 'block';
         loadingState.innerHTML = '<p style="color: #FCD535; font-weight: 500;">Completing sign-in securely...</p>';
         
@@ -85,7 +127,7 @@
         });
       }
 
-      // STEP 7: Form submission for sending link
+      // Magic Link Submission
       emailAuthForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         const email = loginEmailInput.value.trim();
@@ -104,6 +146,32 @@
         } finally {
           sendLinkBtn.disabled = false;
           sendLinkBtn.textContent = 'Send Sign-In Link';
+        }
+      });
+
+      // Password Login Submission
+      passwordAuthForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const email = document.getElementById('pwdLoginEmail').value.trim();
+        const password = document.getElementById('pwdLoginPassword').value;
+        const btn = document.getElementById('loginWithPwdBtn');
+
+        if (!email || !password) return;
+
+        btn.disabled = true;
+        btn.textContent = 'Logging In...';
+        authMessage.style.display = 'none';
+
+        try {
+          await signInWithEmailAndPassword(auth, email, password);
+          showMessage("Successfully signed in! Redirecting...");
+          setTimeout(() => {
+            window.location.href = "index.html";
+          }, 1000);
+        } catch (error) {
+          showMessage(error.message, true);
+          btn.disabled = false;
+          btn.textContent = 'Log In';
         }
       });
     </script>

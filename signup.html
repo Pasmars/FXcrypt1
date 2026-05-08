@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sign Up - FXcrypt</title>
+    <link rel="stylesheet" href="style.css" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div class="auth-form" style="max-width: 500px; margin: 40px auto;">
+      <div class="logo">
+        <img src="logo.svg" alt="FXcrypt Logo" />
+      </div>
+
+      <!-- Messages -->
+      <div id="authMessage" style="display: none; padding: 12px; margin-bottom: 20px; border-radius: 4px; text-align: center; font-weight: 500;"></div>
+
+      <!-- Signup Form -->
+      <form id="signupForm">
+        <h2>Create an Account</h2>
+        <div class="form-group">
+          <label for="firstName">First Name:</label>
+          <input type="text" id="firstName" required />
+        </div>
+        <div class="form-group">
+          <label for="lastName">Last Name:</label>
+          <input type="text" id="lastName" required />
+        </div>
+        <div class="form-group">
+          <label for="signupEmail">Email Address:</label>
+          <input type="email" id="signupEmail" required />
+        </div>
+        <div class="form-group">
+          <label for="phone">Phone Number:</label>
+          <input type="tel" id="phone" required />
+        </div>
+        <div class="form-group">
+          <label for="signupPassword">Password:</label>
+          <input type="password" id="signupPassword" required />
+        </div>
+        <div class="form-group">
+          <label for="confirmPassword">Confirm Password:</label>
+          <input type="password" id="confirmPassword" required />
+        </div>
+        <button type="submit" class="submit-btn" id="signupBtn">Sign Up</button>
+        
+        <div style="text-align: center; margin-top: 20px; color: #848E9C;">
+          Already have an account? <a href="login.html" style="color: #0ECB81; text-decoration: none;">Log In</a>
+        </div>
+      </form>
+    </div>
+
+    <script type="module">
+      import { auth, db } from './firebase.js';
+      import { createUserWithEmailAndPassword, updateProfile } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+      import { doc, setDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+      const signupForm = document.getElementById('signupForm');
+      const signupBtn = document.getElementById('signupBtn');
+      const authMessage = document.getElementById('authMessage');
+
+      function showMessage(msg, isError = false) {
+        authMessage.style.display = 'block';
+        authMessage.textContent = msg;
+        authMessage.style.backgroundColor = isError ? 'rgba(246, 70, 93, 0.1)' : 'rgba(14, 203, 129, 0.1)';
+        authMessage.style.color = isError ? '#F6465D' : '#0ECB81';
+      }
+
+      signupForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        
+        const firstName = document.getElementById('firstName').value.trim();
+        const lastName = document.getElementById('lastName').value.trim();
+        const email = document.getElementById('signupEmail').value.trim();
+        const phone = document.getElementById('phone').value.trim();
+        const password = document.getElementById('signupPassword').value;
+        const confirmPassword = document.getElementById('confirmPassword').value;
+
+        if (password !== confirmPassword) {
+          return showMessage("Passwords do not match.", true);
+        }
+
+        if (password.length < 6) {
+          return showMessage("Password must be at least 6 characters.", true);
+        }
+
+        signupBtn.disabled = true;
+        signupBtn.textContent = 'Creating Account...';
+        authMessage.style.display = 'none';
+
+        try {
+          // Create user in Firebase Auth
+          const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+          const user = userCredential.user;
+          
+          // Update Auth Profile
+          await updateProfile(user, {
+            displayName: `${firstName} ${lastName}`
+          });
+
+          // Save extended details in Firestore
+          await setDoc(doc(db, "users", user.uid), {
+            firstName: firstName,
+            lastName: lastName,
+            email: email,
+            phone: phone,
+            createdAt: new Date().toISOString()
+          });
+
+          showMessage("Account created successfully! Redirecting...");
+          setTimeout(() => {
+            window.location.href = "index.html";
+          }, 1500);
+
+        } catch (error) {
+          showMessage(error.message, true);
+          signupBtn.disabled = false;
+          signupBtn.textContent = 'Sign Up';
+        }
+      });
+    </script>
+  </body>
+</html>
