@@ -3,177 +3,151 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#00c853" />
+    <link rel="manifest" href="manifest.json" />
     <title>Login - FXcrypt</title>
-    <link rel="stylesheet" href="style.css" />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap"
-      rel="stylesheet"
-    />
+    <link rel="stylesheet" href="style.css?v=15" />
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap" rel="stylesheet" />
   </head>
-  <body>
-    <div class="auth-form" style="max-width: 500px; margin: 40px auto;">
+  <body class="auth-page">
+    <div class="auth-form" style="max-width: 460px; margin: 0 auto; width: 100%;">
       <div class="logo">
-        <img src="logo.svg" alt="FXcrypt Logo" />
+        <div class="app-logo-wrap">
+          <div class="app-logo-circle"><img src="logo.png" alt="FXcrypt Logo" /></div>
+          <span class="app-logo-text">FXCRYPT</span>
+        </div>
       </div>
 
-      <!-- Loading Overlay -->
-      <div id="loadingState" style="display: none; text-align: center; padding: 20px;">
-        <p style="color: #FCD535; font-weight: 500;">Loading...</p>
-      </div>
+      <div id="authMessage" style="display:none; padding:12px; margin-bottom:20px; border-radius:4px; text-align:center; font-weight:500;"></div>
 
-      <!-- Messages -->
-      <div id="authMessage" style="display: none; padding: 12px; margin-bottom: 20px; border-radius: 4px; text-align: center; font-weight: 500;"></div>
-
-      <!-- Passwordless Form -->
-      <form id="emailAuthForm">
+      <form id="loginForm">
         <h2>Log In</h2>
-        <p style="text-align: center; color: #848E9C; margin-bottom: 24px; font-size: 14px;">Enter your email to receive a magic sign-in link.</p>
+        <p style="text-align:center; color:#848E9C; margin-bottom:24px; font-size:14px;">
+          Enter your email and password to sign in.
+        </p>
+
         <div class="form-group">
-          <label for="loginEmail">Email Address:</label>
-          <input type="email" id="loginEmail" required placeholder="you@example.com" />
+          <label for="loginEmail">Email Address</label>
+          <input type="email" id="loginEmail" required placeholder="you@example.com" autocomplete="email" />
         </div>
-        <button type="submit" class="submit-btn" id="sendLinkBtn" style="margin-top: 10px;">Send Sign-In Link</button>
-        <div style="text-align: center; margin-top: 15px;">
-          <a href="#" id="toggleToPassword" style="color: #0ECB81; text-decoration: none; font-size: 14px;">Log in with Password instead</a>
+
+        <div class="form-group">
+          <label for="loginPassword">Password</label>
+          <div style="position:relative;">
+            <input type="password" id="loginPassword" required placeholder="&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;" autocomplete="current-password" style="padding-right:44px;" />
+            <button type="button" id="togglePwd" tabindex="-1" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;padding:4px;color:#848E9C;font-size:13px;">Show</button>
+          </div>
         </div>
+
+        <div style="text-align:right; margin-top:-8px; margin-bottom:16px;">
+          <a href="#" id="forgotPwdLink" style="color:#848E9C; font-size:13px; text-decoration:none;">Forgot password?</a>
+        </div>
+
+        <button type="submit" class="submit-btn" id="loginBtn">Log In</button>
       </form>
 
-      <!-- Password Login Form -->
-      <form id="passwordAuthForm" style="display: none;">
-        <h2>Log In</h2>
-        <p style="text-align: center; color: #848E9C; margin-bottom: 24px; font-size: 14px;">Enter your email and password to securely sign in.</p>
-        <div class="form-group">
-          <label for="pwdLoginEmail">Email Address:</label>
-          <input type="email" id="pwdLoginEmail" required placeholder="you@example.com" />
-        </div>
-        <div class="form-group">
-          <label for="pwdLoginPassword">Password:</label>
-          <input type="password" id="pwdLoginPassword" required />
-        </div>
-        <button type="submit" class="submit-btn" id="loginWithPwdBtn" style="margin-top: 10px;">Log In</button>
-        <div style="text-align: center; margin-top: 15px;">
-          <a href="#" id="toggleToMagic" style="color: #0ECB81; text-decoration: none; font-size: 14px;">Log in with Magic Link instead</a>
-        </div>
-      </form>
-
-      <div style="text-align: center; margin-top: 25px; color: #848E9C; font-size: 14px;">
-        Don't have an account? <a href="signup.html" style="color: #0ECB81; text-decoration: none; font-weight: 500;">Sign Up</a>
+      <div style="text-align:center; margin-top:25px; color:#848E9C; font-size:14px;">
+        Don't have an account? <a href="signup.html" style="color:#0ECB81; text-decoration:none; font-weight:500;">Sign Up</a>
       </div>
     </div>
 
     <script type="module">
-      import { sendSignInLink } from './sendLink.js';
-      import { completeSignIn } from './completeSignIn.js';
-      import { setupAuthObserver } from './authObserver.js';
-      import { isSignInWithEmailLink, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+      import {
+        signInWithEmailAndPassword,
+        sendPasswordResetEmail
+      } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
       import { auth } from './firebase.js';
 
-      const emailAuthForm = document.getElementById('emailAuthForm');
-      const passwordAuthForm = document.getElementById('passwordAuthForm');
-      const loginEmailInput = document.getElementById('loginEmail');
-      const sendLinkBtn = document.getElementById('sendLinkBtn');
-      const loadingState = document.getElementById('loadingState');
-      const authMessage = document.getElementById('authMessage');
+      const loginForm    = document.getElementById('loginForm');
+      const loginBtn     = document.getElementById('loginBtn');
+      const authMessage  = document.getElementById('authMessage');
+      const togglePwd    = document.getElementById('togglePwd');
+      const pwdInput     = document.getElementById('loginPassword');
+      const forgotLink   = document.getElementById('forgotPwdLink');
 
-      // Toggles
-      document.getElementById('toggleToPassword').addEventListener('click', (e) => {
-        e.preventDefault();
-        emailAuthForm.style.display = 'none';
-        passwordAuthForm.style.display = 'block';
-        authMessage.style.display = 'none';
+      // Wait for Firebase to finish reading its persisted session before
+      // deciding whether to redirect — avoids a false "not logged in" on first load.
+      auth.authStateReady().then(() => {
+        if (auth.currentUser) window.location.href = 'index.html';
       });
 
-      document.getElementById('toggleToMagic').addEventListener('click', (e) => {
-        e.preventDefault();
-        passwordAuthForm.style.display = 'none';
-        emailAuthForm.style.display = 'block';
-        authMessage.style.display = 'none';
+      // Show / hide password toggle
+      togglePwd.addEventListener('click', () => {
+        const isHidden = pwdInput.type === 'password';
+        pwdInput.type  = isHidden ? 'text' : 'password';
+        togglePwd.textContent = isHidden ? 'Hide' : 'Show';
       });
 
       function showMessage(msg, isError = false) {
-        authMessage.style.display = 'block';
-        authMessage.textContent = msg;
-        authMessage.style.backgroundColor = isError ? 'rgba(246, 70, 93, 0.1)' : 'rgba(14, 203, 129, 0.1)';
-        authMessage.style.color = isError ? '#F6465D' : '#0ECB81';
+        authMessage.style.display          = 'block';
+        authMessage.textContent            = msg;
+        authMessage.style.backgroundColor  = isError ? 'rgba(246,70,93,0.1)' : 'rgba(14,203,129,0.1)';
+        authMessage.style.color            = isError ? '#F6465D' : '#0ECB81';
+        // Ensure the message is visible even if the user scrolled
+        authMessage.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
 
-      // STEP 7: An auto-complete sign-in handler on the finish page that runs on page load
-      if (isSignInWithEmailLink(auth, window.location.href)) {
-        emailAuthForm.style.display = 'none';
-        passwordAuthForm.style.display = 'none';
-        loadingState.style.display = 'block';
-        loadingState.innerHTML = '<p style="color: #FCD535; font-weight: 500;">Completing sign-in securely...</p>';
-        
-        completeSignIn().then(result => {
-          if (result.success) {
-            showMessage("Successfully signed in! Redirecting to dashboard...");
-            loadingState.style.display = 'none';
-            setTimeout(() => {
-              window.location.href = "index.html";
-            }, 1500);
-          }
-        }).catch(error => {
-          loadingState.style.display = 'none';
-          emailAuthForm.style.display = 'block';
-          showMessage(error.message, true);
-        });
-      } else {
-        // STEP 6: Detect when a user is already signed in
-        setupAuthObserver((user) => {
-          if (user) {
-            // Already signed in, go to dashboard
-            window.location.href = "index.html";
+      // Auto-dismiss error messages when the user starts correcting input
+      document.querySelectorAll('#loginForm input').forEach(input => {
+        input.addEventListener('input', () => {
+          if (authMessage.style.display !== 'none') {
+            authMessage.style.display = 'none';
           }
         });
-      }
+      });
 
-      // Magic Link Submission
-      emailAuthForm.addEventListener('submit', async (e) => {
+      // Password reset
+      forgotLink.addEventListener('click', async (e) => {
         e.preventDefault();
-        const email = loginEmailInput.value.trim();
-        if (!email) return;
-
-        sendLinkBtn.disabled = true;
-        sendLinkBtn.textContent = 'Sending...';
-        authMessage.style.display = 'none';
-
+        const email = document.getElementById('loginEmail').value.trim();
+        if (!email) {
+          showMessage('Enter your email address above first.', true);
+          return;
+        }
         try {
-          const result = await sendSignInLink(email);
-          showMessage(result.message, false);
-          emailAuthForm.reset();
-        } catch (error) {
-          showMessage(error.message, true);
-        } finally {
-          sendLinkBtn.disabled = false;
-          sendLinkBtn.textContent = 'Send Sign-In Link';
+          await sendPasswordResetEmail(auth, email);
+          showMessage('Password reset email sent — check your inbox.');
+        } catch (err) {
+          const msg = err.code === 'auth/user-not-found'
+            ? 'No account found with that email address.'
+            : err.code === 'auth/invalid-email'
+            ? 'Please enter a valid email address.'
+            : err.code === 'auth/network-request-failed'
+            ? 'Network error. Please check your connection.'
+            : err.message;
+          showMessage(msg, true);
         }
       });
 
-      // Password Login Submission
-      passwordAuthForm.addEventListener('submit', async (e) => {
+      // Sign in
+      loginForm.addEventListener('submit', async (e) => {
         e.preventDefault();
-        const email = document.getElementById('pwdLoginEmail').value.trim();
-        const password = document.getElementById('pwdLoginPassword').value;
-        const btn = document.getElementById('loginWithPwdBtn');
+        const email    = document.getElementById('loginEmail').value.trim();
+        const password = pwdInput.value;
 
-        if (!email || !password) return;
-
-        btn.disabled = true;
-        btn.textContent = 'Logging In...';
+        loginBtn.disabled     = true;
+        loginBtn.textContent  = 'Logging In...';
         authMessage.style.display = 'none';
 
         try {
           await signInWithEmailAndPassword(auth, email, password);
-          showMessage("Successfully signed in! Redirecting...");
-          setTimeout(() => {
-            window.location.href = "index.html";
-          }, 1000);
-        } catch (error) {
-          showMessage(error.message, true);
-          btn.disabled = false;
-          btn.textContent = 'Log In';
+          window.location.href = 'index.html';
+        } catch (err) {
+          const msg = err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password'
+            ? 'Incorrect email or password.'
+            : err.code === 'auth/user-not-found'
+            ? 'No account found with that email.'
+            : err.code === 'auth/too-many-requests'
+            ? 'Too many failed attempts. Try again later or reset your password.'
+            : err.code === 'auth/network-request-failed'
+            ? 'Network error. Please check your connection and try again.'
+            : err.message;
+          showMessage(msg, true);
+          loginBtn.disabled    = false;
+          loginBtn.textContent = 'Log In';
         }
       });
     </script>
   </body>
 </html>
+

@@ -1,0 +1,12 @@
+# Dependencies
+node_modules/
+functions/node_modules/
+
+# Logs / deploy artifacts
+*.log
+deploy_output.txt
+login_output.txt
+
+# OS
+.DS_Store
+Thumbs.db

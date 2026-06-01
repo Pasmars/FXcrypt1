@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell($r = Invoke-WebRequest -Uri \"http://localhost:5050/index.html\" -UseBasicParsing -TimeoutSec 5; $r.Headers | ConvertTo-Json)",
+      "PowerShell(node -e \"require\\('acorn'\\).parse\\(require\\('fs'\\).readFileSync\\('c:/Users/Pasmars Tech/Desktop/PNL CALCULATOR/bot.js','utf8'\\),{ecmaVersion:2022,sourceType:'module'}\\); console.log\\('bot.js OK'\\)\" 2>&1)",
+      "PowerShell($r = Invoke-WebRequest -Uri \"https://pnl-calculator.web.app/bot.js\" -UseBasicParsing -TimeoutSec 10; $r.Headers[\"Content-Security-Policy\"]; Write-Host \"---Status: $\\($r.StatusCode\\)\")",
+      "PowerShell($files = @\\(\"bot.html\",\"login.html\",\"index.html\",\"profile.html\",\"prices.html\",\"signup.html\",\"tracker.html\"\\); $root = \"c:\\\\Users\\\\Pasmars Tech\\\\Desktop\\\\PNL CALCULATOR\"; foreach\\($f in $files\\) { $path = Join-Path $root $f; \\(Get-Content $path -Raw\\) -replace 'style\\\\.css\\\\?v=5','style.css?v=6' | Set-Content $path -NoNewline }; Write-Host \"Updated style.css version in all HTML files\")",
+      "Bash(firebase functions:config:get)",
+      "Bash(firebase functions:list)",
+      "Bash(firebase use *)",
+      "Bash(curl -s \"https://api.telegram.org/bot7926435599:AAELOUwZMwa1Uw0UUIPxJ5stMMTyqWPBGw8/getWebhookInfo\")",
+      "Bash(gcloud functions *)",
+      "PowerShell(gcloud functions add-iam-policy-binding telegramWebhook --region=us-central1 --project=pnl-calculator --member=allUsers --role=roles/cloudfunctions.invoker 2>&1)",
+      "PowerShell(Get-Command gcloud -ErrorAction SilentlyContinue)",
+      "Bash(Get-ChildItem -Recurse -Depth 3)",
+      "Bash(Select-Object -Property FullName, PSIsContainer)",
+      "Bash(Format-Table -AutoSize)",
+      "Bash(cd \"/c/Users/Pasmars Tech/Desktop/PNL CALCULATOR\" && find . -type f -o -type d | head -100)",
+      "Read(//c/c/Users/Pasmars Tech/Desktop/**)",
+      "Bash(grep -E \"\\\\.js$|^d\")",
+      "Bash(firebase functions:secrets:set BOT_SECRET)",
+      "Bash(firebase functions:secrets:set TELEGRAM_TOKEN)",
+      "Bash(firebase functions:delete approveTrade executeArbitrage executeTrade generateTelegramCode getBalances getCexBalances processAgentScans processArbitrageQueue processGemScanner processSnipeQueue removeCexApiKey removeWallet runAgentScan saveAgentSettings saveCexApiKey saveWallet scanArbitrage scanGems skipSignal telegramWebhook --region us-central1 --force)",
+      "Bash(node -e \"const {ethers} = require\\('./functions/node_modules/ethers'\\); const w = ethers.Wallet.fromPhrase\\('test test test test test test test test test test test junk'\\); console.log\\(w.address, w.privateKey.slice\\(0,10\\)\\)\")"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\Pasmars Tech\\.claude\\projects\\c--Users-Pasmars-Tech-Desktop-PNL-CALCULATOR\\memory"
+    ]
+  }
+}

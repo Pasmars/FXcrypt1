@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#00c853" />
     <link rel="manifest" href="manifest.json" />
     <title>FXcrypt - PnL Calculator for Forex and Crypto</title>
-    <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="style.css?v=15" />
     <link
       href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap"
       rel="stylesheet"
@@ -48,36 +48,29 @@
       <ul class="side-menu-list">
         <li><a href="profile.html">My Profile</a></li>
         <li><a href="prices.html">Crypto Prices</a></li>
+        <li><a href="tracker.html">Token Tracker</a></li>
+        <li><a href="bot.html">DEX Bot</a></li>
+        <li><a href="agent.html">AI Agent</a></li>
+                <li><a href="wallet.html">Wallet</a></li>
         <li>
           <button id="sideLogoutBtn" class="side-logout-btn">Logout</button>
         </li>
       </ul>
     </div>
-    <!-- profile-nav moved into top-nav-bar above for horizontal alignment -->
-    <div class="container">
-      <img
-        src="logo.svg"
-        alt="FXcrypt Logo"
-        style="display: block; margin: 0 auto 20px; width: 200px; height: auto"
-      />
+    <div class="container tracker-container">
+      <div class="app-logo-wrap">
+        <div class="app-logo-circle"><img src="logo.png" alt="FXcrypt Logo" /></div>
+        <span class="app-logo-text">FXCRYPT</span>
+      </div>
       <nav class="menu-tabs">
-        <a href="index.html" class="tab active">PnL Calculator</a>
-        <a href="prices.html" class="tab">Crypto Prices</a>
-        <div
-          style="
-            margin-left: auto;
-            display: flex;
-            align-items: center;
-            gap: 15px;
-          "
-        >
-          <span id="userEmail" style="color: #aaa; font-size: 14px"></span>
-          <button id="logoutBtn" class="logout-btn" style="display: none">
-            Logout
-          </button>
-        </div>
+        <a href="index.html"   class="tab active">PnL Calc</a>
+        <a href="prices.html"  class="tab">Prices</a>
+        <a href="tracker.html" class="tab">Tracker</a>
+        <a href="bot.html"     class="tab">DEX Bot</a>
+        <a href="agent.html"   class="tab">AI Agent</a>
+                <a href="wallet.html"  class="tab">Wallet</a>
       </nav>
-      <form id="pnlForm">
+      <form id="pnlForm" novalidate>
         <label for="tradeType">Trade Type:</label>
         <select id="tradeType" style="margin-bottom: 16px;">
           <option value="crypto">Crypto</option>
@@ -98,52 +91,39 @@
         <input type="number" id="entryPrice" step="any" required />
         <label for="exitPrice">Exit Price:</label>
         <input type="number" id="exitPrice" step="any" required />
-        <label for="quantity" id="quantityLabel">Quantity:</label>
-        <input type="number" id="quantity" step="any" required />
-        <label for="capital">Margin (Capital):</label>
-        <input type="number" id="capital" step="any" required />
+        <label for="capital" id="capitalLabel">Margin (Capital):</label>
+        <input type="number" id="capital" step="any" />
         <div id="forexOptions" style="display: none" class="forex-options">
+          <div class="position-toggles" id="forexPositionToggles">
+            <div class="pos-btn long active" data-fpos="buy">BUY</div>
+            <div class="pos-btn short" data-fpos="sell">SELL</div>
+          </div>
+          <input type="hidden" id="forexDirection" value="buy" />
           <div class="form-row">
-            <label for="lotSize">Lot Size:</label>
-            <input type="number" id="lotSize" step="any" value="1" />
+            <label for="fxVolume">Volume (Lots):</label>
+            <input type="number" id="fxVolume" step="any" value="1" min="0.01" />
           </div>
           <div class="form-row">
             <label for="contractSize">Contract Size:</label>
             <input type="number" id="contractSize" step="any" value="100000" />
           </div>
           <div class="form-row">
-            <label for="exchangeRate">Exchange Rate:</label>
+            <label for="fxLeverage">Leverage:</label>
+            <input type="number" id="fxLeverage" step="any" value="500" min="1" />
+          </div>
+          <div class="form-row">
+            <label for="exchangeRate">Acct. Currency Rate:</label>
             <input type="number" id="exchangeRate" step="any" value="1" />
           </div>
           <div class="converter-section">
             <h3>Currency Converter</h3>
             <div class="form-row">
               <label for="fromCurrency">From:</label>
-              <select id="fromCurrency">
-                <option value="USD">USD</option>
-                <option value="EUR">EUR</option>
-                <option value="GBP">GBP</option>
-                <option value="JPY">JPY</option>
-                <option value="AUD">AUD</option>
-                <option value="CAD">CAD</option>
-                <option value="CHF">CHF</option>
-                <option value="CNY">CNY</option>
-                <option value="INR">INR</option>
-              </select>
+              <select id="fromCurrency"></select>
             </div>
             <div class="form-row">
               <label for="toCurrency">To:</label>
-              <select id="toCurrency">
-                <option value="EUR">EUR</option>
-                <option value="USD">USD</option>
-                <option value="GBP">GBP</option>
-                <option value="JPY">JPY</option>
-                <option value="AUD">AUD</option>
-                <option value="CAD">CAD</option>
-                <option value="CHF">CHF</option>
-                <option value="CNY">CNY</option>
-                <option value="INR">INR</option>
-              </select>
+              <select id="toCurrency"></select>
             </div>
             <div class="form-row">
               <label for="convertAmount">Amount:</label>
@@ -165,67 +145,50 @@
       <div id="result"></div>
     </div>
     <script type="module">
-      import { setupAuthObserver } from './authObserver.js';
+      import { requireAuth } from './authObserver.js';
       import { signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
-      import { auth } from './firebase.js';
+      import { doc, getDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+      import { auth, db } from './firebase.js';
 
       document.addEventListener("DOMContentLoaded", function () {
-        // STEP 6: Auth State Observer
-        setupAuthObserver((user) => {
-          if (!user) {
-            window.location.href = "login.html";
-            return;
-          }
-
-          document.getElementById("userEmail").textContent = user.email;
-          document.getElementById("logoutBtn").style.display = "block";
-
+        requireAuth(async (user) => {
           let initials = user.email[0].toUpperCase();
           document.getElementById("profileInitials").textContent = initials;
+
+          try {
+            const docRef = doc(db, "users", user.uid);
+            const docSnap = await getDoc(docRef);
+            if (docSnap.exists()) {
+              const data = docSnap.data();
+              if (data.firstName || data.lastName) {
+                const f = data.firstName ? data.firstName[0] : "";
+                const l = data.lastName ? data.lastName[0] : "";
+                document.getElementById("profileInitials").textContent = (f + l).toUpperCase();
+              }
+            } else if (user.displayName) {
+              const parts = user.displayName.split(" ");
+              const f = parts[0] ? parts[0][0] : "";
+              const l = parts.length > 1 ? parts[parts.length - 1][0] : "";
+              document.getElementById("profileInitials").textContent = (f + l).toUpperCase() || initials;
+            }
+          } catch (e) {
+            console.error("Error fetching user details from Firestore:", e);
+          }
         });
 
-        document.getElementById("logoutBtn").addEventListener("click", function () {
-          signOut(auth).then(() => {
-            window.location.href = "login.html";
-          });
-        });
-
-        // Menu open/close logic (responsive and touch-friendly)
+        // Menu open/close logic
         const menuBtn = document.getElementById("menuBtn");
         const sideMenu = document.getElementById("sideMenu");
         const closeMenuBtn = document.getElementById("closeMenuBtn");
+        const menuOverlay = document.getElementById("menuOverlay");
         if (menuBtn && sideMenu && closeMenuBtn) {
-          const openMenu = (e) => {
-            e.stopPropagation();
-            sideMenu.classList.add("open");
-          };
-          const closeMenu = (e) => {
-            e.stopPropagation();
-            sideMenu.classList.remove("open");
-          };
+          const openMenu = (e) => { e.stopPropagation(); sideMenu.classList.add("open"); menuOverlay?.classList.add("visible"); };
+          const closeMenu = () => { sideMenu.classList.remove("open"); menuOverlay?.classList.remove("visible"); };
           menuBtn.addEventListener("click", openMenu);
           menuBtn.addEventListener("touchstart", openMenu);
           closeMenuBtn.addEventListener("click", closeMenu);
           closeMenuBtn.addEventListener("touchstart", closeMenu);
-          // Close menu on outside click (mouse or touch)
-          document.addEventListener("mousedown", function (e) {
-            if (
-              sideMenu.classList.contains("open") &&
-              !sideMenu.contains(e.target) &&
-              e.target !== menuBtn
-            ) {
-              sideMenu.classList.remove("open");
-            }
-          });
-          document.addEventListener("touchstart", function (e) {
-            if (
-              sideMenu.classList.contains("open") &&
-              !sideMenu.contains(e.target) &&
-              e.target !== menuBtn
-            ) {
-              sideMenu.classList.remove("open");
-            }
-          });
+          menuOverlay?.addEventListener("click", closeMenu);
         }
         // Logout from menu
         const sideLogoutBtn = document.getElementById("sideLogoutBtn");
@@ -238,7 +201,8 @@
         }
       });
     </script>
-    <script src="script.js"></script>
+    <div id="menuOverlay" class="menu-overlay"></div>
+    <script src="script.js?v=2"></script>
     <script>
       if ("serviceWorker" in navigator) {
         window.addEventListener("load", function () {
@@ -248,3 +212,4 @@
     </script>
   </body>
 </html>
+

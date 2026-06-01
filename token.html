@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#00c853" />
+  <link rel="manifest" href="manifest.json" />
+  <title>Token Details - FXcrypt</title>
+  <link rel="stylesheet" href="style.css?v=15" />
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <!-- Top nav -->
+  <div class="top-nav-bar">
+    <div class="menu-nav">
+      <button id="menuBtn" class="menu-btn" title="Menu" aria-label="Open menu">
+        <span class="menu-icon"><span></span><span></span><span></span></span>
+      </button>
+    </div>
+    <div class="profile-nav">
+      <a href="profile.html" class="profile-btn" title="View Profile">
+        <span id="profileInitials"></span>
+      </a>
+    </div>
+  </div>
+
+  <!-- Side menu -->
+  <div id="sideMenu" class="side-menu">
+    <div class="side-menu-header">
+      <span class="side-menu-title">Menu</span>
+      <button id="closeMenuBtn" class="close-menu-btn" aria-label="Close menu">&times;</button>
+    </div>
+    <ul class="side-menu-list">
+      <li><a href="profile.html">My Profile</a></li>
+      <li><a href="prices.html">Crypto Prices</a></li>
+      <li><a href="tracker.html">Token Tracker</a></li>
+      <li><a href="bot.html">DEX Bot</a></li>
+      <li><a href="agent.html">AI Agent</a></li>
+            <li><a href="wallet.html">Wallet</a></li>
+      <li><button id="sideLogoutBtn" class="side-logout-btn">Logout</button></li>
+    </ul>
+  </div>
+
+  <div class="container tracker-container">
+    <div class="app-logo-wrap">
+      <div class="app-logo-circle"><img src="logo.png" alt="FXcrypt Logo" /></div>
+      <span class="app-logo-text">FXCRYPT</span>
+    </div>
+
+    <nav class="menu-tabs">
+      <a href="index.html"   class="tab">PnL Calc</a>
+      <a href="prices.html"  class="tab">Prices</a>
+      <a href="tracker.html" class="tab active">Tracker</a>
+      <a href="bot.html"     class="tab">DEX Bot</a>
+      <a href="agent.html"   class="tab">AI Agent</a>
+            <a href="wallet.html"  class="tab">Wallet</a>
+    </nav>
+
+    <div id="tokenDetailContent">
+      <div class="loading-msg"><span class="spinner"></span>Loading token data&hellip;</div>
+    </div>
+  </div>
+
+  <div id="menuOverlay" class="menu-overlay"></div>
+
+  <script type="module">
+    import { requireAuth } from './authObserver.js';
+    import { signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+    import { doc, getDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+    import { auth, db } from './firebase.js';
+
+    document.addEventListener("DOMContentLoaded", () => {
+      requireAuth(async (user) => {
+        let initials = user.email[0].toUpperCase();
+        document.getElementById("profileInitials").textContent = initials;
+
+        try {
+          const docSnap = await getDoc(doc(db, "users", user.uid));
+          if (docSnap.exists()) {
+            const data = docSnap.data();
+            if (data.firstName || data.lastName) {
+              const f = data.firstName ? data.firstName[0] : "";
+              const l = data.lastName  ? data.lastName[0]  : "";
+              document.getElementById("profileInitials").textContent = (f + l).toUpperCase();
+            }
+          } else if (user.displayName) {
+            const parts = user.displayName.split(" ");
+            const f = parts[0] ? parts[0][0] : "";
+            const l = parts.length > 1 ? parts[parts.length - 1][0] : "";
+            document.getElementById("profileInitials").textContent = (f + l).toUpperCase() || initials;
+          }
+        } catch (e) {
+          console.error("Error fetching user details:", e);
+        }
+      });
+
+      // Menu open/close
+      const menuBtn      = document.getElementById("menuBtn");
+      const sideMenu     = document.getElementById("sideMenu");
+      const closeMenuBtn = document.getElementById("closeMenuBtn");
+      const menuOverlay  = document.getElementById("menuOverlay");
+
+      if (menuBtn && sideMenu && closeMenuBtn) {
+        const openMenu  = (e) => { e.stopPropagation(); sideMenu.classList.add("open"); menuOverlay?.classList.add("visible"); };
+        const closeMenu = () => { sideMenu.classList.remove("open"); menuOverlay?.classList.remove("visible"); };
+        menuBtn.addEventListener("click", openMenu);
+        menuBtn.addEventListener("touchstart", openMenu);
+        closeMenuBtn.addEventListener("click", closeMenu);
+        closeMenuBtn.addEventListener("touchstart", closeMenu);
+        menuOverlay?.addEventListener("click", closeMenu);
+      }
+
+      const sideLogoutBtn = document.getElementById("sideLogoutBtn");
+      if (sideLogoutBtn) {
+        sideLogoutBtn.onclick = () => {
+          import("https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js").then(({ signOut: so }) => {
+            so(auth).then(() => { window.location.href = "login.html"; });
+          });
+        };
+      }
+    });
+  </script>
+  <script type="module" src="token.js"></script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => navigator.serviceWorker.register("service-worker.js"));
+    }
+  </script>
+</body>
+</html>

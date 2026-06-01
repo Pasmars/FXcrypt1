@@ -1,0 +1,721 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#00c853" />
+    <link rel="manifest" href="manifest.json" />
+    <title>FXcrypt - Wallet</title>
+    <link rel="stylesheet" href="style.css?v=15" />
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap" rel="stylesheet" />
+    <script src="https://unpkg.com/ethers@5.7.2/dist/ethers.umd.min.js" type="application/javascript"></script>
+    <script src="https://unpkg.com/tonweb@0.0.62/dist/tonweb.js"></script>
+  </head>
+  <body>
+    <div class="top-nav-bar">
+      <div class="menu-nav">
+        <button id="menuBtn" class="menu-btn" title="Menu" aria-label="Open menu">
+          <span class="menu-icon"><span></span><span></span><span></span></span>
+        </button>
+      </div>
+      <div class="profile-nav">
+        <a href="profile.html" class="profile-btn" title="View Profile">
+          <span id="profileInitials"></span>
+        </a>
+      </div>
+    </div>
+
+    <div id="sideMenu" class="side-menu">
+      <div class="side-menu-header">
+        <span class="side-menu-title">Menu</span>
+        <button id="closeMenuBtn" class="close-menu-btn" aria-label="Close menu">&times;</button>
+      </div>
+      <ul class="side-menu-list">
+        <li><a href="profile.html">My Profile</a></li>
+        <li><a href="prices.html">Crypto Prices</a></li>
+        <li><a href="tracker.html">Token Tracker</a></li>
+        <li><a href="bot.html">DEX Bot</a></li>
+        <li><a href="agent.html">AI Agent</a></li>
+                <li><a href="wallet.html">Wallet</a></li>
+        <li><button id="sideLogoutBtn" class="side-logout-btn">Logout</button></li>
+      </ul>
+    </div>
+
+    <div class="container tracker-container">
+      <div class="app-logo-wrap">
+        <div class="app-logo-circle"><img src="logo.png" alt="FXcrypt Logo" /></div>
+        <span class="app-logo-text">FXCRYPT</span>
+      </div>
+      <nav class="menu-tabs">
+        <a href="index.html"   class="tab">PnL Calc</a>
+        <a href="prices.html"  class="tab">Prices</a>
+        <a href="tracker.html" class="tab">Tracker</a>
+        <a href="bot.html"     class="tab">DEX Bot</a>
+        <a href="agent.html"   class="tab">AI Agent</a>
+                <a href="wallet.html"  class="tab active">Wallet</a>
+      </nav>
+
+      <!-- Page header -->
+      <div class="wlt-page-header">
+        <h2 class="wlt-page-title">My Wallets</h2>
+        <p class="wlt-page-sub">Keys encrypted and stored on your device</p>
+      </div>
+
+      <!-- Chain selector -->
+      <div class="wlt-chain-tabs">
+        <button class="wlt-chain-tab active" data-chain="ton">
+          <span class="wlt-dot" style="background:#0098EA"></span>
+          <div class="wlt-chain-label">
+            <span class="wlt-chain-name">TON</span>
+            <span class="wlt-chain-sub">The Open Network</span>
+          </div>
+        </button>
+        <button class="wlt-chain-tab" data-chain="base">
+          <span class="wlt-dot" style="background:#0052FF"></span>
+          <div class="wlt-chain-label">
+            <span class="wlt-chain-name">BASE</span>
+            <span class="wlt-chain-sub">Coinbase L2</span>
+          </div>
+        </button>
+        <button class="wlt-chain-tab" data-chain="bsc">
+          <span class="wlt-dot" style="background:#F0B90B"></span>
+          <div class="wlt-chain-label">
+            <span class="wlt-chain-name">BSC</span>
+            <span class="wlt-chain-sub">BNB Smart Chain</span>
+          </div>
+        </button>
+        <button class="wlt-chain-tab" data-chain="eth">
+          <span class="wlt-dot" style="background:#627EEA"></span>
+          <div class="wlt-chain-label">
+            <span class="wlt-chain-name">ETH</span>
+            <span class="wlt-chain-sub">Ethereum</span>
+          </div>
+        </button>
+        <button class="wlt-chain-tab" data-chain="matic">
+          <span class="wlt-dot" style="background:#8247E5"></span>
+          <div class="wlt-chain-label">
+            <span class="wlt-chain-name">MATIC</span>
+            <span class="wlt-chain-sub">Polygon</span>
+          </div>
+        </button>
+        <button class="wlt-chain-tab" data-chain="sol">
+          <span class="wlt-dot" style="background:#9945FF"></span>
+          <div class="wlt-chain-label">
+            <span class="wlt-chain-name">SOL</span>
+            <span class="wlt-chain-sub">Solana</span>
+          </div>
+        </button>
+      </div>
+
+      <!-- ═══════════ TON PANEL ═══════════ -->
+      <div id="panelTon" class="wlt-panel">
+
+        <div id="tonLoading" class="wlt-status-msg">Loading wallet...</div>
+
+        <!-- No wallet -->
+        <div id="tonNoWallet" class="wlt-empty" style="display:none">
+          <div class="wlt-empty-badge" style="background:#0098EA1A;color:#0098EA;border-color:#0098EA40">TON</div>
+          <p class="wlt-empty-title">No TON Wallet</p>
+          <p class="wlt-empty-text">Create a new wallet or import an existing one using your private key.</p>
+          <button id="tonCreateBtn" class="submit-btn wlt-full-btn">Create New Wallet</button>
+          <button id="tonImportBtn" class="tracker-action-btn wlt-full-btn">Import Wallet</button>
+        </div>
+
+        <!-- Create form -->
+        <div id="tonCreateForm" class="wlt-form" style="display:none">
+          <h3 class="wlt-form-title">Create TON Wallet</h3>
+          <div class="settings-group">
+            <label class="settings-label">Wallet Password</label>
+            <input type="password" id="tonCreatePwd" class="tracker-input" placeholder="Min 6 characters" autocomplete="new-password" />
+            <label class="settings-label" style="margin-top:12px">Confirm Password</label>
+            <input type="password" id="tonCreatePwdConfirm" class="tracker-input" placeholder="Confirm password" autocomplete="new-password" />
+          </div>
+          <p class="wlt-form-hint">Your private key will be shown after creation — save it securely as your backup.</p>
+          <div class="wlt-form-actions">
+            <button id="tonDoCreate" class="submit-btn">Generate Wallet</button>
+            <button id="tonCancelCreate" class="tracker-action-btn">Cancel</button>
+          </div>
+        </div>
+
+        <!-- Import form -->
+        <div id="tonImportForm" class="wlt-form" style="display:none">
+          <h3 class="wlt-form-title">Import TON Wallet</h3>
+          <div class="settings-group">
+            <label class="settings-label">24-word Mnemonic or Private Key</label>
+            <textarea id="tonImportInput" class="tracker-input wlt-textarea" placeholder="Enter 24-word mnemonic separated by spaces, or 64-char hex private key..."></textarea>
+            <label class="settings-label" style="margin-top:12px">Wallet Password</label>
+            <input type="password" id="tonImportPwd" class="tracker-input" placeholder="Password to encrypt wallet" autocomplete="new-password" />
+          </div>
+          <div class="wlt-form-actions">
+            <button id="tonDoImport" class="submit-btn">Import</button>
+            <button id="tonCancelImport" class="tracker-action-btn">Cancel</button>
+          </div>
+        </div>
+
+        <!-- Wallet card -->
+        <div id="tonWallet" style="display:none">
+          <div class="wlt-card">
+            <div class="wlt-card-header">
+              <div class="wlt-card-chain-row">
+                <span class="wlt-card-dot" style="background:#0098EA"></span>
+                <span class="wlt-card-chain-name">TON</span>
+              </div>
+              <span class="wlt-card-network">The Open Network</span>
+            </div>
+            <div class="wlt-card-body">
+              <div class="wlt-field-label">Address</div>
+              <div class="wlt-addr-row">
+                <span id="tonAddress" class="wlt-addr" title=""></span>
+                <button id="tonCopyAddr" class="wlt-copy-btn">Copy</button>
+              </div>
+              <div class="wlt-bal-section">
+                <div class="wlt-field-label">Balance</div>
+                <div id="tonBalance" class="wlt-bal-value">—</div>
+              </div>
+              <div class="wlt-pills">
+                <button id="tonSend"         class="wlt-pill wlt-pill-send">Send</button>
+                <button id="tonReceive"      class="wlt-pill wlt-pill-receive">Receive</button>
+                <button id="tonShowKey"      class="wlt-pill">Private Key</button>
+                <button id="tonShowMnemonic" class="wlt-pill">Mnemonic</button>
+                <button id="tonRefresh"      class="wlt-pill">Refresh</button>
+                <button id="tonRemove"       class="wlt-pill wlt-pill-danger">Remove</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══════════ BASE PANEL ═══════════ -->
+      <div id="panelBase" class="wlt-panel" style="display:none">
+
+        <div id="baseLoading" class="wlt-status-msg">Loading wallet...</div>
+
+        <!-- No wallet -->
+        <div id="baseNoWallet" class="wlt-empty" style="display:none">
+          <div class="wlt-empty-badge" style="background:#0052FF1A;color:#0052FF;border-color:#0052FF40">BASE</div>
+          <p class="wlt-empty-title">No Base Wallet</p>
+          <p class="wlt-empty-text">Create a new wallet or import an existing one using a mnemonic or private key.</p>
+          <button id="baseCreateBtn" class="submit-btn wlt-full-btn">Create New Wallet</button>
+          <button id="baseImportBtn" class="tracker-action-btn wlt-full-btn">Import Wallet</button>
+        </div>
+
+        <!-- Create form -->
+        <div id="baseCreateForm" class="wlt-form" style="display:none">
+          <h3 class="wlt-form-title">Create Base Wallet</h3>
+          <div class="settings-group">
+            <label class="settings-label">Wallet Password</label>
+            <input type="password" id="baseCreatePwd" class="tracker-input" placeholder="Min 6 characters" autocomplete="new-password" />
+            <label class="settings-label" style="margin-top:12px">Confirm Password</label>
+            <input type="password" id="baseCreatePwdConfirm" class="tracker-input" placeholder="Confirm password" autocomplete="new-password" />
+          </div>
+          <p class="wlt-form-hint">A 12-word recovery phrase will be shown after creation. Write it down and store it safely.</p>
+          <div class="wlt-form-actions">
+            <button id="baseDoCreate" class="submit-btn">Generate Wallet</button>
+            <button id="baseCancelCreate" class="tracker-action-btn">Cancel</button>
+          </div>
+        </div>
+
+        <!-- Import form -->
+        <div id="baseImportForm" class="wlt-form" style="display:none">
+          <h3 class="wlt-form-title">Import Base Wallet</h3>
+          <div class="settings-group">
+            <label class="settings-label">12/24-word Mnemonic or Private Key</label>
+            <textarea id="baseImportInput" class="tracker-input wlt-textarea" placeholder="Enter 12 or 24-word mnemonic, or 0x... private key..."></textarea>
+            <label class="settings-label" style="margin-top:12px">Wallet Password</label>
+            <input type="password" id="baseImportPwd" class="tracker-input" placeholder="Password to encrypt wallet" autocomplete="new-password" />
+          </div>
+          <div class="wlt-form-actions">
+            <button id="baseDoImport" class="submit-btn">Import</button>
+            <button id="baseCancelImport" class="tracker-action-btn">Cancel</button>
+          </div>
+        </div>
+
+        <!-- Wallet card -->
+        <div id="baseWallet" style="display:none">
+          <div class="wlt-card">
+            <div class="wlt-card-header">
+              <div class="wlt-card-chain-row">
+                <span class="wlt-card-dot" style="background:#0052FF"></span>
+                <span class="wlt-card-chain-name">BASE</span>
+              </div>
+              <span class="wlt-card-network">Base Network (ETH)</span>
+            </div>
+            <div class="wlt-card-body">
+              <div class="wlt-field-label">Address</div>
+              <div class="wlt-addr-row">
+                <span id="baseAddress" class="wlt-addr" title=""></span>
+                <button id="baseCopyAddr" class="wlt-copy-btn">Copy</button>
+              </div>
+              <div class="wlt-bal-section">
+                <div class="wlt-field-label">Balance</div>
+                <div id="baseBalance" class="wlt-bal-value">—</div>
+              </div>
+              <div class="wlt-pills">
+                <button id="baseSend"         class="wlt-pill wlt-pill-send">Send</button>
+                <button id="baseReceive"      class="wlt-pill wlt-pill-receive">Receive</button>
+                <button id="baseShowKey"      class="wlt-pill">Private Key</button>
+                <button id="baseShowMnemonic" class="wlt-pill">Mnemonic</button>
+                <button id="baseRefresh"      class="wlt-pill">Refresh</button>
+                <button id="baseRemove"       class="wlt-pill wlt-pill-danger">Remove</button>
+              </div>
+              <!-- ERC-20 token management -->
+              <div class="wlt-token-section">
+                <div class="wlt-token-header">
+                  <span class="wlt-field-label">Tokens</span>
+                  <button id="baseAddToken" class="wlt-add-token-btn">+ Add Token</button>
+                </div>
+                <div id="baseTokenList" class="wlt-token-list"></div>
+                <div id="baseTokenAddForm" class="wlt-token-add-form" style="display:none">
+                  <input type="text" id="baseTokenContract" class="tracker-input" placeholder="ERC-20 contract address (0x…)" />
+                  <div class="wlt-token-add-actions">
+                    <button id="baseTokenAddConfirm" class="submit-btn wlt-token-add-btn">Add Token</button>
+                    <button id="baseTokenAddCancel"  class="tracker-action-btn wlt-token-add-btn">Cancel</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══════════ BSC PANEL ═══════════ -->
+      <div id="panelBsc" class="wlt-panel" style="display:none">
+
+        <div id="bscLoading" class="wlt-status-msg">Loading wallet...</div>
+
+        <div id="bscNoWallet" class="wlt-empty" style="display:none">
+          <div class="wlt-empty-badge" style="background:#F0B90B1A;color:#F0B90B;border-color:#F0B90B40">BSC</div>
+          <p class="wlt-empty-title">No BSC Wallet</p>
+          <p class="wlt-empty-text">Create a new wallet or import an existing one using a mnemonic or private key.</p>
+          <button id="bscCreateBtn" class="submit-btn wlt-full-btn">Create New Wallet</button>
+          <button id="bscImportBtn" class="tracker-action-btn wlt-full-btn">Import Wallet</button>
+        </div>
+
+        <div id="bscCreateForm" class="wlt-form" style="display:none">
+          <h3 class="wlt-form-title">Create BSC Wallet</h3>
+          <div class="settings-group">
+            <label class="settings-label">Wallet Password</label>
+            <input type="password" id="bscCreatePwd" class="tracker-input" placeholder="Min 6 characters" autocomplete="new-password" />
+            <label class="settings-label" style="margin-top:12px">Confirm Password</label>
+            <input type="password" id="bscCreatePwdConfirm" class="tracker-input" placeholder="Confirm password" autocomplete="new-password" />
+          </div>
+          <p class="wlt-form-hint">A 12-word recovery phrase will be shown after creation. Write it down and store it safely.</p>
+          <div class="wlt-form-actions">
+            <button id="bscDoCreate" class="submit-btn">Generate Wallet</button>
+            <button id="bscCancelCreate" class="tracker-action-btn">Cancel</button>
+          </div>
+        </div>
+
+        <div id="bscImportForm" class="wlt-form" style="display:none">
+          <h3 class="wlt-form-title">Import BSC Wallet</h3>
+          <div class="settings-group">
+            <label class="settings-label">12/24-word Mnemonic or Private Key</label>
+            <textarea id="bscImportInput" class="tracker-input wlt-textarea" placeholder="Enter mnemonic phrase, or 0x... private key..."></textarea>
+            <label class="settings-label" style="margin-top:12px">Wallet Password</label>
+            <input type="password" id="bscImportPwd" class="tracker-input" placeholder="Password to encrypt wallet" autocomplete="new-password" />
+          </div>
+          <div class="wlt-form-actions">
+            <button id="bscDoImport" class="submit-btn">Import</button>
+            <button id="bscCancelImport" class="tracker-action-btn">Cancel</button>
+          </div>
+        </div>
+
+        <div id="bscWallet" style="display:none">
+          <div class="wlt-card">
+            <div class="wlt-card-header">
+              <div class="wlt-card-chain-row">
+                <span class="wlt-card-dot" style="background:#F0B90B"></span>
+                <span class="wlt-card-chain-name">BSC</span>
+              </div>
+              <span class="wlt-card-network">BNB Smart Chain</span>
+            </div>
+            <div class="wlt-card-body">
+              <div class="wlt-field-label">Address</div>
+              <div class="wlt-addr-row">
+                <span id="bscAddress" class="wlt-addr" title=""></span>
+                <button id="bscCopyAddr" class="wlt-copy-btn">Copy</button>
+              </div>
+              <div class="wlt-bal-section">
+                <div class="wlt-field-label">Balance</div>
+                <div id="bscBalance" class="wlt-bal-value">—</div>
+              </div>
+              <div class="wlt-pills">
+                <button id="bscSend"         class="wlt-pill wlt-pill-send">Send</button>
+                <button id="bscReceive"      class="wlt-pill wlt-pill-receive">Receive</button>
+                <button id="bscShowKey"      class="wlt-pill">Private Key</button>
+                <button id="bscShowMnemonic" class="wlt-pill">Mnemonic</button>
+                <button id="bscRefresh"      class="wlt-pill">Refresh</button>
+                <button id="bscRemove"       class="wlt-pill wlt-pill-danger">Remove</button>
+              </div>
+              <!-- ERC-20 token management -->
+              <div class="wlt-token-section">
+                <div class="wlt-token-header">
+                  <span class="wlt-field-label">Tokens</span>
+                  <button id="bscAddToken" class="wlt-add-token-btn">+ Add Token</button>
+                </div>
+                <div id="bscTokenList" class="wlt-token-list"></div>
+                <div id="bscTokenAddForm" class="wlt-token-add-form" style="display:none">
+                  <input type="text" id="bscTokenContract" class="tracker-input" placeholder="BEP-20 contract address (0x…)" />
+                  <div class="wlt-token-add-actions">
+                    <button id="bscTokenAddConfirm" class="submit-btn wlt-token-add-btn">Add Token</button>
+                    <button id="bscTokenAddCancel"  class="tracker-action-btn wlt-token-add-btn">Cancel</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══════════ ETH PANEL ═══════════ -->
+      <div id="panelEth" class="wlt-panel" style="display:none">
+
+        <div id="ethLoading" class="wlt-status-msg">Loading wallet...</div>
+
+        <div id="ethNoWallet" class="wlt-empty" style="display:none">
+          <div class="wlt-empty-badge" style="background:#627EEA1A;color:#627EEA;border-color:#627EEA40">ETH</div>
+          <p class="wlt-empty-title">No ETH Wallet</p>
+          <p class="wlt-empty-text">Create a new wallet or import an existing one using a mnemonic or private key.</p>
+          <button id="ethCreateBtn" class="submit-btn wlt-full-btn">Create New Wallet</button>
+          <button id="ethImportBtn" class="tracker-action-btn wlt-full-btn">Import Wallet</button>
+        </div>
+
+        <div id="ethCreateForm" class="wlt-form" style="display:none">
+          <h3 class="wlt-form-title">Create ETH Wallet</h3>
+          <div class="settings-group">
+            <label class="settings-label">Wallet Password</label>
+            <input type="password" id="ethCreatePwd" class="tracker-input" placeholder="Min 6 characters" autocomplete="new-password" />
+            <label class="settings-label" style="margin-top:12px">Confirm Password</label>
+            <input type="password" id="ethCreatePwdConfirm" class="tracker-input" placeholder="Confirm password" autocomplete="new-password" />
+          </div>
+          <p class="wlt-form-hint">A 12-word recovery phrase will be shown after creation. Write it down and store it safely.</p>
+          <div class="wlt-form-actions">
+            <button id="ethDoCreate" class="submit-btn">Generate Wallet</button>
+            <button id="ethCancelCreate" class="tracker-action-btn">Cancel</button>
+          </div>
+        </div>
+
+        <div id="ethImportForm" class="wlt-form" style="display:none">
+          <h3 class="wlt-form-title">Import ETH Wallet</h3>
+          <div class="settings-group">
+            <label class="settings-label">12/24-word Mnemonic or Private Key</label>
+            <textarea id="ethImportInput" class="tracker-input wlt-textarea" placeholder="Enter mnemonic phrase, or 0x... private key..."></textarea>
+            <label class="settings-label" style="margin-top:12px">Wallet Password</label>
+            <input type="password" id="ethImportPwd" class="tracker-input" placeholder="Password to encrypt wallet" autocomplete="new-password" />
+          </div>
+          <div class="wlt-form-actions">
+            <button id="ethDoImport" class="submit-btn">Import</button>
+            <button id="ethCancelImport" class="tracker-action-btn">Cancel</button>
+          </div>
+        </div>
+
+        <div id="ethWallet" style="display:none">
+          <div class="wlt-card">
+            <div class="wlt-card-header">
+              <div class="wlt-card-chain-row">
+                <span class="wlt-card-dot" style="background:#627EEA"></span>
+                <span class="wlt-card-chain-name">ETH</span>
+              </div>
+              <span class="wlt-card-network">Ethereum Mainnet</span>
+            </div>
+            <div class="wlt-card-body">
+              <div class="wlt-field-label">Address</div>
+              <div class="wlt-addr-row">
+                <span id="ethAddress" class="wlt-addr" title=""></span>
+                <button id="ethCopyAddr" class="wlt-copy-btn">Copy</button>
+              </div>
+              <div class="wlt-bal-section">
+                <div class="wlt-field-label">Balance</div>
+                <div id="ethBalance" class="wlt-bal-value">—</div>
+              </div>
+              <div class="wlt-pills">
+                <button id="ethSend"         class="wlt-pill wlt-pill-send">Send</button>
+                <button id="ethReceive"      class="wlt-pill wlt-pill-receive">Receive</button>
+                <button id="ethShowKey"      class="wlt-pill">Private Key</button>
+                <button id="ethShowMnemonic" class="wlt-pill">Mnemonic</button>
+                <button id="ethRefresh"      class="wlt-pill">Refresh</button>
+                <button id="ethRemove"       class="wlt-pill wlt-pill-danger">Remove</button>
+              </div>
+              <!-- ERC-20 token management -->
+              <div class="wlt-token-section">
+                <div class="wlt-token-header">
+                  <span class="wlt-field-label">Tokens</span>
+                  <button id="ethAddToken" class="wlt-add-token-btn">+ Add Token</button>
+                </div>
+                <div id="ethTokenList" class="wlt-token-list"></div>
+                <div id="ethTokenAddForm" class="wlt-token-add-form" style="display:none">
+                  <input type="text" id="ethTokenContract" class="tracker-input" placeholder="ERC-20 contract address (0x…)" />
+                  <div class="wlt-token-add-actions">
+                    <button id="ethTokenAddConfirm" class="submit-btn wlt-token-add-btn">Add Token</button>
+                    <button id="ethTokenAddCancel"  class="tracker-action-btn wlt-token-add-btn">Cancel</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══════════ MATIC PANEL ═══════════ -->
+      <div id="panelMatic" class="wlt-panel" style="display:none">
+
+        <div id="maticLoading" class="wlt-status-msg">Loading wallet...</div>
+
+        <!-- No wallet -->
+        <div id="maticNoWallet" class="wlt-empty" style="display:none">
+          <div class="wlt-empty-badge" style="background:#8247E51A;color:#8247E5;border-color:#8247E540">MATIC</div>
+          <p class="wlt-empty-title">No MATIC Wallet</p>
+          <p class="wlt-empty-text">Create a new wallet or import an existing one using a mnemonic or private key.</p>
+          <button id="maticCreateBtn" class="submit-btn wlt-full-btn">Create New Wallet</button>
+          <button id="maticImportBtn" class="tracker-action-btn wlt-full-btn">Import Wallet</button>
+        </div>
+
+        <!-- Create form -->
+        <div id="maticCreateForm" class="wlt-form" style="display:none">
+          <h3 class="wlt-form-title">Create MATIC Wallet</h3>
+          <div class="settings-group">
+            <label class="settings-label">Wallet Password</label>
+            <input type="password" id="maticCreatePwd" class="tracker-input" placeholder="Min 6 characters" autocomplete="new-password" />
+            <label class="settings-label" style="margin-top:12px">Confirm Password</label>
+            <input type="password" id="maticCreatePwdConfirm" class="tracker-input" placeholder="Confirm password" autocomplete="new-password" />
+          </div>
+          <p class="wlt-form-hint">A 12-word recovery phrase will be shown after creation. Write it down and store it safely.</p>
+          <div class="wlt-form-actions">
+            <button id="maticDoCreate" class="submit-btn">Generate Wallet</button>
+            <button id="maticCancelCreate" class="tracker-action-btn">Cancel</button>
+          </div>
+        </div>
+
+        <!-- Import form -->
+        <div id="maticImportForm" class="wlt-form" style="display:none">
+          <h3 class="wlt-form-title">Import MATIC Wallet</h3>
+          <div class="settings-group">
+            <label class="settings-label">12/24-word Mnemonic or Private Key</label>
+            <textarea id="maticImportInput" class="tracker-input wlt-textarea" placeholder="Enter mnemonic phrase, or 0x... private key..."></textarea>
+            <label class="settings-label" style="margin-top:12px">Wallet Password</label>
+            <input type="password" id="maticImportPwd" class="tracker-input" placeholder="Password to encrypt wallet" autocomplete="new-password" />
+          </div>
+          <div class="wlt-form-actions">
+            <button id="maticDoImport" class="submit-btn">Import</button>
+            <button id="maticCancelImport" class="tracker-action-btn">Cancel</button>
+          </div>
+        </div>
+
+        <!-- Wallet card -->
+        <div id="maticWallet" style="display:none">
+          <div class="wlt-card">
+            <div class="wlt-card-header">
+              <div class="wlt-card-chain-row">
+                <span class="wlt-card-dot" style="background:#8247E5"></span>
+                <span class="wlt-card-chain-name">MATIC</span>
+              </div>
+              <span class="wlt-card-network">Polygon Mainnet</span>
+            </div>
+            <div class="wlt-card-body">
+              <div class="wlt-field-label">Address</div>
+              <div class="wlt-addr-row">
+                <span id="maticAddress" class="wlt-addr" title=""></span>
+                <button id="maticCopyAddr" class="wlt-copy-btn">Copy</button>
+              </div>
+              <div class="wlt-bal-section">
+                <div class="wlt-field-label">Balance</div>
+                <div id="maticBalance" class="wlt-bal-value">—</div>
+              </div>
+              <div class="wlt-pills">
+                <button id="maticSend"         class="wlt-pill wlt-pill-send">Send</button>
+                <button id="maticReceive"      class="wlt-pill wlt-pill-receive">Receive</button>
+                <button id="maticShowKey"      class="wlt-pill">Private Key</button>
+                <button id="maticShowMnemonic" class="wlt-pill">Mnemonic</button>
+                <button id="maticRefresh"      class="wlt-pill">Refresh</button>
+                <button id="maticRemove"       class="wlt-pill wlt-pill-danger">Remove</button>
+              </div>
+              <!-- ERC-20 token management -->
+              <div class="wlt-token-section">
+                <div class="wlt-token-header">
+                  <span class="wlt-field-label">Tokens</span>
+                  <button id="maticAddToken" class="wlt-add-token-btn">+ Add Token</button>
+                </div>
+                <div id="maticTokenList" class="wlt-token-list"></div>
+                <div id="maticTokenAddForm" class="wlt-token-add-form" style="display:none">
+                  <input type="text" id="maticTokenContract" class="tracker-input" placeholder="ERC-20 contract address (0x…)" />
+                  <div class="wlt-token-add-actions">
+                    <button id="maticTokenAddConfirm" class="submit-btn wlt-token-add-btn">Add Token</button>
+                    <button id="maticTokenAddCancel"  class="tracker-action-btn wlt-token-add-btn">Cancel</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══════════ SOL PANEL ═══════════ -->
+      <div id="panelSol" class="wlt-panel" style="display:none">
+
+        <div id="solLoading" class="wlt-status-msg">Loading wallet...</div>
+
+        <div id="solNoWallet" class="wlt-empty" style="display:none">
+          <div class="wlt-empty-badge" style="background:#9945FF1A;color:#9945FF;border-color:#9945FF40">SOL</div>
+          <p class="wlt-empty-title">No SOL Wallet</p>
+          <p class="wlt-empty-text">Create a new wallet or import one using a base58 private key or JSON byte array.</p>
+          <button id="solCreateBtn" class="submit-btn wlt-full-btn">Create New Wallet</button>
+          <button id="solImportBtn" class="tracker-action-btn wlt-full-btn">Import Wallet</button>
+        </div>
+
+        <div id="solCreateForm" class="wlt-form" style="display:none">
+          <h3 class="wlt-form-title">Create SOL Wallet</h3>
+          <div class="settings-group">
+            <label class="settings-label">Wallet Password</label>
+            <input type="password" id="solCreatePwd" class="tracker-input" placeholder="Min 6 characters" autocomplete="new-password" />
+            <label class="settings-label" style="margin-top:12px">Confirm Password</label>
+            <input type="password" id="solCreatePwdConfirm" class="tracker-input" placeholder="Confirm password" autocomplete="new-password" />
+          </div>
+          <p class="wlt-form-hint">Your private key will be shown after creation — save the base58 key securely as your backup.</p>
+          <div class="wlt-form-actions">
+            <button id="solDoCreate" class="submit-btn">Generate Wallet</button>
+            <button id="solCancelCreate" class="tracker-action-btn">Cancel</button>
+          </div>
+        </div>
+
+        <div id="solImportForm" class="wlt-form" style="display:none">
+          <h3 class="wlt-form-title">Import SOL Wallet</h3>
+          <div class="settings-group">
+            <label class="settings-label">Private Key (base58, hex, or JSON array)</label>
+            <textarea id="solImportInput" class="tracker-input wlt-textarea" placeholder="Base58 key, 128-char hex, or [1,2,3,...] JSON array from Phantom..."></textarea>
+            <label class="settings-label" style="margin-top:12px">Wallet Password</label>
+            <input type="password" id="solImportPwd" class="tracker-input" placeholder="Password to encrypt wallet" autocomplete="new-password" />
+          </div>
+          <div class="wlt-form-actions">
+            <button id="solDoImport" class="submit-btn">Import</button>
+            <button id="solCancelImport" class="tracker-action-btn">Cancel</button>
+          </div>
+        </div>
+
+        <div id="solWallet" style="display:none">
+          <div class="wlt-card">
+            <div class="wlt-card-header">
+              <div class="wlt-card-chain-row">
+                <span class="wlt-card-dot" style="background:#9945FF"></span>
+                <span class="wlt-card-chain-name">SOL</span>
+              </div>
+              <span class="wlt-card-network">Solana Mainnet</span>
+            </div>
+            <div class="wlt-card-body">
+              <div class="wlt-field-label">Address</div>
+              <div class="wlt-addr-row">
+                <span id="solAddress" class="wlt-addr" title=""></span>
+                <button id="solCopyAddr" class="wlt-copy-btn">Copy</button>
+              </div>
+              <div class="wlt-bal-section">
+                <div class="wlt-field-label">Balance</div>
+                <div id="solBalance" class="wlt-bal-value">—</div>
+              </div>
+              <div class="wlt-pills">
+                <button id="solSend"         class="wlt-pill wlt-pill-send">Send</button>
+                <button id="solReceive"      class="wlt-pill wlt-pill-receive">Receive</button>
+                <button id="solShowKey"      class="wlt-pill">Private Key</button>
+                <button id="solShowMnemonic" class="wlt-pill">Mnemonic</button>
+                <button id="solRefresh"      class="wlt-pill">Refresh</button>
+                <button id="solRemove"       class="wlt-pill wlt-pill-danger">Remove</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /container -->
+
+    <!-- ═══ Reveal secret modal ═══ -->
+    <div id="revealModal" class="wlt-modal-bg" style="display:none">
+      <div class="wlt-modal">
+        <h3 id="revealTitle" class="wlt-modal-title"></h3>
+        <p class="wlt-modal-desc">Enter your wallet password to reveal.</p>
+        <input type="password" id="revealPwd" class="tracker-input" placeholder="Wallet password" autocomplete="current-password" />
+        <div id="revealResult" style="display:none;margin-top:14px">
+          <div class="wlt-secret-warn">Never share this with anyone!</div>
+          <div id="revealContent" class="wlt-secret-box"></div>
+          <button id="revealCopy" class="wlt-pill" style="margin-top:10px">Copy</button>
+        </div>
+        <div class="wlt-modal-actions">
+          <button id="revealConfirm" class="submit-btn">Reveal</button>
+          <button id="revealClose"   class="tracker-action-btn">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ Mnemonic backup modal ═══ -->
+    <div id="mnemonicModal" class="wlt-modal-bg" style="display:none">
+      <div class="wlt-modal">
+        <h3 class="wlt-modal-title">Backup Your Mnemonic</h3>
+        <p class="wlt-modal-desc">Write these words down in order. This is the only way to recover your wallet.</p>
+        <div id="mnemonicGrid" class="wlt-mnemonic-grid"></div>
+        <div class="wlt-secret-warn" style="margin-top:14px">Store this offline. Never share it!</div>
+        <button id="mnemonicDone" class="submit-btn" style="margin-top:16px;width:100%">I've saved it — Done</button>
+      </div>
+    </div>
+
+    <!-- ═══ Send modal ═══ -->
+    <div id="sendModal" class="wlt-modal-bg" style="display:none">
+      <div class="wlt-modal">
+        <h3 id="sendModalTitle" class="wlt-modal-title">Send</h3>
+
+        <!-- Type toggle (EVM only) -->
+        <div id="sendTypeRow" class="wlt-send-type-row">
+          <button id="sendTypeNative" class="wlt-send-type-btn active">Native Coin</button>
+          <button id="sendTypeToken"  class="wlt-send-type-btn">ERC-20 Token</button>
+        </div>
+
+        <!-- Contract address (token type only) -->
+        <div id="sendContractRow" style="display:none;margin-top:12px">
+          <label class="settings-label">Token Contract Address</label>
+          <input type="text" id="sendContract" class="tracker-input" placeholder="0x contract address" autocomplete="off" />
+        </div>
+
+        <label class="settings-label" style="margin-top:12px">Recipient Address</label>
+        <input type="text" id="sendTo" class="tracker-input" placeholder="Recipient wallet address" autocomplete="off" />
+
+        <label class="settings-label" style="margin-top:12px">Amount</label>
+        <div class="wlt-send-amount-row">
+          <input type="number" id="sendAmount" class="tracker-input" placeholder="0.000000" step="any" min="0" />
+          <span id="sendSymbol" class="wlt-send-symbol"></span>
+        </div>
+
+        <label class="settings-label" style="margin-top:12px">Wallet Password</label>
+        <input type="password" id="sendPwd" class="tracker-input" placeholder="Your wallet password" autocomplete="current-password" />
+
+        <div id="sendStatus" class="wlt-send-status" style="display:none"></div>
+
+        <div class="wlt-modal-actions">
+          <button id="sendConfirm" class="submit-btn">Send</button>
+          <button id="sendClose"   class="tracker-action-btn">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ Receive modal ═══ -->
+    <div id="receiveModal" class="wlt-modal-bg" style="display:none">
+      <div class="wlt-modal">
+        <h3 id="receiveModalTitle" class="wlt-modal-title">Receive</h3>
+        <p class="wlt-modal-desc">Share your address to receive funds on this network.</p>
+        <div class="wlt-addr-row" style="margin-top:4px">
+          <span id="receiveAddress" class="wlt-addr" style="font-size:0.75rem;word-break:break-all"></span>
+          <button id="receiveCopyAddr" class="wlt-copy-btn">Copy</button>
+        </div>
+        <div class="wlt-modal-actions" style="margin-top:18px">
+          <button id="receiveClose" class="tracker-action-btn" style="flex:1">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="menuOverlay" class="menu-overlay"></div>
+
+    <script type="module" src="wallet.js"></script>
+    <script>
+      if ("serviceWorker" in navigator) {
+        window.addEventListener("load", function () {
+          navigator.serviceWorker.register("service-worker.js");
+        });
+      }
+    </script>
+  </body>
+</html>

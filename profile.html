@@ -1,118 +1,257 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#00c853" />
-    <link rel="manifest" href="manifest.json" />
-    <title>User Profile - FXcrypt</title>
-    <link rel="stylesheet" href="style.css" />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap"
-      rel="stylesheet"
-    />
-  </head>
-  <body>
-    <div class="profile-nav">
-      <a href="index.html" title="Back to Dashboard">←</a>
-    </div>
 
-    <div class="profile-container">
-      <div class="profile-header">
-        <div class="profile-icon" id="profileIcon"></div>
-        <h2 id="userFullName"></h2>
-        <p id="userEmailDisplay"></p>
-      </div>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#00c853" />
+  <link rel="manifest" href="manifest.json" />
+  <title>My Profile - FXcrypt</title>
+  <link rel="stylesheet" href="style.css?v=15" />
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap" rel="stylesheet" />
+</head>
 
-      <div class="profile-details">
-        <div class="detail-row">
-          <span class="detail-label">Email:</span>
-          <span class="detail-value" id="detailEmail"></span>
-        </div>
-        <div class="detail-row">
-          <span class="detail-label">First Name:</span>
-          <span class="detail-value" id="detailFirstName"></span>
-        </div>
-        <div class="detail-row">
-          <span class="detail-label">Last Name:</span>
-          <span class="detail-value" id="detailLastName"></span>
-        </div>
-        <div class="detail-row">
-          <span class="detail-label">Phone:</span>
-          <span class="detail-value" id="detailPhone"></span>
-        </div>
-        <div class="detail-row">
-          <span class="detail-label">Member Since:</span>
-          <span class="detail-value" id="detailJoinDate"></span>
-        </div>
-      </div>
-
-      <button class="back-btn" onclick="window.location.href = 'index.html'">
-        Back to Dashboard
+<body>
+  <!-- Top nav -->
+  <div class="top-nav-bar">
+    <div class="menu-nav">
+      <button id="menuBtn" class="menu-btn" title="Menu" aria-label="Open menu">
+        <span class="menu-icon"><span></span><span></span><span></span></span>
       </button>
     </div>
+    <div class="profile-nav">
+      <a href="profile.html" class="profile-btn" title="View Profile">
+        <span id="profileInitials"></span>
+      </a>
+    </div>
+  </div>
 
-    <script type="module">
-      import { setupAuthObserver } from './authObserver.js';
-      import { doc, getDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
-      import { db } from './firebase.js';
+  <!-- Side menu -->
+  <div id="sideMenu" class="side-menu">
+    <div class="side-menu-header">
+      <span class="side-menu-title">Menu</span>
+      <button id="closeMenuBtn" class="close-menu-btn" aria-label="Close menu">&times;</button>
+    </div>
+    <ul class="side-menu-list">
+      <li><a href="profile.html">My Profile</a></li>
+      <li><a href="prices.html">Crypto Prices</a></li>
+      <li><a href="tracker.html">Token Tracker</a></li>
+      <li><a href="bot.html">DEX Bot</a></li>
+      <li><a href="agent.html">AI Agent</a></li>
+            <li><a href="wallet.html">Wallet</a></li>
+      <li><button id="sideLogoutBtn" class="side-logout-btn">Logout</button></li>
+    </ul>
+  </div>
 
-      // STEP 6: Auth State Observer
-      setupAuthObserver(async (user) => {
-        if (!user) {
-          window.location.href = "login.html";
-          return;
-        }
+  <div class="profile-container">
+    <div class="profile-header">
+      <div class="profile-icon" id="profileIcon"></div>
+      <h2 id="userFullName"></h2>
+      <p id="userEmailDisplay"></p>
+    </div>
 
-        let joinDate = new Date(user.metadata.creationTime).toLocaleDateString();
+    <div class="profile-details" id="profileDetailsView">
+      <div class="detail-row">
+        <span class="detail-label">Email</span>
+        <span class="detail-value" id="detailEmail"></span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">First Name</span>
+        <span class="detail-value" id="detailFirstName"></span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">Last Name</span>
+        <span class="detail-value" id="detailLastName"></span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">Phone</span>
+        <span class="detail-value" id="detailPhone"></span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">Member Since</span>
+        <span class="detail-value" id="detailJoinDate"></span>
+      </div>
+      <button class="edit-btn" id="editProfileBtn">Edit Profile</button>
+    </div>
 
-        // Fetch additional details from Firestore
-        let firstName = "N/A";
-        let lastName = "N/A";
-        let phone = "N/A";
-        
-        try {
-          const docRef = doc(db, "users", user.uid);
-          const docSnap = await getDoc(docRef);
-          if (docSnap.exists()) {
-            const data = docSnap.data();
-            firstName = data.firstName || "N/A";
-            lastName = data.lastName || "N/A";
-            phone = data.phone || "N/A";
-          } else if (user.displayName) {
-            const parts = user.displayName.split(" ");
-            firstName = parts[0] || "N/A";
-            lastName = parts.slice(1).join(" ") || "N/A";
-          }
-        } catch (e) {
-          console.error("Error fetching user details from Firestore:", e);
-        }
+    <div class="profile-details edit-form" id="profileEditView" style="display: none;">
+      <div class="form-row">
+        <label for="editFirstName">First Name</label>
+        <input type="text" id="editFirstName" />
+      </div>
+      <div class="form-row">
+        <label for="editLastName">Last Name</label>
+        <input type="text" id="editLastName" />
+      </div>
+      <div class="form-row">
+        <label for="editPhone">Phone Number</label>
+        <input type="tel" id="editPhone" />
+      </div>
+      <div class="edit-actions">
+        <button class="cancel-btn" id="cancelEditBtn">Cancel</button>
+        <button class="save-btn" id="saveProfileBtn">Save Changes</button>
+      </div>
+    </div>
 
-        let initials = user.email[0].toUpperCase();
-        if (firstName !== "N/A" || lastName !== "N/A") {
-          initials = ((firstName !== "N/A" ? firstName[0] : "") + (lastName !== "N/A" ? lastName[0] : "")).toUpperCase();
-        }
+    <button class="back-btn" onclick="window.location.href = 'index.html'">
+      Back to Dashboard
+    </button>
+    <button class="back-btn" id="logoutBtn" style="background: #f6465d; margin-top: 10px;">
+      Log Out
+    </button>
+  </div>
 
-        document.getElementById("profileIcon").textContent = initials;
+  <div id="menuOverlay" class="menu-overlay"></div>
 
-        // Fill in profile details
-        let fullName = (firstName !== "N/A" && lastName !== "N/A") ? `${firstName} ${lastName}` : user.email;
-        
-        document.getElementById("userFullName").textContent = fullName;
-        document.getElementById("userEmailDisplay").textContent = user.email;
-        document.getElementById("detailEmail").textContent = user.email;
-        document.getElementById("detailFirstName").textContent = firstName;
-        document.getElementById("detailLastName").textContent = lastName;
-        document.getElementById("detailPhone").textContent = phone;
-        document.getElementById("detailJoinDate").textContent = joinDate;
-      });
-    </script>
-    <script>
-      if ("serviceWorker" in navigator) {
-        window.addEventListener("load", function () {
-          navigator.serviceWorker.register("service-worker.js");
-        });
+  <script type="module">
+    import { requireAuth } from './authObserver.js';
+    import { signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+    import { doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+    import { auth, db } from './firebase.js';
+
+    // Menu open/close (no auth needed)
+    document.addEventListener("DOMContentLoaded", () => {
+      const menuBtn     = document.getElementById("menuBtn");
+      const sideMenu    = document.getElementById("sideMenu");
+      const closeMenuBtn = document.getElementById("closeMenuBtn");
+      const menuOverlay = document.getElementById("menuOverlay");
+
+      if (menuBtn && sideMenu && closeMenuBtn) {
+        const openMenu  = (e) => { e.stopPropagation(); sideMenu.classList.add("open"); menuOverlay?.classList.add("visible"); };
+        const closeMenu = () => { sideMenu.classList.remove("open"); menuOverlay?.classList.remove("visible"); };
+        menuBtn.addEventListener("click", openMenu);
+        menuBtn.addEventListener("touchstart", openMenu);
+        closeMenuBtn.addEventListener("click", closeMenu);
+        closeMenuBtn.addEventListener("touchstart", closeMenu);
+        menuOverlay?.addEventListener("click", closeMenu);
       }
-    </script>
-  </body>
+
+      const sideLogoutBtn = document.getElementById("sideLogoutBtn");
+      if (sideLogoutBtn) {
+        sideLogoutBtn.onclick = () => signOut(auth).then(() => { window.location.href = "login.html"; });
+      }
+    });
+
+    requireAuth(async (user) => {
+
+      let joinDate = new Date(user.metadata.creationTime).toLocaleDateString();
+
+      let firstName = "N/A";
+      let lastName  = "N/A";
+      let phone     = "N/A";
+
+      try {
+        const docRef  = doc(db, "users", user.uid);
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          firstName = data.firstName || "N/A";
+          lastName  = data.lastName  || "N/A";
+          phone     = data.phone     || "N/A";
+        } else if (user.displayName) {
+          const parts = user.displayName.split(" ");
+          firstName = parts[0] || "N/A";
+          lastName  = parts.slice(1).join(" ") || "N/A";
+        }
+      } catch (e) {
+        console.error("Error fetching user details from Firestore:", e);
+      }
+
+      let initials = user.email[0].toUpperCase();
+      if (firstName !== "N/A" || lastName !== "N/A") {
+        initials = ((firstName !== "N/A" ? firstName[0] : "") + (lastName !== "N/A" ? lastName[0] : "")).toUpperCase();
+      }
+
+      document.getElementById("profileIcon").textContent     = initials;
+      document.getElementById("profileInitials").textContent = initials;
+
+      const fullName = (firstName !== "N/A" && lastName !== "N/A") ? `${firstName} ${lastName}` : user.email;
+      document.getElementById("userFullName").textContent    = fullName;
+      document.getElementById("userEmailDisplay").textContent = user.email;
+      document.getElementById("detailEmail").textContent     = user.email;
+      document.getElementById("detailFirstName").textContent = firstName;
+      document.getElementById("detailLastName").textContent  = lastName;
+      document.getElementById("detailPhone").textContent     = phone;
+      document.getElementById("detailJoinDate").textContent  = joinDate;
+
+      // Logout
+      document.getElementById("logoutBtn").addEventListener("click", () => {
+        signOut(auth).then(() => { window.location.href = "login.html"; });
+      });
+
+      // Edit / save / cancel
+      const profileDetailsView = document.getElementById("profileDetailsView");
+      const profileEditView    = document.getElementById("profileEditView");
+      const editBtn    = document.getElementById("editProfileBtn");
+      const cancelBtn  = document.getElementById("cancelEditBtn");
+      const saveBtn    = document.getElementById("saveProfileBtn");
+
+      editBtn.addEventListener("click", () => {
+        document.getElementById("editFirstName").value = firstName !== "N/A" ? firstName : "";
+        document.getElementById("editLastName").value  = lastName  !== "N/A" ? lastName  : "";
+        document.getElementById("editPhone").value     = phone     !== "N/A" ? phone     : "";
+        profileDetailsView.style.display = "none";
+        profileEditView.style.display    = "block";
+      });
+
+      cancelBtn.addEventListener("click", () => {
+        profileEditView.style.display    = "none";
+        profileDetailsView.style.display = "block";
+      });
+
+      saveBtn.addEventListener("click", async () => {
+        const newFirstName = document.getElementById("editFirstName").value.trim();
+        const newLastName  = document.getElementById("editLastName").value.trim();
+        const newPhone     = document.getElementById("editPhone").value.trim();
+
+        saveBtn.textContent = "Saving...";
+        saveBtn.disabled    = true;
+
+        try {
+          await setDoc(doc(db, "users", user.uid), {
+            firstName: newFirstName,
+            lastName:  newLastName,
+            phone:     newPhone,
+            updatedAt: new Date().toISOString()
+          }, { merge: true });
+
+          firstName = newFirstName || "N/A";
+          lastName  = newLastName  || "N/A";
+          phone     = newPhone     || "N/A";
+
+          document.getElementById("detailFirstName").textContent = firstName;
+          document.getElementById("detailLastName").textContent  = lastName;
+          document.getElementById("detailPhone").textContent     = phone;
+
+          const newFullName = (firstName !== "N/A" && lastName !== "N/A") ? `${firstName} ${lastName}` : user.email;
+          document.getElementById("userFullName").textContent = newFullName;
+
+          let newInitials = user.email[0].toUpperCase();
+          if (firstName !== "N/A" || lastName !== "N/A") {
+            newInitials = ((firstName !== "N/A" ? firstName[0] : "") + (lastName !== "N/A" ? lastName[0] : "")).toUpperCase();
+          }
+          document.getElementById("profileIcon").textContent     = newInitials;
+          document.getElementById("profileInitials").textContent = newInitials;
+
+          profileEditView.style.display    = "none";
+          profileDetailsView.style.display = "block";
+        } catch (error) {
+          console.error("Error updating profile:", error);
+          alert("Failed to update profile. Please try again.");
+        } finally {
+          saveBtn.textContent = "Save Changes";
+          saveBtn.disabled    = false;
+        }
+      });
+    });
+  </script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", function () {
+        navigator.serviceWorker.register("service-worker.js");
+      });
+    }
+  </script>
+</body>
+
 </html>

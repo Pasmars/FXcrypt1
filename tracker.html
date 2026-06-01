@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#00c853" />
+  <meta name="description" content="Track tokens on BSC, Ethereum and Solana blockchains in real-time." />
+  <link rel="manifest" href="manifest.json" />
+  <title>Token Tracker - FXcrypt</title>
+  <link rel="stylesheet" href="style.css?v=15" />
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <!-- Top nav -->
+  <div class="top-nav-bar">
+    <div class="menu-nav">
+      <button id="menuBtn" class="menu-btn" title="Menu" aria-label="Open menu">
+        <span class="menu-icon"><span></span><span></span><span></span></span>
+      </button>
+    </div>
+    <div class="profile-nav">
+      <a href="profile.html" class="profile-btn" title="View Profile">
+        <span id="profileInitials"></span>
+      </a>
+    </div>
+  </div>
+
+  <!-- Side menu -->
+  <div id="sideMenu" class="side-menu">
+    <div class="side-menu-header">
+      <span class="side-menu-title">Menu</span>
+      <button id="closeMenuBtn" class="close-menu-btn" aria-label="Close menu">&times;</button>
+    </div>
+    <ul class="side-menu-list">
+      <li><a href="profile.html">My Profile</a></li>
+      <li><a href="prices.html">Crypto Prices</a></li>
+      <li><a href="tracker.html">Token Tracker</a></li>
+      <li><a href="bot.html">DEX Bot</a></li>
+      <li><a href="agent.html">AI Agent</a></li>
+            <li><a href="wallet.html">Wallet</a></li>
+      <li><button id="sideLogoutBtn" class="side-logout-btn">Logout</button></li>
+    </ul>
+  </div>
+
+  <div class="container tracker-container">
+    <div class="app-logo-wrap">
+      <div class="app-logo-circle"><img src="logo.png" alt="FXcrypt Logo" /></div>
+      <span class="app-logo-text">FXCRYPT</span>
+    </div>
+
+    <nav class="menu-tabs">
+      <a href="index.html" class="tab">PnL Calc</a>
+      <a href="prices.html" class="tab">Prices</a>
+      <a href="tracker.html" class="tab active">Tracker</a>
+      <a href="bot.html" class="tab">DEX Bot</a>
+      <a href="agent.html" class="tab">AI Agent</a>
+            <a href="wallet.html" class="tab">Wallet</a>
+    </nav>
+
+    <h1 class="tracker-title">Token Tracker</h1>
+    <p class="tracker-subtitle">Track any token on BSC, Ethereum or Solana in real-time</p>
+
+    <!-- Tab switcher -->
+    <div class="tracker-tab-nav">
+      <button class="tracker-tab-btn active" data-tab="token" id="tabToken">&#x1F4C8; Token Tracker</button>
+      <button class="tracker-tab-btn" data-tab="wallet" id="tabWallet">&#x1F45B; Wallet Tracker</button>
+    </div>
+
+    <!-- TOKEN PANEL -->
+    <div id="panelToken" class="tracker-panel active">
+      <div class="tracker-input-section">
+        <div class="chain-pills" id="tokenChainPills">
+          <button class="chain-pill bsc active" data-chain="bsc">BSC</button>
+          <button class="chain-pill eth" data-chain="eth">ETH</button>
+          <button class="chain-pill sol" data-chain="sol">SOL</button>
+        </div>
+        <div class="tracker-input-row">
+          <input type="text" id="tokenAddressInput" class="tracker-input" placeholder="Paste token contract address..." />
+          <button id="lookupTokenBtn" class="tracker-action-btn">Track Token</button>
+        </div>
+      </div>
+      <div id="tokenLookupResult"></div>
+
+      <div class="watchlist-section">
+        <div class="watchlist-header">
+          <h3 class="section-title">My Watchlist</h3>
+          <div class="refresh-indicator">
+            <span class="refresh-dot"></span>
+            <span class="refresh-label" id="refreshLabel">Auto-refresh: 10s</span>
+          </div>
+        </div>
+        <div id="watchlistGrid" class="watchlist-grid">
+          <div class="empty-state">No tokens in your watchlist yet. Track a token above!</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- WALLET PANEL -->
+    <div id="panelWallet" class="tracker-panel">
+      <div class="tracker-input-section">
+        <div class="chain-pills" id="walletChainPills">
+          <button class="chain-pill bsc active" data-chain="bsc">BSC</button>
+          <button class="chain-pill eth" data-chain="eth">ETH</button>
+          <button class="chain-pill sol" data-chain="sol">SOL</button>
+        </div>
+        <div class="tracker-input-row">
+          <input type="text" id="walletAddressInput" class="tracker-input" placeholder="Paste wallet address..." />
+          <button id="lookupWalletBtn" class="tracker-action-btn">Load Wallet</button>
+        </div>
+      </div>
+      <div id="walletResult"></div>
+
+      <div class="watchlist-section">
+        <h3 class="section-title">Saved Wallets</h3>
+        <div id="savedWalletsList" class="saved-wallets-list">
+          <div class="empty-state">No wallets saved yet. Look up a wallet above!</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div id="menuOverlay" class="menu-overlay"></div>
+  <script type="module" src="tracker.js"></script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => navigator.serviceWorker.register("service-worker.js"));
+    }
+  </script>
+</body>
+</html>

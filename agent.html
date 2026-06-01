@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#00c853" />
+  <meta name="description" content="AI Trading Agent - market structure, technical analysis & on-chain signals for CEX markets." />
+  <link rel="manifest" href="manifest.json" />
+  <title>AI Agent - FXcrypt</title>
+  <link rel="stylesheet" href="style.css?v=15" />
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap" rel="stylesheet" />
+</head>
+<body>
+
+  <!-- Top nav -->
+  <div class="top-nav-bar">
+    <div class="menu-nav">
+      <button id="menuBtn" class="menu-btn" title="Menu" aria-label="Open menu">
+        <span class="menu-icon"><span></span><span></span><span></span></span>
+      </button>
+    </div>
+    <div class="profile-nav">
+      <a href="profile.html" class="profile-btn" title="View Profile">
+        <span id="profileInitials"></span>
+      </a>
+    </div>
+  </div>
+
+  <!-- Side menu -->
+  <div id="sideMenu" class="side-menu">
+    <div class="side-menu-header">
+      <span class="side-menu-title">Menu</span>
+      <button id="closeMenuBtn" class="close-menu-btn" aria-label="Close menu">&times;</button>
+    </div>
+    <ul class="side-menu-list">
+      <li><a href="profile.html">My Profile</a></li>
+      <li><a href="prices.html">Crypto Prices</a></li>
+      <li><a href="tracker.html">Token Tracker</a></li>
+      <li><a href="bot.html">DEX Bot</a></li>
+      <li><a href="agent.html">AI Agent</a></li>
+            <li><a href="wallet.html">Wallet</a></li>
+      <li><button id="sideLogoutBtn" class="side-logout-btn">Logout</button></li>
+    </ul>
+  </div>
+
+  <div class="container tracker-container">
+    <div class="app-logo-wrap">
+      <div class="app-logo-circle"><img src="logo.png" alt="FXcrypt Logo" /></div>
+      <span class="app-logo-text">FXCRYPT</span>
+    </div>
+
+    <nav class="menu-tabs">
+      <a href="index.html"   class="tab">PnL Calc</a>
+      <a href="prices.html"  class="tab">Prices</a>
+      <a href="tracker.html" class="tab">Tracker</a>
+      <a href="bot.html"     class="tab">DEX Bot</a>
+      <a href="agent.html"   class="tab active">AI Agent</a>
+            <a href="wallet.html"  class="tab">Wallet</a>
+    </nav>
+
+    <div class="agent-header">
+      <div>
+        <h1 class="tracker-title" style="margin-bottom:4px">AI Trading Agent</h1>
+        <p class="tracker-subtitle" style="margin:0">Market structure &middot; TA &middot; On-chain signals</p>
+      </div>
+      <div class="agent-status-badge">
+        <span class="agent-status-dot" id="agentDot"></span>
+        <span id="agentStatusLabel">Loading&hellip;</span>
+      </div>
+    </div>
+
+    <!-- Tab nav -->
+    <div class="tracker-tab-nav" style="margin-top:16px">
+      <button class="tracker-tab-btn active" data-tab="overview">&#x1F4CA; Overview</button>
+      <button class="tracker-tab-btn" data-tab="signals">&#x1F4E1; Signals</button>
+      <button class="tracker-tab-btn" data-tab="cex">&#x1F511; CEX Setup</button>
+      <button class="tracker-tab-btn" data-tab="history">&#x1F4DC; Trades</button>
+      <button class="tracker-tab-btn" data-tab="settings">&#x2699; Settings</button>
+    </div>
+
+    <!-- ── OVERVIEW ──────────────────────────────────────────────────────── -->
+    <div id="panelOverview" class="tracker-panel active">
+
+      <div class="agent-toggle-card">
+        <div>
+          <div class="agent-toggle-title">Trading Agent</div>
+          <div class="agent-toggle-sub" id="toggleSub">Scan markets every 15 minutes</div>
+        </div>
+        <label class="bot-switch">
+          <input type="checkbox" id="agentToggle" />
+          <span class="bot-slider"></span>
+        </label>
+      </div>
+
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="stat-value" id="statSignalsToday">&mdash;</div>
+          <div class="stat-label">Signals Today</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="statActiveTrades">&mdash;</div>
+          <div class="stat-label">Open Trades</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="statTotalSignals">&mdash;</div>
+          <div class="stat-label">Total Signals</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="statLastScan">&mdash;</div>
+          <div class="stat-label">Last Scan</div>
+        </div>
+      </div>
+
+      <button class="scan-btn" id="scanNowBtn">&#x1F50D; Scan Markets Now</button>
+      <div id="scanStatus" style="font-size:12px;color:#848E9C;text-align:center;margin-bottom:12px;min-height:16px;"></div>
+
+      <div class="section-divider">Supported Exchanges</div>
+      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:16px">
+        <div class="bot-balance-card" style="text-align:center;padding:12px">
+          <div style="font-weight:700;color:#F0B90B;font-size:13px">BINANCE</div>
+          <div style="font-size:11px;color:#848E9C;margin-top:3px">Spot + Alpha</div>
+        </div>
+        <div class="bot-balance-card" style="text-align:center;padding:12px">
+          <div style="font-weight:700;color:#2354E6;font-size:13px">MEXC</div>
+          <div style="font-size:11px;color:#848E9C;margin-top:3px">Spot + Alpha</div>
+        </div>
+        <div class="bot-balance-card" style="text-align:center;padding:12px">
+          <div style="font-weight:700;color:#EF8C1A;font-size:13px">BYBIT</div>
+          <div style="font-size:11px;color:#848E9C;margin-top:3px">Spot</div>
+        </div>
+        <div class="bot-balance-card" style="text-align:center;padding:12px">
+          <div style="font-weight:700;color:#00A478;font-size:13px">KUCOIN</div>
+          <div style="font-size:11px;color:#848E9C;margin-top:3px">Spot</div>
+        </div>
+      </div>
+
+      <div class="section-divider">Analysis Engine</div>
+      <div style="background:#2B3139;border-radius:10px;padding:14px 16px;font-size:12px;color:#B7BDC6;line-height:1.8">
+        <b style="color:#EAECEF">Market Structure:</b> HH/HL, BOS, CHoCH, Order Blocks, Fair Value Gaps<br/>
+        <b style="color:#EAECEF">Technical Analysis:</b> RSI, EMA (9/21/50/200), MACD, Bollinger Bands, ATR, Volume<br/>
+        <b style="color:#EAECEF">Fundamentals:</b> Market cap, volume tiers, exchange presence<br/>
+        <b style="color:#EAECEF">Signal timeframes:</b> 4H (primary) &middot; 1H (momentum plays)
+      </div>
+    </div>
+
+    <!-- ── SIGNALS ──────────────────────────────────────────────────────â”€ -->
+    <div id="panelSignals" class="tracker-panel" style="display:none">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <h3 class="section-title" style="margin:0">Live Signals</h3>
+        <button class="scan-btn" id="refreshSignalsBtn" style="width:auto;padding:6px 14px;margin:0;font-size:12px">&#x21BB;</button>
+      </div>
+
+      <!-- Market type pills + status filter row -->
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:8px;flex-wrap:wrap">
+        <div class="mkt-filter-group">
+          <button class="mkt-filter-btn active" data-mkt="all">All</button>
+          <button class="mkt-filter-btn" data-mkt="spot">Spot</button>
+          <button class="mkt-filter-btn" data-mkt="futures">Futures</button>
+        </div>
+        <select id="signalFilter" class="settings-input" style="font-size:12px;padding:5px 8px;width:auto">
+          <option value="active">Active</option>
+          <option value="pending">Pending</option>
+          <option value="executed">Executed</option>
+          <option value="skipped">Skipped</option>
+          <option value="expired">Expired</option>
+          <option value="all">All statuses</option>
+        </select>
+      </div>
+
+      <div id="signalsList">
+        <div class="empty-state">
+          <div class="empty-icon">&#x1F4E1;</div>
+          <div>Loading signals&hellip;</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── CEX SETUP ──────────────────────────────────────────────────── -->
+    <div id="panelCex" class="tracker-panel" style="display:none">
+      <p style="font-size:12px;color:#848E9C;margin-bottom:16px;line-height:1.6">
+        Your API keys are encrypted server-side with AES-256 and never stored in plain text. Use <b>spot trading</b> keys only &mdash; <b>withdrawal permissions not required</b>.
+      </p>
+
+      <!-- Binance -->
+      <div class="cex-key-card">
+        <div class="cex-key-header">
+          <span class="cex-key-name" style="color:#F0B90B">&#x25CF; Binance</span>
+          <span class="cex-key-status unset" id="binanceKeyStatus">Not set</span>
+        </div>
+        <div id="binanceBalance" style="font-size:12px;color:#848E9C;margin-bottom:10px;display:none">USDT Balance: <span id="binanceBalanceVal">&mdash;</span></div>
+        <div id="binanceKeyForm">
+          <input type="text"     id="binanceApiKey"    class="settings-input" placeholder="API Key"    style="margin-bottom:6px" />
+          <input type="password" id="binanceApiSecret" class="settings-input" placeholder="Secret Key" style="margin-bottom:8px" />
+          <div style="display:flex;gap:8px">
+            <button class="btn-primary" onclick="saveKey('binance')" style="flex:1">Save</button>
+            <button class="btn-secondary" id="binanceRemoveBtn" onclick="removeKey('binance')" style="display:none;flex:1;padding:9px;border-radius:7px;background:rgba(246,70,93,.1);color:#F6465D;border:1px solid rgba(246,70,93,.3);cursor:pointer;font-size:13px">Remove</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- MEXC -->
+      <div class="cex-key-card">
+        <div class="cex-key-header">
+          <span class="cex-key-name" style="color:#2354E6">&#x25CF; MEXC</span>
+          <span class="cex-key-status unset" id="mexcKeyStatus">Not set</span>
+        </div>
+        <div id="mexcBalance" style="font-size:12px;color:#848E9C;margin-bottom:10px;display:none">USDT Balance: <span id="mexcBalanceVal">&mdash;</span></div>
+        <div id="mexcKeyForm">
+          <input type="text"     id="mexcApiKey"    class="settings-input" placeholder="API Key"    style="margin-bottom:6px" />
+          <input type="password" id="mexcApiSecret" class="settings-input" placeholder="Secret Key" style="margin-bottom:8px" />
+          <div style="display:flex;gap:8px">
+            <button class="btn-primary" onclick="saveKey('mexc')" style="flex:1">Save</button>
+            <button class="btn-secondary" id="mexcRemoveBtn" onclick="removeKey('mexc')" style="display:none;flex:1;padding:9px;border-radius:7px;background:rgba(246,70,93,.1);color:#F6465D;border:1px solid rgba(246,70,93,.3);cursor:pointer;font-size:13px">Remove</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Bybit -->
+      <div class="cex-key-card">
+        <div class="cex-key-header">
+          <span class="cex-key-name" style="color:#EF8C1A">&#x25CF; Bybit</span>
+          <span class="cex-key-status unset" id="bybitKeyStatus">Not set</span>
+        </div>
+        <div id="bybitBalance" style="font-size:12px;color:#848E9C;margin-bottom:10px;display:none">USDT Balance: <span id="bybitBalanceVal">&mdash;</span></div>
+        <div id="bybitKeyForm">
+          <input type="text"     id="bybitApiKey"    class="settings-input" placeholder="API Key"    style="margin-bottom:6px" />
+          <input type="password" id="bybitApiSecret" class="settings-input" placeholder="Secret Key" style="margin-bottom:8px" />
+          <div style="display:flex;gap:8px">
+            <button class="btn-primary" onclick="saveKey('bybit')" style="flex:1">Save</button>
+            <button class="btn-secondary" id="bybitRemoveBtn" onclick="removeKey('bybit')" style="display:none;flex:1;padding:9px;border-radius:7px;background:rgba(246,70,93,.1);color:#F6465D;border:1px solid rgba(246,70,93,.3);cursor:pointer;font-size:13px">Remove</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- KuCoin -->
+      <div class="cex-key-card">
+        <div class="cex-key-header">
+          <span class="cex-key-name" style="color:#00A478">&#x25CF; KuCoin</span>
+          <span class="cex-key-status unset" id="kucoinKeyStatus">Not set</span>
+        </div>
+        <div id="kucoinBalance" style="font-size:12px;color:#848E9C;margin-bottom:10px;display:none">USDT Balance: <span id="kucoinBalanceVal">&mdash;</span></div>
+        <div id="kucoinKeyForm">
+          <input type="text"     id="kucoinApiKey"        class="settings-input" placeholder="API Key"    style="margin-bottom:6px" />
+          <input type="password" id="kucoinApiSecret"     class="settings-input" placeholder="Secret Key" style="margin-bottom:6px" />
+          <input type="password" id="kucoinApiPassphrase" class="settings-input" placeholder="Passphrase" style="margin-bottom:8px" />
+          <div style="display:flex;gap:8px">
+            <button class="btn-primary" onclick="saveKey('kucoin')" style="flex:1">Save</button>
+            <button class="btn-secondary" id="kucoinRemoveBtn" onclick="removeKey('kucoin')" style="display:none;flex:1;padding:9px;border-radius:7px;background:rgba(246,70,93,.1);color:#F6465D;border:1px solid rgba(246,70,93,.3);cursor:pointer;font-size:13px">Remove</button>
+          </div>
+        </div>
+      </div>
+
+      <button class="scan-btn" id="refreshBalancesBtn" style="margin-top:4px">&#x21BB; Refresh Balances</button>
+      <div id="cexMsg" class="status-msg" style="margin-top:8px"></div>
+    </div>
+
+    <!-- ── TRADE HISTORY ────────────────────────────────────────────────── -->
+    <div id="panelHistory" class="tracker-panel" style="display:none">
+      <h3 class="section-title">CEX Trades</h3>
+      <div id="cexTradeList">
+        <div class="empty-state">
+          <div class="empty-icon">&#x1F4DC;</div>
+          <div>No CEX trades yet</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── SETTINGS ──────────────────────────────────────────────────────── -->
+    <div id="panelSettings" class="tracker-panel" style="display:none">
+      <h3 class="section-title">Agent Settings</h3>
+
+      <div class="section-divider">Market Types</div>
+      <div class="exchange-check-list" style="margin-bottom:16px">
+        <div class="exchange-check"><input type="checkbox" id="mtSpot"    checked /><label for="mtSpot">Spot</label></div>
+        <div class="exchange-check"><input type="checkbox" id="mtFutures"         /><label for="mtFutures">Futures / Perps</label></div>
+      </div>
+      <p style="font-size:11px;color:#848E9C;margin:-8px 0 12px;line-height:1.5">Futures signals scan <b>Binance USDM</b>, <b>Bybit Linear</b>, and <b>MEXC Contract</b> perpetuals. Your API key must have <b>futures trading</b> permission enabled.</p>
+
+      <div class="section-divider">Exchanges to Scan</div>
+      <div class="exchange-check-list" style="margin-bottom:16px">
+        <div class="exchange-check"><input type="checkbox" id="exBinance" checked /><label for="exBinance">Binance</label></div>
+        <div class="exchange-check"><input type="checkbox" id="exMexc"    checked /><label for="exMexc">MEXC</label></div>
+        <div class="exchange-check"><input type="checkbox" id="exBybit"   checked /><label for="exBybit">Bybit</label></div>
+        <div class="exchange-check"><input type="checkbox" id="exKucoin"  checked /><label for="exKucoin">KuCoin</label></div>
+      </div>
+
+      <div class="section-divider">Analysis Settings</div>
+      <div style="background:#2B3139;border-radius:10px;padding:14px 16px">
+        <div class="settings-row">
+          <div>
+            <div class="settings-label">Timeframe</div>
+            <div class="settings-sub">Primary analysis timeframe</div>
+          </div>
+          <select id="tfSelect" class="settings-input" style="width:90px;padding:6px 8px">
+            <option value="4H" selected>4H</option>
+            <option value="1H">1H</option>
+            <option value="1D">1D</option>
+          </select>
+        </div>
+        <div class="settings-row">
+          <div>
+            <div class="settings-label">Min Confidence</div>
+            <div class="settings-sub">Only show signals above this %</div>
+          </div>
+          <select id="confSelect" class="settings-input" style="width:90px;padding:6px 8px">
+            <option value="65">65%</option>
+            <option value="70" selected>70%</option>
+            <option value="75">75%</option>
+            <option value="80">80%</option>
+          </select>
+        </div>
+        <div class="settings-row">
+          <div>
+            <div class="settings-label">Risk Per Trade</div>
+            <div class="settings-sub">% of USDT balance per trade</div>
+          </div>
+          <div style="text-align:right">
+            <span id="riskLabel" style="font-size:13px;color:#0ECB81;font-weight:600">2%</span>
+            <br/>
+            <input type="range" id="riskSlider" class="risk-slider" min="0.5" max="10" step="0.5" value="2" style="width:90px;margin-top:4px" />
+          </div>
+        </div>
+      </div>
+
+      <div class="section-divider">Automation</div>
+      <div style="background:#2B3139;border-radius:10px;padding:14px 16px">
+        <div class="settings-row">
+          <div>
+            <div class="settings-label">Telegram Signals</div>
+            <div class="settings-sub">Send signals to your Telegram</div>
+          </div>
+          <label class="bot-switch">
+            <input type="checkbox" id="tgSignalsToggle" checked />
+            <span class="bot-slider"></span>
+          </label>
+        </div>
+        <div class="settings-row">
+          <div>
+            <div class="settings-label">Auto-Execute</div>
+            <div class="settings-sub" style="color:#FFA000">&#x26A0;&#xFE0F; Execute trades automatically without approval</div>
+          </div>
+          <label class="bot-switch">
+            <input type="checkbox" id="autoExecToggle" />
+            <span class="bot-slider"></span>
+          </label>
+        </div>
+      </div>
+
+      <button class="scan-btn" id="saveSettingsBtn" style="margin-top:16px">Save Settings</button>
+      <div id="settingsMsg" class="status-msg" style="margin-top:8px"></div>
+    </div>
+
+  </div><!-- /.container -->
+
+  <div id="menuOverlay" class="menu-overlay"></div>
+
+  <!-- Exchange picker modal -->
+  <div id="exPickerModal" class="ex-modal-backdrop" role="dialog" aria-modal="true">
+    <div class="ex-modal-sheet">
+      <div class="ex-modal-handle"></div>
+      <div class="ex-modal-title">Select exchange to trade on</div>
+      <div id="exPickerGrid" class="ex-modal-grid"></div>
+      <button id="exPickerCancel" class="ex-modal-cancel">Cancel</button>
+    </div>
+  </div>
+
+  <script type="module" src="agent.js?v=6"></script>
+</body>
+</html>
+

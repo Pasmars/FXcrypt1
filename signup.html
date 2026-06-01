@@ -3,17 +3,22 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#00c853" />
+    <link rel="manifest" href="manifest.json" />
     <title>Sign Up - FXcrypt</title>
-    <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="style.css?v=15" />
     <link
       href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap"
       rel="stylesheet"
     />
   </head>
-  <body>
-    <div class="auth-form" style="max-width: 500px; margin: 40px auto;">
+  <body class="auth-page">
+    <div class="auth-form" style="max-width: 460px; margin: 0 auto; width: 100%;">
       <div class="logo">
-        <img src="logo.svg" alt="FXcrypt Logo" />
+        <div class="app-logo-wrap">
+          <div class="app-logo-circle"><img src="logo.png" alt="FXcrypt Logo" /></div>
+          <span class="app-logo-text">FXCRYPT</span>
+        </div>
       </div>
 
       <!-- Messages -->
@@ -23,27 +28,27 @@
       <form id="signupForm">
         <h2>Create an Account</h2>
         <div class="form-group">
-          <label for="firstName">First Name:</label>
+          <label for="firstName">First Name</label>
           <input type="text" id="firstName" required />
         </div>
         <div class="form-group">
-          <label for="lastName">Last Name:</label>
+          <label for="lastName">Last Name</label>
           <input type="text" id="lastName" required />
         </div>
         <div class="form-group">
-          <label for="signupEmail">Email Address:</label>
+          <label for="signupEmail">Email Address</label>
           <input type="email" id="signupEmail" required />
         </div>
         <div class="form-group">
-          <label for="phone">Phone Number:</label>
+          <label for="phone">Phone Number</label>
           <input type="tel" id="phone" required />
         </div>
         <div class="form-group">
-          <label for="signupPassword">Password:</label>
+          <label for="signupPassword">Password</label>
           <input type="password" id="signupPassword" required />
         </div>
         <div class="form-group">
-          <label for="confirmPassword">Confirm Password:</label>
+          <label for="confirmPassword">Confirm Password</label>
           <input type="password" id="confirmPassword" required />
         </div>
         <button type="submit" class="submit-btn" id="signupBtn">Sign Up</button>
@@ -63,12 +68,28 @@
       const signupBtn = document.getElementById('signupBtn');
       const authMessage = document.getElementById('authMessage');
 
+      // Redirect already-authenticated users to the main page
+      auth.authStateReady().then(() => {
+        if (auth.currentUser) window.location.href = 'index.html';
+      });
+
       function showMessage(msg, isError = false) {
         authMessage.style.display = 'block';
         authMessage.textContent = msg;
         authMessage.style.backgroundColor = isError ? 'rgba(246, 70, 93, 0.1)' : 'rgba(14, 203, 129, 0.1)';
         authMessage.style.color = isError ? '#F6465D' : '#0ECB81';
+        // Scroll the message into view so the user always sees it
+        authMessage.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
+
+      // Auto-dismiss error messages when the user starts correcting input
+      document.querySelectorAll('#signupForm input').forEach(input => {
+        input.addEventListener('input', () => {
+          if (authMessage.style.display !== 'none') {
+            authMessage.style.display = 'none';
+          }
+        });
+      });
 
       signupForm.addEventListener('submit', async (e) => {
         e.preventDefault();
@@ -117,7 +138,16 @@
           }, 1500);
 
         } catch (error) {
-          showMessage(error.message, true);
+          const msg = error.code === 'auth/email-already-in-use'
+            ? 'An account with this email already exists.'
+            : error.code === 'auth/invalid-email'
+            ? 'Please enter a valid email address.'
+            : error.code === 'auth/weak-password'
+            ? 'Password is too weak. Use at least 6 characters.'
+            : error.code === 'auth/network-request-failed'
+            ? 'Network error. Please check your connection and try again.'
+            : error.message;
+          showMessage(msg, true);
           signupBtn.disabled = false;
           signupBtn.textContent = 'Sign Up';
         }
@@ -125,3 +155,4 @@
     </script>
   </body>
 </html>
+

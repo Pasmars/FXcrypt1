@@ -19,17 +19,13 @@ import { auth } from "./firebase.js";
 export async function sendSignInLink(email) {
   // STEP 3 — Build the ActionCodeSettings Object
   const actionCodeSettings = {
-    // The redirect URL. Must be in authorized domains list.
-    // Using HTTPS as per Security Best Practices (Step 8)
-    url: "https://pnl-calculator.firebaseapp.com/login.html",
-    // This must be true for email link sign-in.
+    url: window.location.origin + '/login.html',
     handleCodeInApp: true
   };
 
   try {
     await sendSignInLinkToEmail(auth, email, actionCodeSettings);
-    // On success: save the email to localStorage (Step 4 & Step 8)
-    window.localStorage.setItem('emailForSignIn', email);
+    window.sessionStorage.setItem('emailForSignIn', email);
     // Show success message (handled by UI)
     return { success: true, message: "A sign-in link has been sent to your email." };
   } catch (error) {

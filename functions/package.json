@@ -1,0 +1,24 @@
+{
+  "name": "fxcrypt-bot-functions",
+  "description": "Cloud Functions for FXcrypt DEX Sniper Bot",
+  "scripts": {
+    "serve": "firebase emulators:start --only functions",
+    "deploy": "firebase deploy --only functions",
+    "logs": "firebase functions:log"
+  },
+  "engines": {
+    "node": "22"
+  },
+  "main": "index.js",
+  "dependencies": {
+    "@noble/hashes": "^1.4.0",
+    "@solana/web3.js": "^1.87.6",
+    "axios": "^1.6.7",
+    "bs58": "^5.0.0",
+    "ethers": "^6.16.0",
+    "firebase-admin": "^12.1.0",
+    "firebase-functions": "^4.8.0",
+    "ws": "^8.21.0"
+  },
+  "private": true
+}

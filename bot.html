@@ -1,0 +1,686 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#00c853" />
+  <meta name="description" content="DEX Sniper Bot - trade BSC, ETH and Solana from your FXcrypt dashboard." />
+  <link rel="manifest" href="manifest.json" />
+  <title>DEX Bot - FXcrypt</title>
+  <link rel="stylesheet" href="style.css?v=15" />
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap" rel="stylesheet" />
+</head>
+<body>
+
+  <!-- Top nav -->
+  <div class="top-nav-bar">
+    <div class="menu-nav">
+      <button id="menuBtn" class="menu-btn" title="Menu" aria-label="Open menu">
+        <span class="menu-icon"><span></span><span></span><span></span></span>
+      </button>
+    </div>
+    <div class="profile-nav">
+      <a href="profile.html" class="profile-btn" title="View Profile">
+        <span id="profileInitials"></span>
+      </a>
+    </div>
+  </div>
+
+  <!-- Side menu -->
+  <div id="sideMenu" class="side-menu">
+    <div class="side-menu-header">
+      <span class="side-menu-title">Menu</span>
+      <button id="closeMenuBtn" class="close-menu-btn" aria-label="Close menu">&times;</button>
+    </div>
+    <ul class="side-menu-list">
+      <li><a href="profile.html">My Profile</a></li>
+      <li><a href="prices.html">Crypto Prices</a></li>
+      <li><a href="tracker.html">Token Tracker</a></li>
+      <li><a href="bot.html">DEX Bot</a></li>
+      <li><a href="agent.html">AI Agent</a></li>
+            <li><a href="wallet.html">Wallet</a></li>
+      <li><button id="sideLogoutBtn" class="side-logout-btn">Logout</button></li>
+    </ul>
+  </div>
+
+  <div class="container tracker-container">
+    <div class="app-logo-wrap">
+      <div class="app-logo-circle"><img src="logo.png" alt="FXcrypt Logo" /></div>
+      <span class="app-logo-text">FXCRYPT</span>
+    </div>
+
+    <nav class="menu-tabs">
+      <a href="index.html"   class="tab">PnL Calc</a>
+      <a href="prices.html"  class="tab">Prices</a>
+      <a href="tracker.html" class="tab">Tracker</a>
+      <a href="bot.html"     class="tab active">DEX Bot</a>
+      <a href="agent.html"   class="tab">AI Agent</a>
+            <a href="wallet.html"  class="tab">Wallet</a>
+    </nav>
+
+    <div class="bot-header">
+      <div>
+        <h1 class="tracker-title" style="margin-bottom:4px">DEX Sniper Bot</h1>
+        <p class="tracker-subtitle" style="margin:0">Trade BSC · ETH · SOL · BASE &amp; control via Telegram</p>
+      </div>
+      <div class="bot-status-badge" id="botStatusBadge">
+        <span class="bot-status-dot" id="botStatusDot"></span>
+        <span id="botStatusLabel">Loading…</span>
+      </div>
+    </div>
+
+    <!-- Tab nav -->
+    <div class="tracker-tab-nav" style="margin-top:16px">
+      <button class="tracker-tab-btn active" data-tab="dashboard">&#x26A1; Dashboard</button>
+      <button class="tracker-tab-btn" data-tab="sniper">&#x1F3AF; Sniper</button>
+      <button class="tracker-tab-btn" data-tab="trade">&#x1F501; Trade</button>
+      <button class="tracker-tab-btn" data-tab="gems">&#x1F48E; Gems</button>
+      <button class="tracker-tab-btn" data-tab="history">&#x1F4DC; History</button>
+      <button class="tracker-tab-btn" data-tab="settings">&#x2699; Settings</button>
+    </div>
+
+    <!-- ── DASHBOARD ──────────────────────────────────────────────────── -->
+    <div id="panelDashboard" class="tracker-panel active">
+
+      <!-- Bot on/off toggle -->
+      <div class="bot-toggle-card">
+        <div>
+          <div class="bot-toggle-title">Sniper Bot</div>
+          <div class="bot-toggle-subtitle" id="toggleSubtitle">Auto-execute snipe targets</div>
+        </div>
+        <label class="bot-switch">
+          <input type="checkbox" id="botToggle" />
+          <span class="bot-slider"></span>
+        </label>
+      </div>
+
+      <!-- Wallet balance cards -->
+      <h3 class="section-title" style="margin-top:20px">Wallet Balances</h3>
+      <div class="bot-balance-grid" id="balanceGrid">
+        <div class="bot-balance-card">
+          <div class="bot-balance-chain bsc-color">BSC</div>
+          <div class="bot-balance-amount" id="balBSC">—</div>
+          <div class="bot-balance-ticker">BNB</div>
+        </div>
+        <div class="bot-balance-card">
+          <div class="bot-balance-chain eth-color">ETH</div>
+          <div class="bot-balance-amount" id="balETH">—</div>
+          <div class="bot-balance-ticker">ETH</div>
+        </div>
+        <div class="bot-balance-card">
+          <div class="bot-balance-chain sol-color">SOL</div>
+          <div class="bot-balance-amount" id="balSOL">—</div>
+          <div class="bot-balance-ticker">SOL</div>
+        </div>
+        <div class="bot-balance-card">
+          <div class="bot-balance-chain base-color">BASE</div>
+          <div class="bot-balance-amount" id="balBASE">—</div>
+          <div class="bot-balance-ticker">ETH</div>
+        </div>
+        <div class="bot-balance-card">
+          <div class="bot-balance-chain ton-color">TON</div>
+          <div class="bot-balance-amount" id="balTON">—</div>
+          <div class="bot-balance-ticker">TON</div>
+        </div>
+        <div class="bot-balance-card">
+          <div class="bot-balance-chain matic-color">MATIC</div>
+          <div class="bot-balance-amount" id="balMATIC">—</div>
+          <div class="bot-balance-ticker">MATIC</div>
+        </div>
+      </div>
+      <button id="refreshBalBtn" class="tracker-action-btn" style="margin-top:12px;width:100%">Refresh Balances</button>
+
+      <!-- Quick stats -->
+      <h3 class="section-title" style="margin-top:24px">Quick Stats</h3>
+      <div class="bot-stats-grid">
+        <div class="bot-stat-card">
+          <div class="bot-stat-value" id="statPendingSnipes">0</div>
+          <div class="bot-stat-label">Active Snipes</div>
+        </div>
+        <div class="bot-stat-card">
+          <div class="bot-stat-value" id="statTotalTrades">0</div>
+          <div class="bot-stat-label">Total Trades</div>
+        </div>
+        <div class="bot-stat-card">
+          <div class="bot-stat-value" id="statSuccessTrades">0</div>
+          <div class="bot-stat-label">Successful</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── SNIPER ──────────────────────────────────────────────────────── -->
+    <div id="panelSniper" class="tracker-panel">
+      <div class="tracker-input-section">
+        <h3 class="section-title">Add Snipe Target</h3>
+        <div class="chain-pills" id="snipeChainPills">
+          <button class="chain-pill bsc active" data-chain="bsc">BSC</button>
+          <button class="chain-pill eth" data-chain="eth">ETH</button>
+          <button class="chain-pill sol" data-chain="sol">SOL</button>
+          <button class="chain-pill base" data-chain="base">BASE</button>
+          <button class="chain-pill ton" data-chain="ton">TON</button>
+          <button class="chain-pill matic" data-chain="matic">MATIC</button>
+        </div>
+        <div class="settings-group">
+          <label for="snipeAddress">Token Contract Address</label>
+          <input type="text" id="snipeAddress" class="tracker-input" placeholder="0x..., Solana mint, or TON address" />
+        </div>
+        <div class="amount-mode-pills" style="margin-bottom:8px">
+          <button class="amount-mode-pill active" id="snipeModePillNative">Native</button>
+          <button class="amount-mode-pill" id="snipeModePillUsd">USD $</button>
+        </div>
+        <div class="bot-form-row">
+          <div class="settings-group" style="flex:1">
+            <label for="snipeAmount" id="snipeAmountLabel">Buy Amount (BNB)</label>
+            <input type="number" id="snipeAmount" class="tracker-input" placeholder="e.g. 0.1" step="any" min="0" />
+            <div class="amount-dollar-equiv" id="snipeDollarEquiv">≈ $—</div>
+          </div>
+          <div class="settings-group" style="flex:1">
+            <label for="snipeMaxPrice">Max Price (USD, optional)</label>
+            <input type="number" id="snipeMaxPrice" class="tracker-input" placeholder="Any" step="any" min="0" />
+          </div>
+        </div>
+        <div class="settings-group">
+          <label for="snipeSlippage">Slippage %</label>
+          <input type="number" id="snipeSlippage" class="tracker-input" value="5" step="0.5" min="0.1" max="50" />
+        </div>
+        <button id="addSnipeBtn" class="tracker-action-btn" style="width:100%">Add to Snipe Queue</button>
+        <div id="snipeStatus" class="settings-status"></div>
+      </div>
+
+      <div class="watchlist-section">
+        <h3 class="section-title">Snipe Queue</h3>
+        <div id="snipeQueueList">
+          <div class="empty-state">No active snipe targets.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── TRADE ───────────────────────────────────────────────────────── -->
+    <div id="panelTrade" class="tracker-panel">
+      <h3 class="section-title">Manual Trade</h3>
+      <div class="chain-pills" id="tradeChainPills">
+        <button class="chain-pill bsc active" data-chain="bsc">BSC</button>
+        <button class="chain-pill eth" data-chain="eth">ETH</button>
+        <button class="chain-pill sol" data-chain="sol">SOL</button>
+        <button class="chain-pill base" data-chain="base">BASE</button>
+        <button class="chain-pill ton" data-chain="ton">TON</button>
+        <button class="chain-pill matic" data-chain="matic">MATIC</button>
+      </div>
+
+      <div class="settings-group" style="margin-top:16px">
+        <label for="tradeAddress">Token Contract Address</label>
+        <input type="text" id="tradeAddress" class="tracker-input" placeholder="0x..., Solana mint, or TON address" />
+      </div>
+      <button id="checkTokenBtn" class="tracker-action-btn" style="margin-bottom:12px">Check Token</button>
+      <div id="tradeTokenInfo"></div>
+
+      <!-- Buy section -->
+      <div class="bot-trade-section">
+        <h4 class="bot-trade-section-title buy-title">Buy</h4>
+        <div class="amount-mode-pills" style="margin-bottom:8px">
+          <button class="amount-mode-pill active" id="buyModePillNative">Native</button>
+          <button class="amount-mode-pill" id="buyModePillUsd">USD $</button>
+        </div>
+        <div class="bot-form-row">
+          <div class="settings-group" style="flex:1">
+            <label for="buyAmount" id="buyAmountLabel">Amount (BNB)</label>
+            <input type="number" id="buyAmount" class="tracker-input" placeholder="e.g. 0.1" step="any" min="0" />
+            <div class="amount-dollar-equiv" id="buyDollarEquiv">≈ $—</div>
+          </div>
+          <div class="settings-group" style="flex:1">
+            <label for="buySlippage">Slippage %</label>
+            <input type="number" id="buySlippage" class="tracker-input" value="5" step="0.5" min="0.1" max="50" />
+          </div>
+        </div>
+        <button id="buyBtn" class="bot-buy-btn">Buy Token</button>
+      </div>
+
+      <!-- Sell section -->
+      <div class="bot-trade-section" style="margin-top:16px">
+        <h4 class="bot-trade-section-title sell-title">Sell</h4>
+        <div class="bot-form-row">
+          <div class="settings-group" style="flex:1">
+            <label for="sellPercent">% of holdings to sell</label>
+            <input type="number" id="sellPercent" class="tracker-input" value="100" step="1" min="1" max="100" />
+          </div>
+          <div class="settings-group" style="flex:1">
+            <label for="sellSlippage">Slippage %</label>
+            <input type="number" id="sellSlippage" class="tracker-input" value="5" step="0.5" min="0.1" max="50" />
+          </div>
+        </div>
+        <button id="sellBtn" class="bot-sell-btn">Sell Token</button>
+      </div>
+
+      <div id="tradeStatus" class="settings-status" style="margin-top:12px"></div>
+    </div>
+
+    <!-- ── GEM SCANNER ─────────────────────────────────────────────────── -->
+    <div id="panelGems" class="tracker-panel">
+
+      <!-- Auto-gem toggle -->
+      <div class="bot-toggle-card">
+        <div>
+          <div class="bot-toggle-title">&#x1F48E; Gem Scanner</div>
+          <div class="bot-toggle-subtitle" id="gemToggleSubtitle">Auto-scan BSC &amp; SOL for new gems</div>
+        </div>
+        <label class="bot-switch">
+          <input type="checkbox" id="gemAutoToggle" />
+          <span class="bot-slider"></span>
+        </label>
+      </div>
+
+      <!-- Auto-buy sub-toggle -->
+      <div class="bot-toggle-card gem-autobuy-card" id="gemAutoBuyCard" style="margin-top:8px;display:none">
+        <div>
+          <div class="bot-toggle-title" style="font-size:0.92rem">&#x1F916; Auto-Buy Gems</div>
+          <div class="bot-toggle-subtitle" id="gemAutoBuySubtitle">Automatically buy high-score gems</div>
+        </div>
+        <label class="bot-switch">
+          <input type="checkbox" id="gemAutoBuyToggle" />
+          <span class="bot-slider"></span>
+        </label>
+      </div>
+
+      <!-- Scan config -->
+      <div class="tracker-input-section" style="margin-top:16px">
+        <h3 class="section-title">Scan Filters</h3>
+        <div class="arb-chain-toggles">
+          <label class="arb-chain-toggle">
+            <input type="checkbox" id="gemChainBsc" checked />
+            <span class="chain-pill bsc arb-chain-label">BNB Chain</span>
+          </label>
+          <label class="arb-chain-toggle">
+            <input type="checkbox" id="gemChainSol" checked />
+            <span class="chain-pill sol arb-chain-label">Solana</span>
+          </label>
+          <label class="arb-chain-toggle">
+            <input type="checkbox" id="gemChainBase" checked />
+            <span class="chain-pill base arb-chain-label">Base</span>
+          </label>
+          <label class="arb-chain-toggle">
+            <input type="checkbox" id="gemChainTon" checked />
+            <span class="chain-pill ton arb-chain-label">TON</span>
+          </label>
+          <label class="arb-chain-toggle">
+            <input type="checkbox" id="gemChainMatic" />
+            <span class="chain-pill matic arb-chain-label">Polygon</span>
+          </label>
+        </div>
+
+        <div class="bot-form-row" style="margin-top:12px">
+          <div class="settings-group" style="flex:1">
+            <label for="gemMinLiquidity">Min Liquidity ($)</label>
+            <input type="number" id="gemMinLiquidity" class="tracker-input" value="5000" step="1000" min="1000" />
+          </div>
+          <div class="settings-group" style="flex:1">
+            <label for="gemMaxAge">Max Age</label>
+            <div style="display:flex;gap:6px">
+              <input type="number" id="gemMaxAge" class="tracker-input" value="24" step="1" min="1" style="flex:1;min-width:0" />
+              <select id="gemMaxAgeUnit" class="tracker-input gem-unit-select">
+                <option value="hours">Hours</option>
+                <option value="days">Days</option>
+                <option value="weeks">Weeks</option>
+                <option value="months">Months</option>
+                <option value="years">Years</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="bot-form-row" style="margin-top:8px">
+          <div class="settings-group" style="flex:1">
+            <label for="gemMinScore">Min Gem Score</label>
+            <input type="number" id="gemMinScore" class="tracker-input" value="40" step="5" min="0" max="100" />
+          </div>
+          <div class="settings-group" style="flex:1">
+            <label>&nbsp;</label>
+            <div class="gem-score-hint">0&#x2013;100 &bull; Higher = stricter filter</div>
+          </div>
+        </div>
+
+        <div style="margin-top:8px;margin-bottom:4px">
+          <div class="amount-mode-pills">
+            <button class="amount-mode-pill active" id="gemModePillNative">Native</button>
+            <button class="amount-mode-pill" id="gemModePillUsd">USD $</button>
+          </div>
+        </div>
+        <div class="bot-form-row">
+          <div class="settings-group" style="flex:1">
+            <label for="gemBuyAmountBsc" id="gemBuyAmountBscLabel">Buy Amount (BNB)</label>
+            <input type="number" id="gemBuyAmountBsc" class="tracker-input" value="0.005" step="0.001" min="0.001" />
+            <div class="gem-dollar-equiv" id="gemBscDollar">&#x2248; $&#x2014;</div>
+          </div>
+          <div class="settings-group" style="flex:1">
+            <label for="gemBuyAmountSol" id="gemBuyAmountSolLabel">Buy Amount (SOL)</label>
+            <input type="number" id="gemBuyAmountSol" class="tracker-input" value="0.05" step="0.01" min="0.01" />
+            <div class="gem-dollar-equiv" id="gemSolDollar">&#x2248; $&#x2014;</div>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button id="scanGemsBtn" class="tracker-action-btn gem-scan-btn" style="flex:2">
+            <span class="gem-btn-icon">&#x1F48E;</span>
+            <span class="gem-btn-text">Scan Gems</span>
+          </button>
+          <button id="saveGemConfigBtn" class="tracker-action-btn save-settings-btn" style="flex:1">Save</button>
+        </div>
+        <div id="gemScanStatus" class="settings-status"></div>
+      </div>
+
+      <!-- Gem cards list -->
+      <div class="watchlist-section" style="margin-top:4px">
+        <div class="arb-list-header">
+          <h3 class="section-title" style="margin:0">Discovered Gems</h3>
+          <span id="gemLastScan" class="arb-last-scan"></span>
+        </div>
+        <!-- Chain filter pills -->
+        <div class="gem-chain-filter" id="gemChainFilter">
+          <button class="gem-filter-pill active" data-chain="all">All</button>
+          <button class="gem-filter-pill" data-chain="bsc">BNB</button>
+          <button class="gem-filter-pill" data-chain="sol">SOL</button>
+          <button class="gem-filter-pill" data-chain="base">Base</button>
+          <button class="gem-filter-pill" data-chain="ton">TON</button>
+          <button class="gem-filter-pill" data-chain="matic">Polygon</button>
+        </div>
+        <div id="gemCardList">
+          <div class="empty-state">Press Scan to discover gems across BSC, Solana, Base &amp; TON.</div>
+        </div>
+      </div>
+
+      <!-- Quick stats -->
+      <div class="bot-stats-grid" style="margin-top:16px">
+        <div class="bot-stat-card">
+          <div class="bot-stat-value" id="gemStatFound">0</div>
+          <div class="bot-stat-label">Found</div>
+        </div>
+        <div class="bot-stat-card">
+          <div class="bot-stat-value" id="gemStatAlerts">0</div>
+          <div class="bot-stat-label">Alerts Sent</div>
+        </div>
+        <div class="bot-stat-card">
+          <div class="bot-stat-value text-green" id="gemStatBought">0</div>
+          <div class="bot-stat-label">Bought</div>
+        </div>
+      </div>
+
+      <!-- Notifications -->
+      <div class="gem-notif-row" style="margin-top:16px">
+        <button id="gemNotifBtn" class="tracker-action-btn gem-notif-btn" style="width:100%">&#x1F514; Enable Gem Notifications</button>
+      </div>
+
+      <!-- Bot Success Rate -->
+      <div class="gem-success-section" style="margin-top:20px">
+        <div class="gem-success-header">
+          <h3 class="section-title" style="margin:0">Bot Success Rate</h3>
+          <span class="gem-success-hint">% of calls in profit</span>
+        </div>
+        <div class="gem-success-grid">
+          <div class="gem-success-card">
+            <div class="gem-success-label">1h</div>
+            <div class="gem-success-rate" id="gemSuccessRate1h">&#x2014;</div>
+            <div class="gem-success-sub" id="gemSuccessCount1h"></div>
+          </div>
+          <div class="gem-success-card">
+            <div class="gem-success-label">4h</div>
+            <div class="gem-success-rate" id="gemSuccessRate4h">&#x2014;</div>
+            <div class="gem-success-sub" id="gemSuccessCount4h"></div>
+          </div>
+          <div class="gem-success-card">
+            <div class="gem-success-label">24h</div>
+            <div class="gem-success-rate" id="gemSuccessRate24h">&#x2014;</div>
+            <div class="gem-success-sub" id="gemSuccessCount24h"></div>
+          </div>
+          <div class="gem-success-card">
+            <div class="gem-success-label">1w</div>
+            <div class="gem-success-rate" id="gemSuccessRate1w">&#x2014;</div>
+            <div class="gem-success-sub" id="gemSuccessCount1w"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Gem Call History -->
+      <div class="watchlist-section" style="margin-top:16px">
+        <h3 class="section-title">Gem Call History</h3>
+        <div id="gemCallsList">
+          <div class="empty-state">No gem calls recorded yet. Run a scan to start tracking.</div>
+        </div>
+      </div>
+
+    </div><!-- /panelGems -->
+
+    <!-- ── HISTORY ─────────────────────────────────────────────────────── -->
+    <div id="panelHistory" class="tracker-panel">
+      <h3 class="section-title">Trade History</h3>
+      <div id="historyList">
+        <div class="empty-state">No trades yet.</div>
+      </div>
+    </div>
+
+    <!-- ── SETTINGS ───────────────────────────────────────────────────── -->
+    <div id="panelSettings" class="tracker-panel">
+
+      <!-- Wallet setup -->
+      <div class="settings-card">
+        <h3 class="section-title">&#x1F511; Trading Wallets</h3>
+        <p class="settings-desc">
+          Your private key is encrypted with AES-256-GCM on the server and never stored in plain text.
+          Only use a dedicated trading wallet — never your main wallet.
+        </p>
+
+        <div id="walletSetupBSC" class="bot-wallet-setup">
+          <div class="bot-wallet-chain-label bsc-color">BSC (PancakeSwap)</div>
+          <div id="bscWalletStatus" class="bot-wallet-status"></div>
+          <div class="settings-group">
+            <label for="bscAddress">Wallet Address</label>
+            <input type="text" id="bscAddress" class="tracker-input" placeholder="0x..." />
+          </div>
+          <div class="settings-group">
+            <label for="bscKey">Private Key</label>
+            <input type="password" id="bscKey" class="tracker-input" placeholder="Never stored in plain text" autocomplete="off" />
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="tracker-action-btn save-wallet-btn" data-chain="bsc" style="flex:1">Save BSC Wallet</button>
+            <button class="bot-remove-wallet-btn" data-chain="bsc">Remove</button>
+          </div>
+          <button class="link-wallet-page-btn" data-chain="bsc">&#x1F517; Use Wallet Page Key</button>
+        </div>
+
+        <div id="walletSetupETH" class="bot-wallet-setup" style="margin-top:16px">
+          <div class="bot-wallet-chain-label eth-color">ETH (Uniswap V2)</div>
+          <div id="ethWalletStatus" class="bot-wallet-status"></div>
+          <div class="settings-group">
+            <label for="ethAddress">Wallet Address</label>
+            <input type="text" id="ethAddress" class="tracker-input" placeholder="0x..." />
+          </div>
+          <div class="settings-group">
+            <label for="ethKey">Private Key</label>
+            <input type="password" id="ethKey" class="tracker-input" placeholder="Never stored in plain text" autocomplete="off" />
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="tracker-action-btn save-wallet-btn" data-chain="eth" style="flex:1">Save ETH Wallet</button>
+            <button class="bot-remove-wallet-btn" data-chain="eth">Remove</button>
+          </div>
+          <button class="link-wallet-page-btn" data-chain="eth">&#x1F517; Use Wallet Page Key</button>
+        </div>
+
+        <div id="walletSetupSOL" class="bot-wallet-setup" style="margin-top:16px">
+          <div class="bot-wallet-chain-label sol-color">Solana (Jupiter)</div>
+          <div id="solWalletStatus" class="bot-wallet-status"></div>
+          <div class="settings-group">
+            <label for="solAddress">Wallet Address</label>
+            <input type="text" id="solAddress" class="tracker-input" placeholder="Solana public key" />
+          </div>
+          <div class="settings-group">
+            <label for="solKey">Private Key (Base58)</label>
+            <input type="password" id="solKey" class="tracker-input" placeholder="Never stored in plain text" autocomplete="off" />
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="tracker-action-btn save-wallet-btn" data-chain="sol" style="flex:1">Save SOL Wallet</button>
+            <button class="bot-remove-wallet-btn" data-chain="sol">Remove</button>
+          </div>
+          <button class="link-wallet-page-btn" data-chain="sol">&#x1F517; Use Wallet Page Key</button>
+        </div>
+
+        <div id="walletSetupBASE" class="bot-wallet-setup" style="margin-top:16px">
+          <div class="bot-wallet-chain-label base-color">Base (BaseSwap)</div>
+          <div id="baseWalletStatus" class="bot-wallet-status"></div>
+          <div class="settings-group">
+            <label for="baseAddress">Wallet Address</label>
+            <input type="text" id="baseAddress" class="tracker-input" placeholder="0x..." />
+          </div>
+          <div class="settings-group">
+            <label for="baseKey">Private Key</label>
+            <input type="password" id="baseKey" class="tracker-input" placeholder="Never stored in plain text" autocomplete="off" />
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="tracker-action-btn save-wallet-btn" data-chain="base" style="flex:1">Save BASE Wallet</button>
+            <button class="bot-remove-wallet-btn" data-chain="base">Remove</button>
+          </div>
+          <button class="link-wallet-page-btn" data-chain="base">&#x1F517; Use Wallet Page Key</button>
+        </div>
+
+        <div id="walletSetupTON" class="bot-wallet-setup" style="margin-top:16px">
+          <div class="bot-wallet-chain-label ton-color">TON (Balance Tracking)</div>
+          <div id="tonWalletStatus" class="bot-wallet-status"></div>
+          <div class="settings-group">
+            <label for="tonAddress">Wallet Address</label>
+            <input type="text" id="tonAddress" class="tracker-input" placeholder="EQ... or UQ..." />
+          </div>
+          <p class="settings-desc" style="margin:4px 0 8px;font-size:12px;color:#848E9C">
+            Paste your TON address for balance display. Generate &amp; manage keys in the <a href="wallet.html" style="color:#00c853">Wallet page</a>.
+          </p>
+          <div style="display:flex;gap:8px">
+            <button class="tracker-action-btn save-wallet-btn" data-chain="ton" style="flex:1">Save TON Address</button>
+            <button class="bot-remove-wallet-btn" data-chain="ton">Remove</button>
+          </div>
+        </div>
+
+        <div id="walletSetupMATIC" class="bot-wallet-setup" style="margin-top:16px">
+          <div class="bot-wallet-chain-label matic-color">Polygon (QuickSwap V2)</div>
+          <div id="maticWalletStatus" class="bot-wallet-status"></div>
+          <div class="settings-group">
+            <label for="maticAddress">Wallet Address</label>
+            <input type="text" id="maticAddress" class="tracker-input" placeholder="0x..." />
+          </div>
+          <div class="settings-group">
+            <label for="maticKey">Private Key</label>
+            <input type="password" id="maticKey" class="tracker-input" placeholder="Never stored in plain text" autocomplete="off" />
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="tracker-action-btn save-wallet-btn" data-chain="matic" style="flex:1">Save MATIC Wallet</button>
+            <button class="bot-remove-wallet-btn" data-chain="matic">Remove</button>
+          </div>
+          <button class="link-wallet-page-btn" data-chain="matic">&#x1F517; Use Wallet Page Key</button>
+        </div>
+      </div>
+
+      <!-- Bot configuration -->
+      <div class="settings-card" style="margin-top:16px">
+        <h3 class="section-title">&#x2699;&#xFE0F; Bot Configuration</h3>
+        <div class="bot-form-row">
+          <div class="settings-group" style="flex:1">
+            <label for="cfgSlippage">Default Slippage %</label>
+            <input type="number" id="cfgSlippage" class="tracker-input" value="5" step="0.5" min="0.1" max="50" />
+          </div>
+          <div class="settings-group" style="flex:1">
+            <label for="cfgGasMultiplier">Gas Multiplier</label>
+            <input type="number" id="cfgGasMultiplier" class="tracker-input" value="1.2" step="0.1" min="1" max="3" />
+          </div>
+        </div>
+        <div class="settings-group">
+          <label for="cfgMinLiquidity">Min Liquidity (USD) for Sniper</label>
+          <input type="number" id="cfgMinLiquidity" class="tracker-input" value="5000" step="1000" min="0" />
+        </div>
+        <div class="bot-form-row">
+          <div class="settings-group" style="flex:1">
+            <label for="cfgBscRpc">Custom BSC RPC (optional)</label>
+            <input type="text" id="cfgBscRpc" class="tracker-input" placeholder="https://..." />
+          </div>
+          <div class="settings-group" style="flex:1">
+            <label for="cfgEthRpc">Custom ETH RPC (optional)</label>
+            <input type="text" id="cfgEthRpc" class="tracker-input" placeholder="https://..." />
+          </div>
+        </div>
+        <div class="settings-group">
+          <label for="cfgSolRpc">Custom SOL RPC (optional)</label>
+          <input type="text" id="cfgSolRpc" class="tracker-input" placeholder="https://..." />
+        </div>
+        <button id="saveBotConfigBtn" class="tracker-action-btn save-settings-btn">Save Configuration</button>
+        <div id="configStatus" class="settings-status"></div>
+      </div>
+
+      <!-- Telegram integration -->
+      <div class="settings-card" style="margin-top:16px">
+        <h3 class="section-title">&#x1F916; Telegram Integration</h3>
+
+        <!-- Linked / unlinked banner -->
+        <div id="telegramLinkedStatus"></div>
+
+        <!-- Bot info row -->
+        <div class="settings-group">
+          <label>Bot</label>
+          <div class="bot-webhook-box" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span id="tgBotUsername" style="font-weight:500">Loading…</span>
+            <a id="tgBotLink" href="#" target="_blank" rel="noopener"
+               class="tracker-action-btn"
+               style="display:none;padding:4px 12px;font-size:12px;text-decoration:none;border-radius:6px">
+              Open in Telegram ↗
+            </a>
+          </div>
+        </div>
+
+        <!-- Webhook URL row -->
+        <div class="settings-group">
+          <label>Webhook URL <span style="color:#00c853;font-size:11px">(active)</span></label>
+          <div class="bot-webhook-box" style="display:flex;align-items:center;gap:8px;overflow:hidden">
+            <code id="webhookUrl" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px"></code>
+            <button id="copyWebhookBtn" class="tracker-action-btn"
+                    style="flex-shrink:0;padding:4px 10px;font-size:12px">Copy</button>
+          </div>
+        </div>
+
+        <!-- Link account -->
+        <button id="generateLinkCodeBtn" class="tracker-action-btn" style="width:100%;margin-top:8px">
+          &#x1F517; Generate Link Code
+        </button>
+        <div id="linkCodeDisplay" class="bot-link-code-box" style="display:none">
+          <p class="settings-desc" style="margin:0 0 8px">
+            Open your bot in Telegram and send this command:
+          </p>
+          <code id="linkCodeText" class="bot-link-code"></code>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px;flex-wrap:wrap;gap:6px">
+            <span style="font-size:11px;color:#848E9C">&#x23F1; Expires in 10 minutes</span>
+            <button id="copyLinkCodeBtn" class="tracker-action-btn"
+                    style="padding:4px 10px;font-size:12px">Copy Command</button>
+          </div>
+        </div>
+        <div id="telegramStatus" class="settings-status"></div>
+      </div>
+
+    </div><!-- /settings panel -->
+
+  </div><!-- /container -->
+
+  <!-- ═══ Link Wallet Page Key modal ═══ -->
+  <div id="linkWalletModal" class="wlt-modal-bg" style="display:none">
+    <div class="wlt-modal">
+      <h3 id="linkWalletTitle" class="wlt-modal-title">Link Wallet Page Key</h3>
+      <p id="linkWalletDesc" class="wlt-modal-desc">Enter your wallet password to authorize this key for trading.</p>
+      <input type="password" id="linkWalletPwd" class="tracker-input" placeholder="Wallet password" autocomplete="current-password" />
+      <div id="linkWalletError" style="color:#f44336;font-size:12px;margin-top:6px;display:none"></div>
+      <div class="wlt-modal-actions" style="margin-top:16px">
+        <button id="linkWalletConfirm" class="submit-btn">Authorize for Trading</button>
+        <button id="linkWalletClose"   class="tracker-action-btn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="menuOverlay" class="menu-overlay"></div>
+  <script type="module" src="bot.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => navigator.serviceWorker.register('service-worker.js'))
+    }
+  </script>
+</body>
+</html>

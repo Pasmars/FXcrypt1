@@ -1,0 +1,41 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "snipeTargets",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "addedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "gemAlerts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tokenAddress", "order": "ASCENDING" },
+        { "fieldPath": "chain", "order": "ASCENDING" },
+        { "fieldPath": "alertedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "gemAlerts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tokenAddress", "order": "ASCENDING" },
+        { "fieldPath": "chain", "order": "ASCENDING" },
+        { "fieldPath": "autoBought", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": [
+    {
+      "collectionGroup": "snipeTargets",
+      "fieldPath": "status",
+      "indexes": [
+        { "order": "ASCENDING", "queryScope": "COLLECTION" },
+        { "order": "DESCENDING", "queryScope": "COLLECTION" },
+        { "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" }
+      ]
+    }
+  ]
+}
