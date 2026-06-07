@@ -3,6 +3,7 @@ import { signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth
 import { doc, getDoc, collection, addDoc, getDocs, deleteDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 import { httpsCallable } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-functions.js";
 import { auth, db, fns } from './firebase.js';
+import { initBubbleMap } from './bubblemap.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const DS_BASE   = 'https://api.dexscreener.com';
@@ -514,5 +515,6 @@ document.addEventListener('DOMContentLoaded', () => {
     await refreshWatchlist();
     renderSavedWallets();
     startAutoRefresh();
+    initBubbleMap();
   });
 });

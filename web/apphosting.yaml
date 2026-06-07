@@ -1,0 +1,8 @@
+# Firebase App Hosting configuration for the Next.js (SSR) frontend.
+# Backend Cloud Functions are unchanged and live in the parent project.
+runConfig:
+  minInstances: 0
+  maxInstances: 2
+  concurrency: 80
+  cpu: 1
+  memoryMiB: 512

@@ -1,4 +1,4 @@
-const CACHE_NAME = "fxcrypt-cache-v19";
+const CACHE_NAME = "fxcrypt-cache-v20";
 
 // Only stable, rarely-changing assets go into the precache.
 // JS files are intentionally excluded — they use network-first below so
@@ -47,19 +47,10 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // HTML pages — network-first so CSP headers and markup are always fresh.
+  // HTML pages — always network-only so markup is always the deployed version.
+  // Never written to cache: avoids stale page shells being served after deploys.
   if (url.pathname.endsWith(".html") || url.pathname === "/" || url.pathname === "") {
-    event.respondWith(
-      fetch(event.request)
-        .then((res) => {
-          if (res && res.status === 200) {
-            const clone = res.clone();
-            caches.open(CACHE_NAME).then((c) => c.put(event.request, clone));
-          }
-          return res;
-        })
-        .catch(() => caches.match(event.request))
-    );
+    event.respondWith(fetch(event.request));
     return;
   }
 

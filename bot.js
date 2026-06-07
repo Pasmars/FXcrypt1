@@ -933,6 +933,7 @@ async function populateSettings(settings) {
   if (settings.gemMaxAge != null)       document.getElementById('gemMaxAge').value       = settings.gemMaxAge
   if (settings.gemMinScore != null)     document.getElementById('gemMinScore').value     = settings.gemMinScore
   if (settings.gemBuyAmountBsc != null) document.getElementById('gemBuyAmountBsc').value = settings.gemBuyAmountBsc
+  if (settings.gemBuyAmountEth != null) document.getElementById('gemBuyAmountEth').value = settings.gemBuyAmountEth
   if (settings.gemBuyAmountSol != null) document.getElementById('gemBuyAmountSol').value = settings.gemBuyAmountSol
 
   if (settings.gemMaxAgeUnit) {
@@ -971,7 +972,9 @@ async function populateSettings(settings) {
     document.getElementById('gemChainSol').checked   = settings.gemChains.includes('sol')
     document.getElementById('gemChainBase').checked  = hasNewChainData ? settings.gemChains.includes('base')  : true
     document.getElementById('gemChainTon').checked   = hasNewChainData ? settings.gemChains.includes('ton')   : true
-    // matic was added later — default to false (opt-in) for old saved configs
+    // eth was added later — default ON (like base/ton); matic stays opt-in
+    const hasEthEraConfig = settings.gemChains.includes('eth') || settings.gemChains.includes('matic')
+    document.getElementById('gemChainEth').checked   = hasEthEraConfig ? settings.gemChains.includes('eth') : true
     document.getElementById('gemChainMatic').checked = settings.gemChains.includes('matic')
   }
 
@@ -1155,8 +1158,10 @@ function gemMaxAgeInHours() {
 // ── Gem: buy amount labels ────────────────────────────────────────────────
 function updateGemLabels() {
   const bscLbl = document.getElementById('gemBuyAmountBscLabel')
+  const ethLbl = document.getElementById('gemBuyAmountEthLabel')
   const solLbl = document.getElementById('gemBuyAmountSolLabel')
   if (bscLbl) bscLbl.textContent = gemBuyMode === 'usd' ? 'Buy Amount BSC (USD $)' : 'Buy Amount (BNB)'
+  if (ethLbl) ethLbl.textContent = gemBuyMode === 'usd' ? 'Buy Amount ETH (USD $)' : 'Buy Amount (ETH)'
   if (solLbl) solLbl.textContent = gemBuyMode === 'usd' ? 'Buy Amount SOL (USD $)' : 'Buy Amount (SOL)'
 }
 
@@ -1178,8 +1183,10 @@ function initGemBuyMode() {
 
 function updateGemDollarEquiv() {
   const bscInput = document.getElementById('gemBuyAmountBsc')
+  const ethInput = document.getElementById('gemBuyAmountEth')
   const solInput = document.getElementById('gemBuyAmountSol')
   const bscEl    = document.getElementById('gemBscDollar')
+  const ethEl    = document.getElementById('gemEthDollar')
   const solEl    = document.getElementById('gemSolDollar')
 
   if (bscInput && bscEl) {
@@ -1188,6 +1195,14 @@ function updateGemDollarEquiv() {
       bscEl.textContent = bnbPriceUsd > 0 ? `≈ $${(amt * bnbPriceUsd).toFixed(2)}` : '≈ $—'
     } else {
       bscEl.textContent = bnbPriceUsd > 0 ? `≈ ${(amt / bnbPriceUsd).toFixed(4)} BNB` : '≈ — BNB'
+    }
+  }
+  if (ethInput && ethEl) {
+    const amt = parseFloat(ethInput.value) || 0
+    if (gemBuyMode === 'native') {
+      ethEl.textContent = ethPriceUsd > 0 ? `≈ $${(amt * ethPriceUsd).toFixed(2)}` : '≈ $—'
+    } else {
+      ethEl.textContent = ethPriceUsd > 0 ? `≈ ${(amt / ethPriceUsd).toFixed(5)} ETH` : '≈ — ETH'
     }
   }
   if (solInput && solEl) {
@@ -1233,12 +1248,14 @@ async function saveGemConfig() {
     'botSettings.gemMaxAgeUnit':   gemMaxAgeUnit,
     'botSettings.gemMinScore':     parseInt(document.getElementById('gemMinScore').value)     || 40,
     'botSettings.gemBuyAmountBsc': parseFloat(document.getElementById('gemBuyAmountBsc').value) || 0.005,
+    'botSettings.gemBuyAmountEth': parseFloat(document.getElementById('gemBuyAmountEth').value) || 0.01,
     'botSettings.gemBuyAmountSol': parseFloat(document.getElementById('gemBuyAmountSol').value) || 0.05,
     'botSettings.gemBuyMode':      gemBuyMode,
   }
 
   const chains = []
   if (document.getElementById('gemChainBsc').checked)   chains.push('bsc')
+  if (document.getElementById('gemChainEth').checked)   chains.push('eth')
   if (document.getElementById('gemChainSol').checked)   chains.push('sol')
   if (document.getElementById('gemChainBase').checked)  chains.push('base')
   if (document.getElementById('gemChainTon').checked)   chains.push('ton')
@@ -1250,7 +1267,7 @@ async function saveGemConfig() {
 }
 
 // ── Gem Scanner: scanning overlay ─────────────────────────────────────────
-const GEM_CHAIN_MAP = { bsc: 'bsc', sol: 'solana', base: 'base', ton: 'ton', matic: 'polygon' }
+const GEM_CHAIN_MAP = { bsc: 'bsc', eth: 'ethereum', sol: 'solana', base: 'base', ton: 'ton', matic: 'polygon' }
 
 function showGemScanning(chains, stepLabel) {
   const list = document.getElementById('gemCardList')
@@ -1343,10 +1360,10 @@ function scoreGemToken(pair) {
   return Math.min(100, Math.max(0, score))
 }
 
-// ── Gem Scanner: honeypot check (BSC only) ────────────────────────────────
-async function checkGemHoneypot(tokenAddress) {
+// ── Gem Scanner: honeypot check (EVM — BSC chainID=56, ETH chainID=1) ─────
+async function checkGemHoneypot(tokenAddress, chainID = 56) {
   try {
-    const r = await fetch(`https://api.honeypot.is/v2/IsHoneypot?address=${tokenAddress}&chainID=56`)
+    const r = await fetch(`https://api.honeypot.is/v2/IsHoneypot?address=${tokenAddress}&chainID=${chainID}`)
     const data = await r.json()
     const hp = data.honeypotResult || {}
     const sim = data.simulationResult || {}
@@ -1377,6 +1394,7 @@ const GEM_DEX_LABELS = {
 async function scanGems() {
   const chains = []
   if (document.getElementById('gemChainBsc').checked)   chains.push('bsc')
+  if (document.getElementById('gemChainEth').checked)   chains.push('eth')
   if (document.getElementById('gemChainSol').checked)   chains.push('sol')
   if (document.getElementById('gemChainBase').checked)  chains.push('base')
   if (document.getElementById('gemChainTon').checked)   chains.push('ton')
@@ -1469,7 +1487,7 @@ async function scanGems() {
 
     const allTokens = Array.from(tokenMap.values())
     const chainCounts = chains.map(c => {
-      const label = c === 'bsc' ? 'BSC' : c === 'sol' ? 'SOL' : c === 'base' ? 'Base' : c === 'matic' ? 'Polygon' : 'TON'
+      const label = c === 'bsc' ? 'BSC' : c === 'eth' ? 'ETH' : c === 'sol' ? 'SOL' : c === 'base' ? 'Base' : c === 'matic' ? 'Polygon' : 'TON'
       return `${label}: ${allTokens.filter(t => t.chain === c).length}`
     }).join(', ')
     updateGemScanStep(`Found ${allTokens.length} tokens (${chainCounts}). Fetching pair data…`)
@@ -1504,11 +1522,12 @@ async function scanGems() {
     const bestPairs = new Map()
     for (const pair of allPairs) {
       let pairChain = null
-      if      (pair.chainId === 'bsc'     && chains.includes('bsc'))   pairChain = 'bsc'
-      else if (pair.chainId === 'solana'  && chains.includes('sol'))   pairChain = 'sol'
-      else if (pair.chainId === 'base'    && chains.includes('base'))  pairChain = 'base'
-      else if (pair.chainId === 'ton'     && chains.includes('ton'))   pairChain = 'ton'
-      else if (pair.chainId === 'polygon' && chains.includes('matic')) pairChain = 'matic'
+      if      (pair.chainId === 'bsc'      && chains.includes('bsc'))   pairChain = 'bsc'
+      else if (pair.chainId === 'ethereum' && chains.includes('eth'))   pairChain = 'eth'
+      else if (pair.chainId === 'solana'   && chains.includes('sol'))   pairChain = 'sol'
+      else if (pair.chainId === 'base'     && chains.includes('base'))  pairChain = 'base'
+      else if (pair.chainId === 'ton'      && chains.includes('ton'))   pairChain = 'ton'
+      else if (pair.chainId === 'polygon'  && chains.includes('matic')) pairChain = 'matic'
       if (!pairChain) continue
 
       const addr = (pair.baseToken?.address || '').toLowerCase()
@@ -1537,10 +1556,10 @@ async function scanGems() {
       if (gemScore < minScore) continue
 
       let safety = { riskLevel: 'N/A' }
-      if (chain === 'bsc') {
+      if (chain === 'bsc' || chain === 'eth') {
         hpCount++
         updateGemScanStep(`Honeypot check ${hpCount}… (${pair.baseToken?.symbol || '…'})`)
-        safety = await checkGemHoneypot(pair.baseToken?.address || addr)
+        safety = await checkGemHoneypot(pair.baseToken?.address || addr, chain === 'eth' ? 1 : 56)
         if (safety.isHoneypot === true) continue
         if (safety.sellTax != null && safety.sellTax > 15) continue
       } else if (chain === 'base') {
@@ -1652,12 +1671,14 @@ function renderGemCards(gems) {
                      : 'gem-score-low'
 
     const chainKey    = gem.chain
-    const chainTicker = gem.chain === 'bsc' ? 'BNB' : gem.chain === 'sol' ? 'SOL' : gem.chain === 'base' ? 'ETH' : gem.chain === 'matic' ? 'MATIC' : 'TON'
-    const _canBuy     = gem.chain === 'bsc' || gem.chain === 'sol' || gem.chain === 'base' || gem.chain === 'matic'
+    const chainTicker = gem.chain === 'bsc' ? 'BNB' : gem.chain === 'eth' ? 'ETH' : gem.chain === 'sol' ? 'SOL' : gem.chain === 'base' ? 'ETH' : gem.chain === 'matic' ? 'MATIC' : 'TON'
+    const _canBuy     = gem.chain === 'bsc' || gem.chain === 'eth' || gem.chain === 'sol' || gem.chain === 'base' || gem.chain === 'matic'
     const _inputAmt   = gem.chain === 'sol'
       ? (parseFloat(document.getElementById('gemBuyAmountSol').value) || (gemBuyMode === 'usd' ? 5 : 0.05))
+      : gem.chain === 'eth'
+      ? (parseFloat(document.getElementById('gemBuyAmountEth').value) || (gemBuyMode === 'usd' ? 5 : 0.01))
       : (parseFloat(document.getElementById('gemBuyAmountBsc').value) || (gemBuyMode === 'usd' ? 5 : 0.005))
-    const _nativePrice = gem.chain === 'bsc' ? bnbPriceUsd : gem.chain === 'base' ? ethPriceUsd : gem.chain === 'matic' ? maticPriceUsd : solPriceUsd
+    const _nativePrice = gem.chain === 'bsc' ? bnbPriceUsd : (gem.chain === 'base' || gem.chain === 'eth') ? ethPriceUsd : gem.chain === 'matic' ? maticPriceUsd : solPriceUsd
     const buyAmount   = gemBuyMode === 'usd' && _nativePrice > 0
       ? _inputAmt / _nativePrice
       : _inputAmt
@@ -1675,9 +1696,9 @@ function renderGemCards(gems) {
 
     const mcapStr = gem.marketCap > 0 ? fmtCompact(gem.marketCap) : '—'
 
-    // Safety row for BSC
+    // Safety row for EVM honeypot-checked chains (BSC, ETH)
     let safetyHtml = ''
-    if (gem.chain === 'bsc' && gem.safety && gem.safety.riskLevel !== 'N/A') {
+    if ((gem.chain === 'bsc' || gem.chain === 'eth') && gem.safety && gem.safety.riskLevel !== 'N/A') {
       const riskClass = gem.safety.riskLevel === 'LOW' ? 'gem-risk-low'
                       : gem.safety.riskLevel === 'MEDIUM' ? 'gem-risk-med'
                       : gem.safety.riskLevel === 'HIGH' ? 'gem-risk-high'
@@ -1704,6 +1725,7 @@ function renderGemCards(gems) {
 
     // Explorer URL
     const explorerBase = gem.chain === 'bsc'   ? 'https://bscscan.com/token/'
+      : gem.chain === 'eth'   ? 'https://etherscan.io/token/'
       : gem.chain === 'sol'   ? 'https://solscan.io/token/'
       : gem.chain === 'base'  ? 'https://basescan.org/token/'
       : gem.chain === 'matic' ? 'https://polygonscan.com/token/'
@@ -1718,7 +1740,7 @@ function renderGemCards(gems) {
       : ''
 
     // DexScreener link
-    const dexScreenerChain = gem.chain === 'sol' ? 'solana' : gem.chain === 'matic' ? 'polygon' : gem.chain
+    const dexScreenerChain = GEM_CHAIN_MAP[gem.chain] || gem.chain
     const dexLink = gem.dexUrl || `https://dexscreener.com/${dexScreenerChain}/${gem.tokenAddress}`
 
     return `
@@ -1815,7 +1837,7 @@ function renderGemCards(gems) {
           <div class="gem-detail-links">
             <a href="${dexLink}" target="_blank" class="gem-link-btn">📊 DexScreener</a>
             <a href="${explorerBase}${gem.tokenAddress}" target="_blank" class="gem-link-btn">
-              ${gem.chain === 'bsc' ? '🔍 BscScan' : gem.chain === 'base' ? '🔍 BaseScan' : gem.chain === 'ton' ? '🔍 TONScan' : gem.chain === 'matic' ? '🔍 PolygonScan' : '🔍 Solscan'}
+              ${gem.chain === 'bsc' ? '🔍 BscScan' : gem.chain === 'eth' ? '🔍 Etherscan' : gem.chain === 'base' ? '🔍 BaseScan' : gem.chain === 'ton' ? '🔍 TONScan' : gem.chain === 'matic' ? '🔍 PolygonScan' : '🔍 Solscan'}
             </a>
           </div>
         </div>
@@ -1875,12 +1897,14 @@ async function buyGem(idx) {
   const gem = gemResults[idx]
   if (!gem) return
 
-  if (gem.chain !== 'bsc' && gem.chain !== 'sol' && gem.chain !== 'base' && gem.chain !== 'matic') return
-  const chainTicker  = gem.chain === 'bsc' ? 'BNB' : gem.chain === 'base' ? 'ETH' : gem.chain === 'matic' ? 'MATIC' : 'SOL'
+  if (gem.chain !== 'bsc' && gem.chain !== 'eth' && gem.chain !== 'sol' && gem.chain !== 'base' && gem.chain !== 'matic') return
+  const chainTicker  = gem.chain === 'bsc' ? 'BNB' : gem.chain === 'eth' ? 'ETH' : gem.chain === 'base' ? 'ETH' : gem.chain === 'matic' ? 'MATIC' : 'SOL'
   const _rawAmt      = gem.chain === 'sol'
     ? (parseFloat(document.getElementById('gemBuyAmountSol').value) || (gemBuyMode === 'usd' ? 5 : 0.05))
+    : gem.chain === 'eth'
+    ? (parseFloat(document.getElementById('gemBuyAmountEth').value) || (gemBuyMode === 'usd' ? 5 : 0.01))
     : (parseFloat(document.getElementById('gemBuyAmountBsc').value) || (gemBuyMode === 'usd' ? 5 : 0.005))
-  const _nativePrice = gem.chain === 'bsc' ? bnbPriceUsd : gem.chain === 'base' ? ethPriceUsd : gem.chain === 'matic' ? maticPriceUsd : solPriceUsd
+  const _nativePrice = gem.chain === 'bsc' ? bnbPriceUsd : (gem.chain === 'base' || gem.chain === 'eth') ? ethPriceUsd : gem.chain === 'matic' ? maticPriceUsd : solPriceUsd
   const buyAmount    = gemBuyMode === 'usd' && _nativePrice > 0
     ? _rawAmt / _nativePrice
     : _rawAmt
@@ -1893,6 +1917,7 @@ async function buyGem(idx) {
   showTxPopup(gem, buyAmount, chainTicker)
 
   const explorerBase = gem.chain === 'bsc'   ? 'https://bscscan.com/tx/'
+                     : gem.chain === 'eth'   ? 'https://etherscan.io/tx/'
                      : gem.chain === 'base'  ? 'https://basescan.org/tx/'
                      : gem.chain === 'matic' ? 'https://polygonscan.com/tx/'
                      : 'https://solscan.io/tx/'
@@ -2015,7 +2040,7 @@ async function recordGemCalls(gems) {
 
 // ── Gem Calls: fetch current price ────────────────────────────────────────
 async function fetchCurrentPrice(tokenAddress, chain) {
-  const chainId = chain === 'bsc' ? 'bsc' : 'solana'
+  const chainId = GEM_CHAIN_MAP[chain] || 'solana'
   try {
     const r = await fetch(`https://api.dexscreener.com/token-pairs/v1/${chainId}/${tokenAddress}`)
     if (!r.ok) return null
@@ -2225,6 +2250,7 @@ document.addEventListener('DOMContentLoaded', () => {
   })
   document.getElementById('saveGemConfigBtn').addEventListener('click', saveGemConfig)
   document.getElementById('gemBuyAmountBsc').addEventListener('input', updateGemDollarEquiv)
+  document.getElementById('gemBuyAmountEth').addEventListener('input', updateGemDollarEquiv)
   document.getElementById('gemBuyAmountSol').addEventListener('input', updateGemDollarEquiv)
   document.getElementById('gemMaxAgeUnit').addEventListener('change', (e) => { gemMaxAgeUnit = e.target.value })
   document.getElementById('gemNotifBtn').addEventListener('click', requestGemNotifications)

@@ -1,0 +1,10 @@
+{
+  "name": "FXcrypt",
+  "short_name": "FXcrypt",
+  "description": "Track & trade on-chain — PnL, tokens, wallets, holder maps and DEX automation.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0B0E11",
+  "theme_color": "#0B0E11",
+  "icons": []
+}

@@ -7,7 +7,7 @@
   <meta name="description" content="Track tokens on BSC, Ethereum and Solana blockchains in real-time." />
   <link rel="manifest" href="manifest.json" />
   <title>Token Tracker - FXcrypt</title>
-  <link rel="stylesheet" href="style.css?v=15" />
+  <link rel="stylesheet" href="style.css?v=16" />
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap" rel="stylesheet" />
 </head>
 <body>
@@ -37,7 +37,7 @@
       <li><a href="tracker.html">Token Tracker</a></li>
       <li><a href="bot.html">DEX Bot</a></li>
       <li><a href="agent.html">AI Agent</a></li>
-            <li><a href="wallet.html">Wallet</a></li>
+      <li><a href="wallet.html">Wallet</a></li>
       <li><button id="sideLogoutBtn" class="side-logout-btn">Logout</button></li>
     </ul>
   </div>
@@ -54,7 +54,7 @@
       <a href="tracker.html" class="tab active">Tracker</a>
       <a href="bot.html" class="tab">DEX Bot</a>
       <a href="agent.html" class="tab">AI Agent</a>
-            <a href="wallet.html" class="tab">Wallet</a>
+      <a href="wallet.html" class="tab">Wallet</a>
     </nav>
 
     <h1 class="tracker-title">Token Tracker</h1>
@@ -64,6 +64,7 @@
     <div class="tracker-tab-nav">
       <button class="tracker-tab-btn active" data-tab="token" id="tabToken">&#x1F4C8; Token Tracker</button>
       <button class="tracker-tab-btn" data-tab="wallet" id="tabWallet">&#x1F45B; Wallet Tracker</button>
+      <button class="tracker-tab-btn" data-tab="bubble" id="tabBubble">&#x1FAE7; Bubble Map</button>
     </div>
 
     <!-- TOKEN PANEL -->
@@ -116,6 +117,23 @@
           <div class="empty-state">No wallets saved yet. Look up a wallet above!</div>
         </div>
       </div>
+    </div>
+
+    <!-- BUBBLE MAP PANEL -->
+    <div id="panelBubble" class="tracker-panel">
+      <div class="tracker-input-section">
+        <div class="chain-pills" id="bubbleChainPills">
+          <button class="chain-pill bsc active" data-chain="bsc">BSC</button>
+          <button class="chain-pill eth" data-chain="eth">ETH</button>
+          <button class="chain-pill base" data-chain="base">BASE</button>
+          <button class="chain-pill sol" data-chain="sol">SOL</button>
+        </div>
+        <div class="tracker-input-row">
+          <input type="text" id="bubbleAddressInput" class="tracker-input" placeholder="Paste token contract address..." />
+          <button id="generateMapBtn" class="tracker-action-btn">Generate Map</button>
+        </div>
+      </div>
+      <div id="bubbleMapWrap"></div>
     </div>
 
   </div>

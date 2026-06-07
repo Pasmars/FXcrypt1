@@ -290,6 +290,10 @@
             <span class="chain-pill bsc arb-chain-label">BNB Chain</span>
           </label>
           <label class="arb-chain-toggle">
+            <input type="checkbox" id="gemChainEth" checked />
+            <span class="chain-pill eth arb-chain-label">Ethereum</span>
+          </label>
+          <label class="arb-chain-toggle">
             <input type="checkbox" id="gemChainSol" checked />
             <span class="chain-pill sol arb-chain-label">Solana</span>
           </label>
@@ -351,6 +355,11 @@
             <div class="gem-dollar-equiv" id="gemBscDollar">&#x2248; $&#x2014;</div>
           </div>
           <div class="settings-group" style="flex:1">
+            <label for="gemBuyAmountEth" id="gemBuyAmountEthLabel">Buy Amount (ETH)</label>
+            <input type="number" id="gemBuyAmountEth" class="tracker-input" value="0.01" step="0.001" min="0.001" />
+            <div class="gem-dollar-equiv" id="gemEthDollar">&#x2248; $&#x2014;</div>
+          </div>
+          <div class="settings-group" style="flex:1">
             <label for="gemBuyAmountSol" id="gemBuyAmountSolLabel">Buy Amount (SOL)</label>
             <input type="number" id="gemBuyAmountSol" class="tracker-input" value="0.05" step="0.01" min="0.01" />
             <div class="gem-dollar-equiv" id="gemSolDollar">&#x2248; $&#x2014;</div>
@@ -377,6 +386,7 @@
         <div class="gem-chain-filter" id="gemChainFilter">
           <button class="gem-filter-pill active" data-chain="all">All</button>
           <button class="gem-filter-pill" data-chain="bsc">BNB</button>
+          <button class="gem-filter-pill" data-chain="eth">ETH</button>
           <button class="gem-filter-pill" data-chain="sol">SOL</button>
           <button class="gem-filter-pill" data-chain="base">Base</button>
           <button class="gem-filter-pill" data-chain="ton">TON</button>

@@ -3,7 +3,15 @@ import { signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth
 import { doc, getDoc, setDoc, updateDoc, deleteField } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 import { auth, db } from './firebase.js';
 
-// ─── RPC constants with fallback arrays ──────────────────────────────────────
+/* ════════════════════════════════════════════════════════════════════════
+   FXcrypt Wallet — unified multi-chain portfolio wallet
+   - Client-side encryption (PBKDF2 + AES-GCM), keys never leave the device
+     in plaintext. Firestore schema users/{uid}.wallets.{chain} preserved so
+     the Telegram bot integration keeps working.
+   - Single session unlock: one password unlocks every wallet for the session.
+   ════════════════════════════════════════════════════════════════════════ */
+
+// ─── RPC endpoints (fallback arrays) ─────────────────────────────────────────
 const BASE_RPCS  = ['https://mainnet.base.org',               'https://base.publicnode.com'];
 const BSC_RPCS   = ['https://bsc-dataseed.binance.org',       'https://bsc.publicnode.com'];
 const ETH_RPCS   = ['https://cloudflare-eth.com',             'https://eth.llamarpc.com'];
@@ -11,16 +19,57 @@ const MATIC_RPCS = ['https://polygon-bor-rpc.publicnode.com', 'https://polygon-r
 const SOL_RPC    = 'https://api.mainnet-beta.solana.com';
 const TON_API    = 'https://toncenter.com/api/v2';
 
-// EVM chain metadata (used by send + token helpers)
-const CHAIN_CFG = {
-  base:  { rpcs: BASE_RPCS,  symbol: 'ETH',   chainId: 8453, explorer: 'https://basescan.org/tx/' },
-  bsc:   { rpcs: BSC_RPCS,   symbol: 'BNB',   chainId: 56,   explorer: 'https://bscscan.com/tx/' },
-  eth:   { rpcs: ETH_RPCS,   symbol: 'ETH',   chainId: 1,    explorer: 'https://etherscan.io/tx/' },
-  matic: { rpcs: MATIC_RPCS, symbol: 'MATIC', chainId: 137,  explorer: 'https://polygonscan.com/tx/' },
+// Native coin logos (CoinGecko CDN — allowed by img-src https:)
+const LOGO = {
+  ton:  'https://assets.coingecko.com/coins/images/17980/large/ton_symbol.png',
+  eth:  'https://assets.coingecko.com/coins/images/279/large/ethereum.png',
+  bnb:  'https://assets.coingecko.com/coins/images/825/large/bnb-icon2_2x.png',
+  matic:'https://assets.coingecko.com/coins/images/4713/large/polygon.png',
+  sol:  'https://assets.coingecko.com/coins/images/4128/large/solana.png',
 };
 
-// ─── Web Crypto helpers ───────────────────────────────────────────────────────
+// ─── Chain registry — single source of truth for every chain ──────────────────
+const CHAINS = {
+  ton: {
+    name: 'TON', network: 'The Open Network', color: '#0098EA', symbol: 'TON',
+    evm: false, cgId: 'the-open-network', logo: LOGO.ton,
+    explorer: 'https://tonscan.org/address/', txExplorer: 'https://tonscan.org/tx/',
+    twSlug: 'ton',
+  },
+  base: {
+    name: 'Base', network: 'Base', color: '#0052FF', symbol: 'ETH',
+    evm: true, chainId: 8453, rpcs: BASE_RPCS, cgId: 'ethereum', cgPlatform: 'base',
+    logo: LOGO.eth, explorer: 'https://basescan.org/address/', txExplorer: 'https://basescan.org/tx/',
+    blockscout: 'https://base.blockscout.com', twSlug: 'base',
+  },
+  bsc: {
+    name: 'BSC', network: 'BNB Smart Chain', color: '#F0B90B', symbol: 'BNB',
+    evm: true, chainId: 56, rpcs: BSC_RPCS, cgId: 'binancecoin', cgPlatform: 'binance-smart-chain',
+    logo: LOGO.bnb, explorer: 'https://bscscan.com/address/', txExplorer: 'https://bscscan.com/tx/',
+    blockscout: 'https://bnb.blockscout.com', twSlug: 'smartchain',
+  },
+  eth: {
+    name: 'Ethereum', network: 'Ethereum Mainnet', color: '#627EEA', symbol: 'ETH',
+    evm: true, chainId: 1, rpcs: ETH_RPCS, cgId: 'ethereum', cgPlatform: 'ethereum',
+    logo: LOGO.eth, explorer: 'https://etherscan.io/address/', txExplorer: 'https://etherscan.io/tx/',
+    blockscout: 'https://eth.blockscout.com', twSlug: 'ethereum',
+  },
+  matic: {
+    name: 'Polygon', network: 'Polygon Mainnet', color: '#8247E5', symbol: 'MATIC',
+    evm: true, chainId: 137, rpcs: MATIC_RPCS, cgId: 'matic-network', cgPlatform: 'polygon-pos',
+    logo: LOGO.matic, explorer: 'https://polygonscan.com/address/', txExplorer: 'https://polygonscan.com/tx/',
+    blockscout: 'https://polygon.blockscout.com', twSlug: 'polygon',
+  },
+  sol: {
+    name: 'Solana', network: 'Solana Mainnet', color: '#9945FF', symbol: 'SOL',
+    evm: false, cgId: 'solana', logo: LOGO.sol,
+    explorer: 'https://solscan.io/account/', txExplorer: 'https://solscan.io/tx/',
+    twSlug: 'solana',
+  },
+};
+const CHAIN_ORDER = ['ton', 'base', 'bsc', 'eth', 'matic', 'sol'];
 
+// ─── Web Crypto helpers ───────────────────────────────────────────────────────
 function b64enc(buf) { return btoa(String.fromCharCode(...new Uint8Array(buf))); }
 function b64dec(s)   { return Uint8Array.from(atob(s), c => c.charCodeAt(0)); }
 
@@ -48,10 +97,7 @@ async function decryptData(enc, password) {
   return new TextDecoder().decode(pt);
 }
 
-// ─── Direct JSON-RPC helper ───────────────────────────────────────────────────
-// Using raw fetch instead of library wrappers avoids timeout silences and lets
-// us try multiple fallback endpoints without library overhead.
-
+// ─── Raw JSON-RPC helper ──────────────────────────────────────────────────────
 async function _jsonRpc(url, method, params, timeout = 8000) {
   const ctrl = new AbortController();
   const t    = setTimeout(() => ctrl.abort(), timeout);
@@ -66,7 +112,6 @@ async function _jsonRpc(url, method, params, timeout = 8000) {
   } finally { clearTimeout(t); }
 }
 
-// Decode ABI-encoded string return value (for ERC-20 symbol/name)
 function _decodeABIStr(hex) {
   const h = hex.startsWith('0x') ? hex.slice(2) : hex;
   if (h.length < 128) return null;
@@ -80,20 +125,7 @@ function _decodeABIStr(hex) {
   return s || null;
 }
 
-// ─── TON helpers ─────────────────────────────────────────────────────────────
-
-let tonweb = null;
-
-function initTonWeb() {
-  if (window.TonWeb) {
-    tonweb = new TonWeb(new TonWeb.HttpProvider(`${TON_API}/jsonRPC`));
-  }
-}
-
-function bytesToHex(bytes) {
-  return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
+function bytesToHex(bytes) { return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join(''); }
 function hexToBytes(hex) {
   const h = hex.replace(/^0x/, '');
   const b = new Uint8Array(h.length / 2);
@@ -101,169 +133,136 @@ function hexToBytes(hex) {
   return b;
 }
 
+// ─── TON ──────────────────────────────────────────────────────────────────────
+let tonweb = null;
+function initTonWeb() {
+  if (window.TonWeb) tonweb = new TonWeb(new TonWeb.HttpProvider(`${TON_API}/jsonRPC`));
+}
+
 let _tonMnLib = null;
 async function getTonMnLib() {
   if (_tonMnLib) return _tonMnLib;
-  try {
-    _tonMnLib = await import('https://esm.sh/tonweb-mnemonic');
-    return _tonMnLib;
-  } catch {
-    return null;
-  }
+  try { _tonMnLib = await import('https://esm.sh/tonweb-mnemonic'); return _tonMnLib; }
+  catch { return null; }
 }
 
 async function createTONWallet() {
-  if (!tonweb) throw new Error('TonWeb not loaded');
+  if (!tonweb) throw new Error('TON library not loaded. Refresh and try again.');
   const nacl    = TonWeb.utils.nacl;
   const seed    = crypto.getRandomValues(new Uint8Array(32));
   const keyPair = nacl.sign.keyPair.fromSeed(seed);
   const wallet  = tonweb.wallet.create({ publicKey: keyPair.publicKey });
   const addr    = await wallet.getAddress();
-  return {
-    address:    addr.toString(true, true, false),
-    privateKey: bytesToHex(seed),
-    publicKey:  bytesToHex(keyPair.publicKey),
-    mnemonic:   null,
-  };
+  return { address: addr.toString(true, true, false), privateKey: bytesToHex(seed), publicKey: bytesToHex(keyPair.publicKey), mnemonic: null };
 }
 
 async function importTONWallet(input) {
-  if (!tonweb) throw new Error('TonWeb not loaded');
-  const nacl    = TonWeb.utils.nacl;
+  if (!tonweb) throw new Error('TON library not loaded.');
+  const nacl = TonWeb.utils.nacl;
   const trimmed = input.trim();
   let seed, mnemonic = null;
-
   if (trimmed.includes(' ')) {
-    const words  = trimmed.split(/\s+/);
-    if (words.length < 12) throw new Error('Invalid input. Enter a 24-word mnemonic or a hex private key.');
-    const mnLib  = await getTonMnLib();
-    if (!mnLib || !mnLib.mnemonicToKeyPair) throw new Error('Mnemonic library unavailable. Please use the hex private key instead.');
-    const valid  = mnLib.mnemonicValidate ? await mnLib.mnemonicValidate(words).catch(() => true) : true;
+    const words = trimmed.split(/\s+/);
+    if (words.length < 12) throw new Error('Enter a 24-word mnemonic or a hex private key.');
+    const mnLib = await getTonMnLib();
+    if (!mnLib || !mnLib.mnemonicToKeyPair) throw new Error('Mnemonic library unavailable. Use the hex private key instead.');
+    const valid = mnLib.mnemonicValidate ? await mnLib.mnemonicValidate(words).catch(() => true) : true;
     if (!valid) throw new Error('Invalid TON mnemonic phrase.');
-    const kp     = await mnLib.mnemonicToKeyPair(words);
-    seed         = kp.secretKey.slice(0, 32);
-    mnemonic     = words.join(' ');
+    const kp = await mnLib.mnemonicToKeyPair(words);
+    seed = kp.secretKey.slice(0, 32);
+    mnemonic = words.join(' ');
   } else {
     const raw = hexToBytes(trimmed);
     if (raw.length === 64) seed = raw.slice(0, 32);
     else if (raw.length === 32) seed = raw;
     else throw new Error('Private key must be 32 or 64 hex bytes');
   }
-
   const keyPair = nacl.sign.keyPair.fromSeed(seed);
   const wallet  = tonweb.wallet.create({ publicKey: keyPair.publicKey });
   const addr    = await wallet.getAddress();
-
-  return {
-    address:    addr.toString(true, true, false),
-    privateKey: bytesToHex(seed),
-    publicKey:  bytesToHex(keyPair.publicKey),
-    mnemonic,
-  };
+  return { address: addr.toString(true, true, false), privateKey: bytesToHex(seed), publicKey: bytesToHex(keyPair.publicKey), mnemonic };
 }
 
-async function getTONBalance(address) {
+async function getTonBalanceNum(address) {
   try {
     const res  = await fetch(`${TON_API}/getAddressBalance?address=${encodeURIComponent(address)}`);
     const data = await res.json();
-    if (data.ok) {
-      const tons = Number(BigInt(data.result)) / 1e9;
-      return `${tons.toFixed(4)} TON`;
-    }
-    return '—';
-  } catch { return '—'; }
+    if (data.ok) return Number(BigInt(data.result)) / 1e9;
+  } catch {}
+  return null;
 }
 
 async function sendTONNative(toAddress, amountTon, privKeyHex) {
-  if (!tonweb) throw new Error('TonWeb not loaded');
+  if (!tonweb) throw new Error('TON library not loaded.');
   const nacl    = TonWeb.utils.nacl;
   const seed    = hexToBytes(privKeyHex.slice(0, 64));
   const keyPair = nacl.sign.keyPair.fromSeed(seed);
   const wallet  = tonweb.wallet.create({ publicKey: keyPair.publicKey });
   const seqno   = (await wallet.methods.seqno().call()) || 0;
   await wallet.methods.transfer({
-    secretKey: keyPair.secretKey,
-    toAddress,
-    amount:   TonWeb.utils.toNano(String(amountTon)),
-    seqno,
-    sendMode: 3,
+    secretKey: keyPair.secretKey, toAddress,
+    amount: TonWeb.utils.toNano(String(amountTon)), seqno, sendMode: 3,
   }).send();
 }
 
-// ─── EVM helpers (BASE, BSC, ETH, MATIC share ethers v5) ─────────────────────
-
-function getEthers() {
-  const e = window.ethers;
-  if (!e) throw new Error('ethers library failed to load. Please refresh the page and try again.');
-  return e;
+async function getTonTxs(address) {
+  try {
+    const res  = await fetch(`${TON_API}/getTransactions?address=${encodeURIComponent(address)}&limit=12`);
+    const data = await res.json();
+    if (!data.ok) return [];
+    return data.result.map(tx => {
+      const inMsg  = tx.in_msg;
+      const out    = (tx.out_msgs || [])[0];
+      const incoming = inMsg && inMsg.source && (!out);
+      const valNano  = incoming ? Number(inMsg.value || 0) : Number(out?.value || 0);
+      return {
+        hash: tx.transaction_id?.hash || '',
+        incoming, value: valNano / 1e9, symbol: 'TON',
+        ts: (tx.utime || 0) * 1000,
+        counterparty: incoming ? (inMsg.source) : (out?.destination || ''),
+      };
+    });
+  } catch { return []; }
 }
 
-function _createEvmWallet() {
+// ─── EVM (Base, BSC, ETH, Polygon — ethers v5) ────────────────────────────────
+function getEthers() {
+  const e = window.ethers;
+  if (!e) throw new Error('ethers library failed to load. Refresh the page and try again.');
+  return e;
+}
+function createEvmWallet() {
   const e = getEthers();
   const w = e.Wallet.createRandom();
   return { address: w.address, privateKey: w.privateKey, mnemonic: w.mnemonic?.phrase || null };
 }
-
-function _importEvmWallet(input) {
+function importEvmWallet(input) {
   const e = getEthers();
   const t = input.trim();
   let w;
-  if (t.split(/\s+/).length > 1) {
-    w = e.Wallet.fromMnemonic(t);
-  } else {
-    const key = t.startsWith('0x') ? t : '0x' + t;
-    w = new e.Wallet(key);
-  }
+  if (t.split(/\s+/).length > 1) w = e.Wallet.fromMnemonic(t);
+  else { const key = t.startsWith('0x') ? t : '0x' + t; w = new e.Wallet(key); }
   return { address: w.address, privateKey: w.privateKey, mnemonic: w.mnemonic?.phrase || null };
 }
-
-// Direct JSON-RPC balance — no library overhead, survives rate-limited RPCs
-async function _getEvmBalance(address, rpcs, symbol) {
+async function getEvmBalanceNum(address, rpcs) {
   for (const rpc of rpcs) {
     try {
       const data = await _jsonRpc(rpc, 'eth_getBalance', [address, 'latest']);
       if (!data.result) continue;
-      const wei = BigInt(data.result);
-      return `${(Number(wei) / 1e18).toFixed(6)} ${symbol}`;
+      return Number(BigInt(data.result)) / 1e18;
     } catch {}
   }
-  return '—';
+  return null;
 }
-
-// BASE
-function createBaseWallet()        { return _createEvmWallet(); }
-function importBaseWallet(input)   { return _importEvmWallet(input); }
-async function getBaseBalance(a)   { return _getEvmBalance(a, BASE_RPCS,  'ETH'); }
-
-// BSC
-function createBscWallet()         { return _createEvmWallet(); }
-function importBscWallet(input)    { return _importEvmWallet(input); }
-async function getBscBalance(a)    { return _getEvmBalance(a, BSC_RPCS,   'BNB'); }
-
-// ETH
-function createEthWallet()         { return _createEvmWallet(); }
-function importEthWallet(input)    { return _importEvmWallet(input); }
-async function getEthBalance(a)    { return _getEvmBalance(a, ETH_RPCS,   'ETH'); }
-
-// MATIC (Polygon)
-function createMaticWallet()       { return _createEvmWallet(); }
-function importMaticWallet(input)  { return _importEvmWallet(input); }
-async function getMaticBalance(a)  { return _getEvmBalance(a, MATIC_RPCS, 'MATIC'); }
-
-// ─── ERC-20 token helpers ─────────────────────────────────────────────────────
-
-// Fetch symbol and decimals from a contract via eth_call (no ABI library)
 async function getEvmTokenMeta(contractAddr, rpcs) {
   let symbol = null, decimals = 18;
   for (const rpc of rpcs) {
     try {
       const [symResp, decResp] = await Promise.all([
-        _jsonRpc(rpc, 'eth_call', [{ to: contractAddr, data: '0x95d89b41' }, 'latest']), // symbol()
-        _jsonRpc(rpc, 'eth_call', [{ to: contractAddr, data: '0x313ce567' }, 'latest']), // decimals()
+        _jsonRpc(rpc, 'eth_call', [{ to: contractAddr, data: '0x95d89b41' }, 'latest']),
+        _jsonRpc(rpc, 'eth_call', [{ to: contractAddr, data: '0x313ce567' }, 'latest']),
       ]);
-      if (symResp.result && symResp.result.length > 2) {
-        symbol = _decodeABIStr(symResp.result);
-      }
+      if (symResp.result && symResp.result.length > 2) symbol = _decodeABIStr(symResp.result);
       if (decResp.result && decResp.result !== '0x') {
         const d = Number(BigInt(decResp.result));
         if (d >= 0 && d <= 30) decimals = d;
@@ -273,11 +272,9 @@ async function getEvmTokenMeta(contractAddr, rpcs) {
   }
   return { symbol: symbol || '???', decimals };
 }
-
-// Fetch ERC-20 balance via balanceOf(address) eth_call
-async function getEvmTokenBalance(walletAddr, contractAddr, rpcs) {
+async function getEvmTokenBalanceRaw(walletAddr, contractAddr, rpcs) {
   const padded = walletAddr.replace(/^0x/, '').padStart(64, '0');
-  const data   = '0x70a08231' + padded; // balanceOf(address)
+  const data   = '0x70a08231' + padded;
   for (const rpc of rpcs) {
     try {
       const resp = await _jsonRpc(rpc, 'eth_call', [{ to: contractAddr, data }, 'latest']);
@@ -287,31 +284,19 @@ async function getEvmTokenBalance(walletAddr, contractAddr, rpcs) {
   }
   return null;
 }
-
-// ─── EVM send helpers ─────────────────────────────────────────────────────────
-
 async function sendEvmNative(chain, to, amountEther, privKey) {
-  const e   = getEthers();
-  const cfg = CHAIN_CFG[chain];
-  let lastErr;
+  const e = getEthers(); const cfg = CHAINS[chain]; let lastErr;
   for (const rpc of cfg.rpcs) {
     try {
       const provider = new e.providers.JsonRpcProvider(rpc);
       const signer   = new e.Wallet(privKey, provider);
-      const tx = await signer.sendTransaction({
-        to,
-        value:    e.utils.parseEther(String(amountEther)),
-        gasLimit: 21000,
-      });
-      return tx;
+      return await signer.sendTransaction({ to, value: e.utils.parseEther(String(amountEther)), gasLimit: 21000 });
     } catch (err) { lastErr = err; }
   }
   throw lastErr || new Error('Transaction failed on all endpoints');
 }
-
 async function sendEvmToken(chain, contractAddr, to, amount, decimals, privKey) {
-  const e     = getEthers();
-  const cfg   = CHAIN_CFG[chain];
+  const e = getEthers(); const cfg = CHAINS[chain];
   const iface = new e.utils.Interface(['function transfer(address to, uint256 amount) returns (bool)']);
   const data  = iface.encodeFunctionData('transfer', [to, e.utils.parseUnits(String(amount), decimals)]);
   let lastErr;
@@ -319,16 +304,35 @@ async function sendEvmToken(chain, contractAddr, to, amount, decimals, privKey) 
     try {
       const provider = new e.providers.JsonRpcProvider(rpc);
       const signer   = new e.Wallet(privKey, provider);
-      const tx = await signer.sendTransaction({ to: contractAddr, data, gasLimit: 100000 });
-      return tx;
+      return await signer.sendTransaction({ to: contractAddr, data, gasLimit: 100000 });
     } catch (err) { lastErr = err; }
   }
   throw lastErr || new Error('Token transfer failed on all endpoints');
 }
+async function getEvmTxs(chain, address) {
+  const cfg = CHAINS[chain];
+  if (!cfg.blockscout) return null; // signal "unsupported"
+  try {
+    const res = await fetch(`${cfg.blockscout}/api/v2/addresses/${address}/transactions?filter=`, { headers: { accept: 'application/json' } });
+    if (!res.ok) return [];
+    const data = await res.json();
+    const lower = address.toLowerCase();
+    return (data.items || []).slice(0, 12).map(it => {
+      const from = (it.from?.hash || '').toLowerCase();
+      const incoming = from !== lower;
+      return {
+        hash: it.hash,
+        incoming,
+        value: Number(it.value || 0) / 1e18,
+        symbol: cfg.symbol,
+        ts: it.timestamp ? Date.parse(it.timestamp) : 0,
+        counterparty: incoming ? (it.from?.hash || '') : (it.to?.hash || ''),
+      };
+    });
+  } catch { return []; }
+}
 
-// ─── Solana helpers ───────────────────────────────────────────────────────────
-
-// Base58 encode/decode — no external dependency
+// ─── Solana ─────────────────────────────────────────────────────────────────
 const _B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 function b58enc(bytes) {
   let n = 0n;
@@ -340,141 +344,154 @@ function b58enc(bytes) {
 }
 function b58dec(str) {
   let n = 0n;
-  for (const c of str) {
-    const i = _B58.indexOf(c);
-    if (i < 0) throw new Error('Invalid base58 character: ' + c);
-    n = n * 58n + BigInt(i);
-  }
+  for (const c of str) { const i = _B58.indexOf(c); if (i < 0) throw new Error('Invalid base58 character: ' + c); n = n * 58n + BigInt(i); }
   const bytes = [];
   while (n > 0n) { bytes.unshift(Number(n % 256n)); n /= 256n; }
   let lz = 0;
   for (const c of str) { if (c === '1') lz++; else break; }
   return new Uint8Array([...new Array(lz).fill(0), ...bytes]);
 }
-
 let _solWeb3 = null;
 async function getSolWeb3() {
   if (_solWeb3) return _solWeb3;
-  try {
-    _solWeb3 = await import('https://esm.sh/@solana/web3.js@1.95.3');
-    return _solWeb3;
-  } catch {
-    throw new Error('Solana library failed to load. Check your internet connection.');
-  }
+  try { _solWeb3 = await import('https://esm.sh/@solana/web3.js@1.95.3'); return _solWeb3; }
+  catch { throw new Error('Solana library failed to load. Check your connection.'); }
 }
-
 async function createSolWallet() {
   const { Keypair } = await getSolWeb3();
   const kp = Keypair.generate();
-  return {
-    address:    kp.publicKey.toBase58(),
-    privateKey: b58enc(kp.secretKey),
-    publicKey:  kp.publicKey.toBase58(),
-    mnemonic:   null,
-  };
+  return { address: kp.publicKey.toBase58(), privateKey: b58enc(kp.secretKey), publicKey: kp.publicKey.toBase58(), mnemonic: null };
 }
-
 async function importSolWallet(input) {
   const { Keypair } = await getSolWeb3();
-  const trimmed = input.trim();
-  let secretKey;
-
+  const trimmed = input.trim(); let secretKey;
   if (trimmed.startsWith('[')) {
     const arr = JSON.parse(trimmed);
     if (!Array.isArray(arr) || arr.length !== 64) throw new Error('JSON array must contain exactly 64 bytes.');
     secretKey = Uint8Array.from(arr);
   } else if (/^[0-9a-fA-F]+$/.test(trimmed)) {
-    if (trimmed.length === 128) {
-      secretKey = hexToBytes(trimmed);
-    } else if (trimmed.length === 64) {
-      const seed = hexToBytes(trimmed);
-      const kp   = Keypair.fromSeed(seed);
+    if (trimmed.length === 128) secretKey = hexToBytes(trimmed);
+    else if (trimmed.length === 64) {
+      const kp = Keypair.fromSeed(hexToBytes(trimmed));
       return { address: kp.publicKey.toBase58(), privateKey: b58enc(kp.secretKey), publicKey: kp.publicKey.toBase58(), mnemonic: null };
-    } else {
-      throw new Error('Hex key must be 64 chars (32-byte seed) or 128 chars (64-byte full key).');
-    }
+    } else throw new Error('Hex key must be 64 chars (seed) or 128 chars (full key).');
   } else {
     secretKey = b58dec(trimmed);
     if (secretKey.length !== 64) throw new Error('Base58 key must decode to 64 bytes.');
   }
-
   const kp = Keypair.fromSecretKey(secretKey);
-  return {
-    address:    kp.publicKey.toBase58(),
-    privateKey: b58enc(kp.secretKey),
-    publicKey:  kp.publicKey.toBase58(),
-    mnemonic:   null,
-  };
+  return { address: kp.publicKey.toBase58(), privateKey: b58enc(kp.secretKey), publicKey: kp.publicKey.toBase58(), mnemonic: null };
 }
-
-// Direct Solana JSON-RPC balance — no @solana/web3.js overhead for a read op
-async function getSolBalance(address) {
+async function getSolBalanceNum(address) {
   try {
     const data = await _jsonRpc(SOL_RPC, 'getBalance', [address, { commitment: 'confirmed' }]);
-    if (data.result?.value == null) return '—';
-    return `${(data.result.value / 1e9).toFixed(6)} SOL`;
-  } catch { return '—'; }
+    if (data.result?.value == null) return null;
+    return data.result.value / 1e9;
+  } catch { return null; }
 }
-
-// SOL native send (requires @solana/web3.js for signing)
 async function sendSolNative(toAddress, amountSol, secretKeyBase58) {
   const { Connection, PublicKey, Keypair, Transaction, SystemProgram, LAMPORTS_PER_SOL } = await getSolWeb3();
-  const secretKey = b58dec(secretKeyBase58);
-  const fromKp    = Keypair.fromSecretKey(secretKey);
-  const conn      = new Connection(SOL_RPC, 'confirmed');
-  const tx = new Transaction().add(
-    SystemProgram.transfer({
-      fromPubkey: fromKp.publicKey,
-      toPubkey:   new PublicKey(toAddress),
-      lamports:   Math.round(Number(amountSol) * LAMPORTS_PER_SOL),
-    })
-  );
+  const fromKp = Keypair.fromSecretKey(b58dec(secretKeyBase58));
+  const conn   = new Connection(SOL_RPC, 'confirmed');
+  const tx = new Transaction().add(SystemProgram.transfer({
+    fromPubkey: fromKp.publicKey, toPubkey: new PublicKey(toAddress),
+    lamports: Math.round(Number(amountSol) * LAMPORTS_PER_SOL),
+  }));
   const sig = await conn.sendTransaction(tx, [fromKp]);
   await conn.confirmTransaction(sig, 'confirmed');
   return sig;
 }
+async function getSolTxs(address) {
+  try {
+    const data = await _jsonRpc(SOL_RPC, 'getSignaturesForAddress', [address, { limit: 12 }]);
+    if (!Array.isArray(data.result)) return [];
+    return data.result.map(s => ({
+      hash: s.signature, incoming: null, value: null, symbol: 'SOL',
+      ts: (s.blockTime || 0) * 1000, counterparty: '', err: !!s.err,
+    }));
+  } catch { return []; }
+}
 
-// ─── Firestore helpers ────────────────────────────────────────────────────────
+// ─── Pricing (CoinGecko) ──────────────────────────────────────────────────────
+let _priceCache = { native: {}, token: {}, ts: 0 };
+async function fetchNativePrices() {
+  const ids = [...new Set(CHAIN_ORDER.map(c => CHAINS[c].cgId))].join(',');
+  try {
+    const r = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd`);
+    const d = await r.json();
+    const out = {};
+    for (const id in d) out[id] = d[id].usd;
+    return out;
+  } catch { return {}; }
+}
+async function fetchTokenPrices(platform, addrs) {
+  if (!addrs.length) return {};
+  try {
+    const r = await fetch(`https://api.coingecko.com/api/v3/simple/token_price/${platform}?contract_addresses=${addrs.join(',')}&vs_currencies=usd`);
+    const d = await r.json();
+    const out = {};
+    for (const a in d) out[a.toLowerCase()] = d[a].usd;
+    return out;
+  } catch { return {}; }
+}
 
+// ─── Token logo (TrustWallet assets, with letter fallback) ────────────────────
+function tokenLogoUrl(chain, contractAddr) {
+  const cfg = CHAINS[chain];
+  if (!cfg?.twSlug || !contractAddr) return null;
+  let addr = contractAddr;
+  try { addr = getEthers().utils.getAddress(contractAddr); } catch {}
+  return `https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/${cfg.twSlug}/assets/${addr}/logo.png`;
+}
+
+// ─── Firestore (schema preserved for Telegram bot) ────────────────────────────
 async function saveWallet(uid, chain, walletData, password) {
   const encPrivateKey = await encryptData(walletData.privateKey, password);
   const encMnemonic   = walletData.mnemonic ? await encryptData(walletData.mnemonic, password) : null;
   await setDoc(doc(db, 'users', uid), {
-    wallets: {
-      [chain]: {
-        address:      walletData.address,
-        publicKey:    walletData.publicKey || null,
-        encPrivateKey,
-        encMnemonic,
-        createdAt:    Date.now(),
-      }
-    }
+    wallets: { [chain]: {
+      address: walletData.address, publicKey: walletData.publicKey || null,
+      encPrivateKey, encMnemonic, createdAt: Date.now(),
+    } }
   }, { merge: true });
 }
-
 async function saveTokens(uid, chain, tokens) {
-  await updateDoc(doc(db, 'users', uid), {
-    [`wallets.${chain}.tokens`]: tokens,
-  });
+  await updateDoc(doc(db, 'users', uid), { [`wallets.${chain}.tokens`]: tokens });
 }
-
-async function loadWallets(uid) {
+async function loadUserDoc(uid) {
   const snap = await getDoc(doc(db, 'users', uid));
-  return snap.exists() ? (snap.data().wallets || {}) : {};
+  return snap.exists() ? snap.data() : {};
 }
-
 async function deleteWallet(uid, chain) {
   await updateDoc(doc(db, 'users', uid), { [`wallets.${chain}`]: deleteField() });
 }
+async function setAuthCheck(uid, password) {
+  const check = await encryptData('FXCRYPT_UNLOCK_OK', password);
+  await setDoc(doc(db, 'users', uid), { walletAuth: { check } }, { merge: true });
+}
 
-// ─── UI helpers ───────────────────────────────────────────────────────────────
-
-function show(id)  { const e = document.getElementById(id); if (e) e.style.display = ''; }
-function hide(id)  { const e = document.getElementById(id); if (e) e.style.display = 'none'; }
-function only(ids, activeId) { ids.forEach(id => id === activeId ? show(id) : hide(id)); }
-
-function truncAddr(a) {
-  return a && a.length > 16 ? a.slice(0, 8) + '…' + a.slice(-6) : (a || '');
+// ─── Formatting ───────────────────────────────────────────────────────────────
+function fmtUsd(n) {
+  if (n == null || isNaN(n)) return '$0.00';
+  if (n > 0 && n < 0.01) return '<$0.01';
+  return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function fmtAmount(n) {
+  if (n == null || isNaN(n)) return '0';
+  if (n === 0) return '0';
+  if (n >= 1000) return n.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  if (n >= 1)    return Number(n.toFixed(4)).toString();
+  return Number(n.toPrecision(4)).toString();
+}
+function truncAddr(a) { return a && a.length > 16 ? a.slice(0, 6) + '…' + a.slice(-4) : (a || ''); }
+function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function timeAgo(ts) {
+  if (!ts) return '';
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return Math.floor(s / 60) + 'm ago';
+  if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+  return Math.floor(s / 86400) + 'd ago';
 }
 
 function toast(msg, type = 'info') {
@@ -486,548 +503,583 @@ function toast(msg, type = 'info') {
   requestAnimationFrame(() => t.classList.add('show'));
   setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 350); }, 3000);
 }
+const $ = id => document.getElementById(id);
+function showModal(id) { const m = $(id); if (m) m.style.display = 'flex'; }
+function hideModal(id) { const m = $(id); if (m) m.style.display = 'none'; }
 
 // ─── State ────────────────────────────────────────────────────────────────────
-
 let currentUser = null;
-let wallets     = {};
-let revealChain = null;
-let revealType  = null;
-let sendChain   = null;
-let sendType    = 'native'; // 'native' | 'token'
+let userDoc     = {};
+let wallets     = {};       // { chain: { address, encPrivateKey, encMnemonic, tokens } }
+let sessionPwd  = null;     // master password held in memory for the session
+let assets      = [];       // aggregated portfolio rows
+let filterChain = 'all';
+let ctx         = {};       // transient modal context
 
-// ─── Panel ID sets ────────────────────────────────────────────────────────────
+// ─── Session unlock ─────────────────────────────────────────────────────────
+function hasAnyWallet() { return Object.keys(wallets).length > 0; }
+function isProtected()  { return !!userDoc.walletAuth?.check || hasAnyWallet(); }
 
-const TON_IDS   = ['tonLoading',   'tonNoWallet',   'tonCreateForm',   'tonImportForm',   'tonWallet'];
-const BASE_IDS  = ['baseLoading',  'baseNoWallet',  'baseCreateForm',  'baseImportForm',  'baseWallet'];
-const BSC_IDS   = ['bscLoading',   'bscNoWallet',   'bscCreateForm',   'bscImportForm',   'bscWallet'];
-const ETH_IDS   = ['ethLoading',   'ethNoWallet',   'ethCreateForm',   'ethImportForm',   'ethWallet'];
-const MATIC_IDS = ['maticLoading', 'maticNoWallet', 'maticCreateForm', 'maticImportForm', 'maticWallet'];
-const SOL_IDS   = ['solLoading',   'solNoWallet',   'solCreateForm',   'solImportForm',   'solWallet'];
-
-// ─── Render helpers ───────────────────────────────────────────────────────────
-
-function _renderChain(chain, ids, balanceFn) {
-  const data = wallets[chain] || null;
-  if (!data) { only(ids, `${chain}NoWallet`); return; }
-  const el = document.getElementById(`${chain}Address`);
-  el.textContent = truncAddr(data.address);
-  el.title       = data.address;
-  document.getElementById(`${chain}Balance`).textContent = '—';
-  only(ids, `${chain}Wallet`);
-  balanceFn(data.address);
-  // Render ERC-20 token list for EVM chains
-  if (CHAIN_CFG[chain]) renderTokenList(chain);
-}
-
-function renderTON()   { _renderChain('ton',   TON_IDS,   fetchTONBal); }
-function renderBase()  { _renderChain('base',  BASE_IDS,  fetchBaseBal); }
-function renderBsc()   { _renderChain('bsc',   BSC_IDS,   fetchBscBal); }
-function renderEth()   { _renderChain('eth',   ETH_IDS,   fetchEthBal); }
-function renderMatic() { _renderChain('matic', MATIC_IDS, fetchMaticBal); }
-function renderSol()   { _renderChain('sol',   SOL_IDS,   fetchSolBal); }
-
-async function fetchTONBal(address) {
-  document.getElementById('tonBalance').textContent = '...';
-  document.getElementById('tonBalance').textContent = await getTONBalance(address);
-}
-async function fetchBaseBal(address) {
-  document.getElementById('baseBalance').textContent = '...';
-  document.getElementById('baseBalance').textContent = await getBaseBalance(address);
-}
-async function fetchBscBal(address) {
-  document.getElementById('bscBalance').textContent = '...';
-  document.getElementById('bscBalance').textContent = await getBscBalance(address);
-}
-async function fetchEthBal(address) {
-  document.getElementById('ethBalance').textContent = '...';
-  document.getElementById('ethBalance').textContent = await getEthBalance(address);
-}
-async function fetchMaticBal(address) {
-  document.getElementById('maticBalance').textContent = '...';
-  document.getElementById('maticBalance').textContent = await getMaticBalance(address);
-}
-async function fetchSolBal(address) {
-  document.getElementById('solBalance').textContent = '...';
-  document.getElementById('solBalance').textContent = await getSolBalance(address);
-}
-
-// ─── Token list renderer (EVM chains only) ────────────────────────────────────
-
-async function renderTokenList(chain) {
-  const cfg       = CHAIN_CFG[chain];
-  if (!cfg) return;
-  const container = document.getElementById(`${chain}TokenList`);
-  if (!container) return;
-  const data   = wallets[chain];
-  const tokens = data?.tokens || [];
-  const addr   = data?.address;
-  if (!addr) { container.innerHTML = ''; return; }
-
-  if (tokens.length === 0) {
-    container.innerHTML = '<p class="wlt-token-empty">No tokens added yet.</p>';
-    return;
+async function verifyPassword(password) {
+  const check = userDoc.walletAuth?.check;
+  if (check) {
+    try { return (await decryptData(check, password)) === 'FXCRYPT_UNLOCK_OK'; }
+    catch { return false; }
   }
-
-  container.innerHTML = '<p class="wlt-token-loading">Fetching token balances…</p>';
-
-  const rows = await Promise.all(tokens.map(async (tok, idx) => {
-    let balStr = '—';
-    try {
-      const raw = await getEvmTokenBalance(addr, tok.address, cfg.rpcs);
-      if (raw !== null) {
-        const dec = tok.decimals ?? 18;
-        balStr = (Number(raw) / Math.pow(10, dec)).toFixed(4);
-      }
-    } catch {}
-    return `
-      <div class="wlt-token-row">
-        <div class="wlt-token-info">
-          <span class="wlt-token-sym">${escHtml(tok.symbol)}</span>
-          <span class="wlt-token-bal">${balStr}</span>
-        </div>
-        <div class="wlt-token-actions">
-          <button class="wlt-pill wlt-pill-send"
-            onclick="window._wltSendToken('${chain}', ${idx})">Send</button>
-          <button class="wlt-pill wlt-pill-danger"
-            onclick="window._wltRemoveToken('${chain}', ${idx})" title="Remove">✕</button>
-        </div>
-      </div>`;
-  }));
-
-  container.innerHTML = rows.join('');
+  // Legacy wallets without an auth check: validate against the first wallet's key.
+  const chains = Object.keys(wallets);
+  if (chains.length) {
+    try { await decryptData(wallets[chains[0]].encPrivateKey, password); }
+    catch { return false; }
+  }
+  await setAuthCheck(currentUser.uid, password); // adopt this password going forward
+  userDoc.walletAuth = { check: (await loadUserDoc(currentUser.uid)).walletAuth?.check };
+  return true;
 }
 
-function escHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+// ─── Lock screen ──────────────────────────────────────────────────────────────
+function renderLockScreen() {
+  const create = !isProtected();
+  $('wltApp').style.display  = 'none';
+  $('wltLock').style.display = 'flex';
+  $('wltLockTitle').textContent = create ? 'Create Wallet Password' : 'Wallet Locked';
+  $('wltLockSub').textContent   = create
+    ? 'Set a password to encrypt your wallets. You will need it to unlock and to send funds.'
+    : 'Enter your password to unlock your wallets.';
+  $('wltLockConfirm').style.display = create ? '' : 'none';
+  $('wltUnlockBtn').textContent = create ? 'Create & Unlock' : 'Unlock';
+  $('wltLockPwd').value = '';
+  $('wltLockConfirm').value = '';
+  setTimeout(() => $('wltLockPwd').focus(), 80);
 }
 
-// Global helpers called by inline onclick in renderTokenList rows
-window._wltSendToken = function(chain, tokIdx) {
-  const tok = wallets[chain]?.tokens?.[tokIdx];
-  if (!tok) return;
-  openSend(chain, 'token', tok);
-};
-
-window._wltRemoveToken = async function(chain, tokIdx) {
-  if (!confirm('Remove this token from your list?')) return;
-  const tokens = [...(wallets[chain]?.tokens || [])];
-  tokens.splice(tokIdx, 1);
-  try {
-    await saveTokens(currentUser.uid, chain, tokens);
-    wallets[chain].tokens = tokens;
-    renderTokenList(chain);
-    toast('Token removed', 'info');
-  } catch (e) { toast(e.message || 'Failed to remove token', 'error'); }
-};
-
-// ─── Generic chain setup factory ──────────────────────────────────────────────
-
-function setupChain(chain, ids, createFn, importFn) {
-  const C = chain.toUpperCase();
-
-  document.getElementById(`${chain}CreateBtn`).onclick = () => only(ids, `${chain}CreateForm`);
-  document.getElementById(`${chain}ImportBtn`).onclick = () => only(ids, `${chain}ImportForm`);
-  document.getElementById(`${chain}CancelCreate`).onclick = () => only(ids, `${chain}NoWallet`);
-  document.getElementById(`${chain}CancelImport`).onclick = () => only(ids, `${chain}NoWallet`);
-
-  document.getElementById(`${chain}DoCreate`).onclick = async () => {
-    const pwd = document.getElementById(`${chain}CreatePwd`).value;
-    const cfm = document.getElementById(`${chain}CreatePwdConfirm`).value;
+function setupLockScreen() {
+  const submit = async () => {
+    const create = !isProtected();
+    const pwd = $('wltLockPwd').value;
     if (pwd.length < 6) return toast('Password must be at least 6 characters', 'error');
-    if (pwd !== cfm)    return toast('Passwords do not match', 'error');
-    const btn = document.getElementById(`${chain}DoCreate`);
-    btn.disabled = true; btn.textContent = 'Generating…';
+    if (create && pwd !== $('wltLockConfirm').value) return toast('Passwords do not match', 'error');
+    const btn = $('wltUnlockBtn');
+    btn.disabled = true; btn.textContent = 'Unlocking…';
     try {
-      const wd = await Promise.resolve(createFn());
-      await saveWallet(currentUser.uid, chain, wd, pwd);
-      wallets[chain] = (await loadWallets(currentUser.uid))[chain];
-      renderAll();
-      toast(`${C} wallet created!`, 'success');
-      if (wd.mnemonic) showMnemonicModal(wd.mnemonic);
-    } catch (e) { toast(e.message, 'error'); }
-    finally {
-      btn.disabled = false; btn.textContent = 'Generate Wallet';
-      document.getElementById(`${chain}CreatePwd`).value = '';
-      document.getElementById(`${chain}CreatePwdConfirm`).value = '';
-    }
+      if (create) await setAuthCheck(currentUser.uid, pwd);
+      else if (!(await verifyPassword(pwd))) { toast('Wrong password', 'error'); return; }
+      userDoc = await loadUserDoc(currentUser.uid);
+      sessionPwd = pwd;
+      enterApp();
+    } catch (e) { toast(e.message || 'Unlock failed', 'error'); }
+    finally { btn.disabled = false; btn.textContent = isProtected() ? 'Unlock' : 'Create & Unlock'; }
   };
+  $('wltUnlockBtn').onclick = submit;
+  $('wltLockPwd').addEventListener('keydown', e => { if (e.key === 'Enter' && $('wltLockConfirm').style.display === 'none') submit(); });
+  $('wltLockConfirm').addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
+}
 
-  document.getElementById(`${chain}DoImport`).onclick = async () => {
-    const input = document.getElementById(`${chain}ImportInput`).value;
-    const pwd   = document.getElementById(`${chain}ImportPwd`).value;
-    if (!input.trim())  return toast('Enter mnemonic or private key', 'error');
-    if (pwd.length < 6) return toast('Password must be at least 6 characters', 'error');
-    const btn = document.getElementById(`${chain}DoImport`);
-    btn.disabled = true; btn.textContent = 'Importing…';
-    try {
-      const wd = await Promise.resolve(importFn(input));
-      await saveWallet(currentUser.uid, chain, wd, pwd);
-      wallets[chain] = (await loadWallets(currentUser.uid))[chain];
-      renderAll();
-      toast(`${C} wallet imported!`, 'success');
-    } catch (e) { toast(e.message, 'error'); }
-    finally {
-      btn.disabled = false; btn.textContent = 'Import';
-      document.getElementById(`${chain}ImportInput`).value = '';
-      document.getElementById(`${chain}ImportPwd`).value   = '';
-    }
-  };
+function lockWallet() {
+  sessionPwd = null;
+  renderLockScreen();
+}
 
-  document.getElementById(`${chain}CopyAddr`).onclick = () => {
-    navigator.clipboard.writeText(wallets[chain]?.address || '').then(() => toast('Address copied!', 'success'));
-  };
+// ─── Enter app + portfolio ────────────────────────────────────────────────────
+function enterApp() {
+  $('wltLock').style.display = 'none';
+  $('wltApp').style.display  = '';
+  renderNetworkFilter();
+  refreshPortfolio();
+}
 
-  const refreshFn = { ton: fetchTONBal, base: fetchBaseBal, bsc: fetchBscBal, eth: fetchEthBal, matic: fetchMaticBal, sol: fetchSolBal }[chain];
-  document.getElementById(`${chain}Refresh`).onclick = () => wallets[chain] && refreshFn(wallets[chain].address);
-  document.getElementById(`${chain}ShowKey`).onclick  = () => openReveal(chain, 'key');
-
-  const mnemonicBtn = document.getElementById(`${chain}ShowMnemonic`);
-  if (mnemonicBtn) mnemonicBtn.onclick = () => openReveal(chain, 'mnemonic');
-
-  document.getElementById(`${chain}Remove`).onclick = async () => {
-    if (!confirm(`Remove ${C} wallet? Make sure you have a backup.`)) return;
-    await deleteWallet(currentUser.uid, chain);
-    wallets[chain] = null;
-    renderAll();
-    toast(`${C} wallet removed`, 'info');
-  };
-
-  // Send / Receive
-  const sendBtn = document.getElementById(`${chain}Send`);
-  if (sendBtn) sendBtn.onclick = () => wallets[chain] && openSend(chain, 'native');
-
-  const receiveBtn = document.getElementById(`${chain}Receive`);
-  if (receiveBtn) receiveBtn.onclick = () => wallets[chain] && openReceive(chain);
-
-  // Add-token form (EVM chains only)
-  const addTokenBtn = document.getElementById(`${chain}AddToken`);
-  if (addTokenBtn) {
-    addTokenBtn.onclick = () => {
-      const form = document.getElementById(`${chain}TokenAddForm`);
-      if (form) form.style.display = form.style.display === 'none' ? '' : 'none';
-    };
+function renderNetworkFilter() {
+  const wrap = $('wltNetFilter');
+  const chips = [`<button class="wlt-chip ${filterChain === 'all' ? 'active' : ''}" data-net="all">All</button>`];
+  for (const c of CHAIN_ORDER) {
+    if (!wallets[c]) continue;
+    const cfg = CHAINS[c];
+    chips.push(`<button class="wlt-chip ${filterChain === c ? 'active' : ''}" data-net="${c}">
+      <span class="wlt-chip-dot" style="background:${cfg.color}"></span>${cfg.name}</button>`);
   }
-
-  const tokenConfirmBtn = document.getElementById(`${chain}TokenAddConfirm`);
-  if (tokenConfirmBtn) {
-    tokenConfirmBtn.onclick = async () => {
-      const addr = document.getElementById(`${chain}TokenContract`)?.value?.trim();
-      if (!addr || !/^0x[0-9a-fA-F]{40}$/.test(addr)) {
-        return toast('Enter a valid ERC-20 contract address (0x…)', 'error');
-      }
-      tokenConfirmBtn.disabled = true; tokenConfirmBtn.textContent = 'Adding…';
-      try {
-        const cfg    = CHAIN_CFG[chain];
-        const meta   = await getEvmTokenMeta(addr, cfg.rpcs);
-        const tokens = [...(wallets[chain]?.tokens || [])];
-        if (tokens.some(t => t.address.toLowerCase() === addr.toLowerCase())) {
-          toast('Token already in list', 'info');
-          return;
-        }
-        tokens.push({ address: addr, symbol: meta.symbol, decimals: meta.decimals });
-        await saveTokens(currentUser.uid, chain, tokens);
-        wallets[chain].tokens = tokens;
-        document.getElementById(`${chain}TokenContract`).value = '';
-        document.getElementById(`${chain}TokenAddForm`).style.display = 'none';
-        renderTokenList(chain);
-        toast(`${meta.symbol} added!`, 'success');
-      } catch (e) { toast(e.message || 'Failed to add token', 'error'); }
-      finally { tokenConfirmBtn.disabled = false; tokenConfirmBtn.textContent = 'Add Token'; }
-    };
-  }
-
-  const tokenCancelBtn = document.getElementById(`${chain}TokenAddCancel`);
-  if (tokenCancelBtn) {
-    tokenCancelBtn.onclick = () => {
-      const form = document.getElementById(`${chain}TokenAddForm`);
-      if (form) form.style.display = 'none';
-      const inp = document.getElementById(`${chain}TokenContract`);
-      if (inp) inp.value = '';
-    };
-  }
-}
-
-function renderAll() {
-  renderTON();
-  renderBase();
-  renderBsc();
-  renderEth();
-  renderMatic();
-  renderSol();
-}
-
-// ─── Reveal modal ─────────────────────────────────────────────────────────────
-
-function openReveal(chain, type) {
-  const data = wallets[chain];
-  if (!data) return;
-  if (type === 'mnemonic' && !data.encMnemonic) return toast('No mnemonic stored for this wallet', 'info');
-  revealChain = chain;
-  revealType  = type;
-  const label = type === 'key' ? 'Private Key' : 'Mnemonic Phrase';
-  document.getElementById('revealTitle').textContent = `${label} — ${chain.toUpperCase()}`;
-  document.getElementById('revealPwd').value    = '';
-  document.getElementById('revealResult').style.display = 'none';
-  document.getElementById('revealContent').textContent  = '';
-  document.getElementById('revealModal').style.display  = 'flex';
-}
-
-function setupRevealModal() {
-  document.getElementById('revealClose').onclick = () => {
-    document.getElementById('revealModal').style.display = 'none';
-    document.getElementById('revealPwd').value = '';
-    document.getElementById('revealResult').style.display = 'none';
-  };
-
-  document.getElementById('revealConfirm').onclick = async () => {
-    const pwd = document.getElementById('revealPwd').value;
-    if (!pwd) return toast('Enter your wallet password', 'error');
-    const btn = document.getElementById('revealConfirm');
-    btn.disabled = true; btn.textContent = 'Decrypting…';
-    try {
-      const data   = wallets[revealChain];
-      const encObj = revealType === 'mnemonic' ? data.encMnemonic : data.encPrivateKey;
-      const plain  = await decryptData(encObj, pwd);
-      document.getElementById('revealContent').textContent   = plain;
-      document.getElementById('revealResult').style.display  = '';
-    } catch { toast('Wrong password', 'error'); }
-    finally { btn.disabled = false; btn.textContent = 'Reveal'; }
-  };
-
-  document.getElementById('revealCopy').onclick = () => {
-    navigator.clipboard.writeText(document.getElementById('revealContent').textContent)
-      .then(() => toast('Copied!', 'success'));
-  };
-}
-
-// ─── Send modal ───────────────────────────────────────────────────────────────
-
-function openSend(chain, type = 'native', tok = null) {
-  sendChain = chain;
-  sendType  = type;
-  const isEvm = !!CHAIN_CFG[chain];
-  const sym   = chain === 'ton' ? 'TON' : chain === 'sol' ? 'SOL' : CHAIN_CFG[chain]?.symbol || '';
-
-  document.getElementById('sendModalTitle').textContent = `Send — ${chain.toUpperCase()}`;
-  document.getElementById('sendSymbol').textContent     = tok ? tok.symbol : sym;
-  document.getElementById('sendTo').value     = '';
-  document.getElementById('sendAmount').value = '';
-  document.getElementById('sendPwd').value    = '';
-  document.getElementById('sendStatus').style.display = 'none';
-  document.getElementById('sendStatus').textContent   = '';
-
-  const typeRow     = document.getElementById('sendTypeRow');
-  const contractRow = document.getElementById('sendContractRow');
-  if (isEvm) {
-    typeRow.style.display = '';
-    document.getElementById('sendTypeNative').classList.toggle('active', type !== 'token');
-    document.getElementById('sendTypeToken').classList.toggle('active', type === 'token');
-    contractRow.style.display = type === 'token' ? '' : 'none';
-    if (tok) document.getElementById('sendContract').value = tok.address;
-  } else {
-    typeRow.style.display     = 'none';
-    contractRow.style.display = 'none';
-  }
-
-  document.getElementById('sendModal').style.display = 'flex';
-}
-
-function setupSendModal() {
-  document.getElementById('sendClose').onclick = () => {
-    document.getElementById('sendModal').style.display = 'none';
-  };
-
-  document.getElementById('sendTypeNative').onclick = () => {
-    sendType = 'native';
-    document.getElementById('sendTypeNative').classList.add('active');
-    document.getElementById('sendTypeToken').classList.remove('active');
-    document.getElementById('sendContractRow').style.display = 'none';
-    document.getElementById('sendSymbol').textContent = CHAIN_CFG[sendChain]?.symbol || '';
-  };
-
-  document.getElementById('sendTypeToken').onclick = () => {
-    sendType = 'token';
-    document.getElementById('sendTypeToken').classList.add('active');
-    document.getElementById('sendTypeNative').classList.remove('active');
-    document.getElementById('sendContractRow').style.display = '';
-    document.getElementById('sendSymbol').textContent = 'TOKEN';
-  };
-
-  document.getElementById('sendConfirm').onclick = async () => {
-    const to     = document.getElementById('sendTo').value.trim();
-    const amount = document.getElementById('sendAmount').value.trim();
-    const pwd    = document.getElementById('sendPwd').value;
-    const status = document.getElementById('sendStatus');
-
-    if (!to)                                        return toast('Enter recipient address', 'error');
-    if (!amount || isNaN(+amount) || +amount <= 0)  return toast('Enter a valid amount', 'error');
-    if (!pwd)                                        return toast('Enter your wallet password', 'error');
-
-    const btn = document.getElementById('sendConfirm');
-    btn.disabled = true; btn.textContent = 'Sending…';
-    status.style.display = '';
-    status.className     = 'wlt-send-status';
-    status.textContent   = 'Decrypting key…';
-
-    try {
-      const data    = wallets[sendChain];
-      const privKey = await decryptData(data.encPrivateKey, pwd);
-
-      status.textContent = 'Broadcasting transaction…';
-      let txHash = '';
-
-      if (sendChain === 'sol') {
-        txHash = await sendSolNative(to, +amount, privKey);
-      } else if (sendChain === 'ton') {
-        await sendTONNative(to, +amount, privKey);
-        txHash = '(submitted)';
-      } else if (sendType === 'token') {
-        const contract = document.getElementById('sendContract').value.trim();
-        if (!contract || !/^0x[0-9a-fA-F]{40}$/.test(contract)) {
-          throw new Error('Enter a valid token contract address (0x…)');
-        }
-        const storedTok = (data.tokens || []).find(t => t.address.toLowerCase() === contract.toLowerCase());
-        const decimals  = storedTok?.decimals ?? (await getEvmTokenMeta(contract, CHAIN_CFG[sendChain].rpcs)).decimals;
-        const tx = await sendEvmToken(sendChain, contract, to, +amount, decimals, privKey);
-        txHash = tx.hash;
-      } else {
-        const tx = await sendEvmNative(sendChain, to, +amount, privKey);
-        txHash = tx.hash;
-      }
-
-      status.className = 'wlt-send-status wlt-send-ok';
-      const explorerBase = CHAIN_CFG[sendChain]?.explorer;
-      if (explorerBase && txHash && txHash !== '(submitted)') {
-        status.innerHTML = `Sent! <a href="${explorerBase}${txHash}" target="_blank" rel="noopener" class="wlt-tx-link">View Tx ↗</a>`;
-      } else {
-        status.textContent = 'Transaction submitted successfully.';
-      }
-
-      // Refresh balance after a short delay
-      setTimeout(() => {
-        const addr    = wallets[sendChain]?.address;
-        const fetchFn = { ton: fetchTONBal, base: fetchBaseBal, bsc: fetchBscBal, eth: fetchEthBal, matic: fetchMaticBal, sol: fetchSolBal }[sendChain];
-        if (addr && fetchFn) fetchFn(addr);
-      }, 5000);
-    } catch (e) {
-      status.className   = 'wlt-send-status wlt-send-err';
-      status.textContent = e.message || 'Transaction failed';
-    } finally {
-      btn.disabled = false; btn.textContent = 'Send';
-    }
-  };
-}
-
-// ─── Receive modal ────────────────────────────────────────────────────────────
-
-function openReceive(chain) {
-  const addr = wallets[chain]?.address;
-  if (!addr) return;
-  document.getElementById('receiveModalTitle').textContent = `Receive — ${chain.toUpperCase()}`;
-  document.getElementById('receiveAddress').textContent    = addr;
-  document.getElementById('receiveModal').style.display    = 'flex';
-}
-
-function setupReceiveModal() {
-  document.getElementById('receiveClose').onclick = () => {
-    document.getElementById('receiveModal').style.display = 'none';
-  };
-  document.getElementById('receiveCopyAddr').onclick = () => {
-    const addr = document.getElementById('receiveAddress').textContent;
-    navigator.clipboard.writeText(addr).then(() => toast('Address copied!', 'success'));
-  };
-}
-
-// ─── Mnemonic backup modal ────────────────────────────────────────────────────
-
-function showMnemonicModal(mnemonic) {
-  const words = mnemonic.split(' ');
-  document.getElementById('mnemonicGrid').innerHTML = words.map((w, i) =>
-    `<div class="wlt-mn-word"><span class="wlt-mn-num">${i + 1}</span><span class="wlt-mn-text">${w}</span></div>`
-  ).join('');
-  document.getElementById('mnemonicModal').style.display = 'flex';
-}
-
-function setupMnemonicModal() {
-  document.getElementById('mnemonicDone').onclick = () => {
-    document.getElementById('mnemonicModal').style.display = 'none';
-  };
-}
-
-// ─── Chain tabs ───────────────────────────────────────────────────────────────
-
-const ALL_PANELS = ['ton', 'base', 'bsc', 'eth', 'matic', 'sol'];
-
-function setupChainTabs() {
-  document.querySelectorAll('.wlt-chain-tab').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.wlt-chain-tab').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      const chain = btn.dataset.chain;
-      ALL_PANELS.forEach(c => {
-        const p = document.getElementById(`panel${c.charAt(0).toUpperCase() + c.slice(1)}`);
-        if (p) p.style.display = c === chain ? '' : 'none';
-      });
-    });
+  wrap.innerHTML = chips.join('');
+  wrap.querySelectorAll('.wlt-chip').forEach(b => b.onclick = () => {
+    filterChain = b.dataset.net;
+    renderNetworkFilter();
+    renderAssets();
   });
 }
 
-// ─── Menu setup ───────────────────────────────────────────────────────────────
+async function refreshPortfolio() {
+  if (!hasAnyWallet()) {
+    $('wltTotal').textContent = '$0.00';
+    $('wltAssets').innerHTML = `<div class="wlt-empty">
+        <div class="wlt-empty-icon">👛</div>
+        <p class="wlt-empty-title">No wallets yet</p>
+        <p class="wlt-empty-text">Add a wallet on any network to start managing your crypto.</p>
+        <button class="wlt-btn wlt-btn-primary" id="wltEmptyAdd">+ Add Wallet</button>
+      </div>`;
+    $('wltEmptyAdd').onclick = openManage;
+    return;
+  }
 
-function setupMenu() {
-  const menuBtn  = document.getElementById('menuBtn');
-  const sideMenu = document.getElementById('sideMenu');
-  const closeBtn = document.getElementById('closeMenuBtn');
-  const overlay  = document.getElementById('menuOverlay');
-  const open  = e => { e.stopPropagation(); sideMenu.classList.add('open'); overlay?.classList.add('visible'); };
-  const close = ()  => { sideMenu.classList.remove('open'); overlay?.classList.remove('visible'); };
-  menuBtn.addEventListener('click',      open);
-  menuBtn.addEventListener('touchstart', open);
-  closeBtn.addEventListener('click',      close);
-  closeBtn.addEventListener('touchstart', close);
-  overlay?.addEventListener('click',      close);
-  document.getElementById('sideLogoutBtn').onclick = () =>
-    signOut(auth).then(() => { window.location.href = 'login.html'; });
+  $('wltAssets').innerHTML = `<div class="wlt-loading"><span class="wlt-spinner"></span>Loading balances…</div>`;
+  $('wltTotal').textContent = '…';
+
+  // 1) Build the asset skeleton from wallets
+  const rows = [];
+  for (const chain of CHAIN_ORDER) {
+    const w = wallets[chain];
+    if (!w) continue;
+    const cfg = CHAINS[chain];
+    rows.push({ chain, kind: 'native', symbol: cfg.symbol, name: cfg.network, address: w.address,
+                contract: null, decimals: 18, color: cfg.color, logo: cfg.logo, cgId: cfg.cgId });
+    for (const tok of (w.tokens || [])) {
+      rows.push({ chain, kind: 'token', symbol: tok.symbol, name: cfg.name + ' token', address: w.address,
+                  contract: tok.address, decimals: tok.decimals ?? 18, color: cfg.color,
+                  logo: tokenLogoUrl(chain, tok.address) });
+    }
+  }
+
+  // 2) Fetch prices + balances in parallel
+  const nativePrices = await fetchNativePrices();
+  const tokenPriceJobs = {};
+  for (const chain of CHAIN_ORDER) {
+    const cfg = CHAINS[chain];
+    const w = wallets[chain];
+    if (!cfg.evm || !w?.tokens?.length) continue;
+    tokenPriceJobs[chain] = fetchTokenPrices(cfg.cgPlatform, w.tokens.map(t => t.address));
+  }
+  const tokenPrices = {};
+  for (const chain in tokenPriceJobs) tokenPrices[chain] = await tokenPriceJobs[chain];
+
+  await Promise.all(rows.map(async row => {
+    const cfg = CHAINS[row.chain];
+    if (row.kind === 'native') {
+      let bal = null;
+      if (row.chain === 'ton') bal = await getTonBalanceNum(row.address);
+      else if (row.chain === 'sol') bal = await getSolBalanceNum(row.address);
+      else bal = await getEvmBalanceNum(row.address, cfg.rpcs);
+      row.balance = bal;
+      row.price   = nativePrices[cfg.cgId] ?? null;
+    } else {
+      const raw = await getEvmTokenBalanceRaw(row.address, row.contract, cfg.rpcs);
+      row.balance = raw == null ? null : Number(raw) / Math.pow(10, row.decimals);
+      row.price   = tokenPrices[row.chain]?.[row.contract.toLowerCase()] ?? null;
+    }
+    row.value = (row.balance != null && row.price != null) ? row.balance * row.price : 0;
+  }));
+
+  assets = rows;
+  const total = rows.reduce((s, r) => s + (r.value || 0), 0);
+  $('wltTotal').textContent = fmtUsd(total);
+  renderAssets();
 }
 
-// ─── Init ─────────────────────────────────────────────────────────────────────
+function renderAssets() {
+  const list = filterChain === 'all' ? assets : assets.filter(a => a.chain === filterChain);
+  if (!list.length) { $('wltAssets').innerHTML = `<p class="wlt-token-empty">No assets on this network.</p>`; return; }
+  // sort by USD value desc, natives with zero value still shown
+  const sorted = [...list].sort((a, b) => (b.value || 0) - (a.value || 0));
+  $('wltAssets').innerHTML = sorted.map((a, i) => {
+    const idx = assets.indexOf(a);
+    const letter = (a.symbol || '?')[0].toUpperCase();
+    return `<button class="wlt-asset" data-idx="${idx}">
+      <div class="wlt-asset-logo" style="--lc:${a.color}">
+        <span class="wlt-asset-letter">${letter}</span>
+        ${a.logo ? `<img src="${a.logo}" alt="" loading="lazy" onload="this.parentNode.classList.add('has-img')" onerror="this.remove()">` : ''}
+        <span class="wlt-asset-net" style="background:${a.color}"></span>
+      </div>
+      <div class="wlt-asset-main">
+        <span class="wlt-asset-sym">${escHtml(a.symbol)}</span>
+        <span class="wlt-asset-name">${escHtml(CHAINS[a.chain].name)}${a.kind === 'token' ? ' · Token' : ''}</span>
+      </div>
+      <div class="wlt-asset-vals">
+        <span class="wlt-asset-usd">${a.value ? fmtUsd(a.value) : '—'}</span>
+        <span class="wlt-asset-bal">${a.balance == null ? '—' : fmtAmount(a.balance)} ${escHtml(a.symbol)}</span>
+      </div>
+    </button>`;
+  }).join('');
+  $('wltAssets').querySelectorAll('.wlt-asset').forEach(b =>
+    b.onclick = () => openAsset(parseInt(b.dataset.idx, 10)));
+}
 
+// ─── Asset detail ─────────────────────────────────────────────────────────────
+function openAsset(idx) {
+  const a = assets[idx];
+  if (!a) return;
+  ctx.asset = a;
+  const cfg = CHAINS[a.chain];
+  $('wltAssetSym').textContent  = a.symbol;
+  $('wltAssetNet').textContent  = cfg.network + (a.kind === 'token' ? ' · Token' : '');
+  $('wltAssetBal').textContent  = (a.balance == null ? '—' : fmtAmount(a.balance)) + ' ' + a.symbol;
+  $('wltAssetUsd').textContent  = a.value ? fmtUsd(a.value) : '—';
+  const logo = $('wltAssetLogo');
+  logo.style.setProperty('--lc', a.color);
+  logo.innerHTML = `<span class="wlt-asset-letter">${(a.symbol || '?')[0].toUpperCase()}</span>` +
+    (a.logo ? `<img src="${a.logo}" alt="" onload="this.parentNode.classList.add('has-img')" onerror="this.remove()">` : '');
+  // native-only secret reveal buttons
+  $('wltAssetSecrets').style.display = a.kind === 'native' ? '' : 'none';
+  $('wltAssetMnemonic').style.display = wallets[a.chain]?.encMnemonic ? '' : 'none';
+  $('wltAssetExplorer').href = cfg.explorer + a.address;
+  $('wltTxList').innerHTML = `<div class="wlt-loading"><span class="wlt-spinner"></span>Loading activity…</div>`;
+  showModal('wltAssetModal');
+  loadTxHistory(a);
+}
+
+async function loadTxHistory(a) {
+  const cfg = CHAINS[a.chain];
+  let txs = null;
+  if (a.chain === 'ton') txs = await getTonTxs(a.address);
+  else if (a.chain === 'sol') txs = await getSolTxs(a.address);
+  else txs = await getEvmTxs(a.chain, a.address);
+
+  if (ctx.asset !== a) return; // user switched assets
+  if (txs == null) {
+    $('wltTxList').innerHTML = `<p class="wlt-token-empty">Activity not available for ${cfg.name}. <a class="wlt-tx-link" href="${cfg.explorer}${a.address}" target="_blank" rel="noopener">View on explorer ↗</a></p>`;
+    return;
+  }
+  if (!txs.length) { $('wltTxList').innerHTML = `<p class="wlt-token-empty">No recent activity.</p>`; return; }
+  $('wltTxList').innerHTML = txs.map(tx => {
+    const dir = tx.incoming == null ? 'tx' : (tx.incoming ? 'in' : 'out');
+    const sign = tx.incoming == null ? '' : (tx.incoming ? '+' : '−');
+    const amt = tx.value == null ? 'View tx' : `${sign}${fmtAmount(tx.value)} ${tx.symbol}`;
+    const icon = tx.incoming == null ? '↪' : (tx.incoming ? '↓' : '↑');
+    return `<a class="wlt-tx" href="${cfg.txExplorer}${tx.hash}" target="_blank" rel="noopener">
+        <span class="wlt-tx-icon wlt-tx-${dir}">${icon}</span>
+        <span class="wlt-tx-main">
+          <span class="wlt-tx-type">${tx.incoming == null ? 'Transaction' : (tx.incoming ? 'Received' : 'Sent')}${tx.err ? ' (failed)' : ''}</span>
+          <span class="wlt-tx-time">${timeAgo(tx.ts)}${tx.counterparty ? ' · ' + truncAddr(tx.counterparty) : ''}</span>
+        </span>
+        <span class="wlt-tx-amt wlt-tx-${dir}">${amt}</span>
+      </a>`;
+  }).join('');
+}
+
+// ─── Send ───────────────────────────────────────────────────────────────────
+function openSend(asset) {
+  const a = asset || ctx.asset;
+  if (!a) return;
+  ctx.send = a;
+  const cfg = CHAINS[a.chain];
+  $('wltSendTitle').textContent = `Send ${a.symbol}`;
+  $('wltSendNet').textContent   = cfg.network;
+  $('wltSendSymbol').textContent = a.symbol;
+  $('wltSendAvail').textContent = a.balance == null ? '' : `Available: ${fmtAmount(a.balance)} ${a.symbol}`;
+  $('wltSendTo').value = '';
+  $('wltSendAmount').value = '';
+  $('wltSendStatus').style.display = 'none';
+  showModal('wltSendModal');
+}
+
+function setupSend() {
+  $('wltSendMax').onclick = () => { const a = ctx.send; if (a?.balance != null) $('wltSendAmount').value = a.balance; };
+  $('wltSendClose').onclick = () => hideModal('wltSendModal');
+  $('wltSendConfirm').onclick = async () => {
+    const a = ctx.send; if (!a) return;
+    const to = $('wltSendTo').value.trim();
+    const amount = $('wltSendAmount').value.trim();
+    const status = $('wltSendStatus');
+    if (!to) return toast('Enter recipient address', 'error');
+    if (!amount || isNaN(+amount) || +amount <= 0) return toast('Enter a valid amount', 'error');
+
+    const btn = $('wltSendConfirm');
+    btn.disabled = true; btn.textContent = 'Sending…';
+    status.style.display = ''; status.className = 'wlt-send-status'; status.textContent = 'Decrypting key…';
+    try {
+      let privKey;
+      try { privKey = await decryptData(wallets[a.chain].encPrivateKey, sessionPwd); }
+      catch { throw new Error('Could not unlock this wallet with your session password.'); }
+
+      status.textContent = 'Broadcasting transaction…';
+      let txHash = '';
+      if (a.chain === 'sol') txHash = await sendSolNative(to, +amount, privKey);
+      else if (a.chain === 'ton') { await sendTONNative(to, +amount, privKey); txHash = ''; }
+      else if (a.kind === 'token') {
+        const tx = await sendEvmToken(a.chain, a.contract, to, +amount, a.decimals, privKey);
+        txHash = tx.hash;
+      } else {
+        const tx = await sendEvmNative(a.chain, to, +amount, privKey);
+        txHash = tx.hash;
+      }
+      status.className = 'wlt-send-status wlt-send-ok';
+      const exp = CHAINS[a.chain].txExplorer;
+      if (txHash) status.innerHTML = `Sent! <a href="${exp}${txHash}" target="_blank" rel="noopener" class="wlt-tx-link">View Tx ↗</a>`;
+      else status.textContent = 'Transaction submitted successfully.';
+      setTimeout(refreshPortfolio, 5000);
+    } catch (e) {
+      status.className = 'wlt-send-status wlt-send-err';
+      status.textContent = e.message || 'Transaction failed';
+    } finally { btn.disabled = false; btn.textContent = 'Send'; }
+  };
+}
+
+// ─── Receive (with QR) ─────────────────────────────────────────────────────────
+let _qrLib = null;
+async function renderQR(text) {
+  const box = $('wltQR');
+  box.innerHTML = '';
+  try {
+    if (!_qrLib) _qrLib = (await import('https://esm.sh/qrcode@1.5.4')).default;
+    const url = await _qrLib.toDataURL(text, { margin: 1, width: 220, color: { dark: '#0B0E11', light: '#ffffff' } });
+    const img = new Image(); img.src = url; img.alt = 'Address QR'; img.width = 220; img.height = 220;
+    box.appendChild(img);
+  } catch {
+    box.innerHTML = '<p class="wlt-token-empty">QR unavailable</p>';
+  }
+}
+function openReceive(asset) {
+  const a = asset || ctx.asset;
+  if (!a) return;
+  const cfg = CHAINS[a.chain];
+  $('wltRecvTitle').textContent = `Receive ${cfg.symbol}`;
+  $('wltRecvSub').textContent   = `Only send ${cfg.name} network assets to this address.`;
+  $('wltRecvAddr').textContent  = wallets[a.chain].address;
+  ctx.recvAddr = wallets[a.chain].address;
+  showModal('wltReceiveModal');
+  renderQR(wallets[a.chain].address);
+}
+function setupReceive() {
+  $('wltRecvClose').onclick = () => hideModal('wltReceiveModal');
+  $('wltRecvCopy').onclick = () => navigator.clipboard.writeText(ctx.recvAddr || '').then(() => toast('Address copied!', 'success'));
+}
+
+// ─── Reveal secret ─────────────────────────────────────────────────────────────
+function openReveal(chain, type) {
+  ctx.revealChain = chain; ctx.revealType = type;
+  $('wltRevealTitle').textContent = (type === 'key' ? 'Private Key' : 'Recovery Phrase') + ' — ' + CHAINS[chain].name;
+  $('wltRevealResult').style.display = 'none';
+  $('wltRevealContent').textContent = '';
+  $('wltRevealPwd').value = '';
+  showModal('wltRevealModal');
+}
+function setupReveal() {
+  $('wltRevealClose').onclick = () => hideModal('wltRevealModal');
+  $('wltRevealConfirm').onclick = async () => {
+    const pwd = $('wltRevealPwd').value;
+    if (!pwd) return toast('Enter your wallet password', 'error');
+    const btn = $('wltRevealConfirm'); btn.disabled = true; btn.textContent = 'Decrypting…';
+    try {
+      const w = wallets[ctx.revealChain];
+      const encObj = ctx.revealType === 'mnemonic' ? w.encMnemonic : w.encPrivateKey;
+      const plain = await decryptData(encObj, pwd);
+      $('wltRevealContent').textContent = plain;
+      $('wltRevealResult').style.display = '';
+    } catch { toast('Wrong password', 'error'); }
+    finally { btn.disabled = false; btn.textContent = 'Reveal'; }
+  };
+  $('wltRevealCopy').onclick = () => navigator.clipboard.writeText($('wltRevealContent').textContent).then(() => toast('Copied!', 'success'));
+}
+
+// ─── Mnemonic backup (after create) ─────────────────────────────────────────────
+function showMnemonicModal(mnemonic) {
+  $('wltMnGrid').innerHTML = mnemonic.split(' ').map((w, i) =>
+    `<div class="wlt-mn-word"><span class="wlt-mn-num">${i + 1}</span><span class="wlt-mn-text">${escHtml(w)}</span></div>`).join('');
+  showModal('wltMnemonicModal');
+}
+
+// ─── Manage wallets (add / import / remove / tokens) ─────────────────────────────
+function openManage() {
+  renderManage();
+  showModal('wltManageModal');
+}
+function renderManage() {
+  $('wltManageList').innerHTML = CHAIN_ORDER.map(chain => {
+    const cfg = CHAINS[chain];
+    const w = wallets[chain];
+    const exists = !!w;
+    return `<div class="wlt-manage-row">
+      <div class="wlt-manage-head">
+        <div class="wlt-asset-logo wlt-logo-sm" style="--lc:${cfg.color}">
+          <span class="wlt-asset-letter">${cfg.symbol[0]}</span>
+          <img src="${cfg.logo}" alt="" onload="this.parentNode.classList.add('has-img')" onerror="this.remove()">
+        </div>
+        <div class="wlt-manage-info">
+          <span class="wlt-asset-sym">${cfg.name}</span>
+          <span class="wlt-asset-name">${exists ? truncAddr(w.address) : cfg.network}</span>
+        </div>
+        ${exists ? `<span class="wlt-badge-ok">Active</span>` : ''}
+      </div>
+      <div class="wlt-manage-actions">
+        ${exists ? `
+          ${cfg.evm ? `<button class="wlt-mini" data-act="addtoken" data-chain="${chain}">+ Token</button>` : ''}
+          <button class="wlt-mini" data-act="key" data-chain="${chain}">Private Key</button>
+          ${w.encMnemonic ? `<button class="wlt-mini" data-act="mnemonic" data-chain="${chain}">Phrase</button>` : ''}
+          <button class="wlt-mini wlt-mini-danger" data-act="remove" data-chain="${chain}">Remove</button>
+        ` : `
+          <button class="wlt-mini wlt-mini-primary" data-act="create" data-chain="${chain}">Create</button>
+          <button class="wlt-mini" data-act="import" data-chain="${chain}">Import</button>
+        `}
+      </div>
+    </div>`;
+  }).join('');
+  $('wltManageList').querySelectorAll('[data-act]').forEach(b =>
+    b.onclick = () => manageAction(b.dataset.act, b.dataset.chain));
+}
+
+async function manageAction(act, chain) {
+  if (act === 'create')    return openForm(chain, 'create');
+  if (act === 'import')    return openForm(chain, 'import');
+  if (act === 'addtoken')  return openAddToken(chain);
+  if (act === 'key')       return openReveal(chain, 'key');
+  if (act === 'mnemonic')  return openReveal(chain, 'mnemonic');
+  if (act === 'remove') {
+    if (!confirm(`Remove ${CHAINS[chain].name} wallet? Make sure you have your private key or recovery phrase backed up — this cannot be undone.`)) return;
+    try {
+      await deleteWallet(currentUser.uid, chain);
+      delete wallets[chain];
+      renderManage(); renderNetworkFilter(); refreshPortfolio();
+      toast(`${CHAINS[chain].name} wallet removed`, 'info');
+    } catch (e) { toast(e.message || 'Failed to remove', 'error'); }
+  }
+}
+
+// ─── Create / Import form ───────────────────────────────────────────────────────
+const CREATORS  = { ton: createTONWallet, base: createEvmWallet, bsc: createEvmWallet, eth: createEvmWallet, matic: createEvmWallet, sol: createSolWallet };
+const IMPORTERS = { ton: importTONWallet, base: importEvmWallet, bsc: importEvmWallet, eth: importEvmWallet, matic: importEvmWallet, sol: importSolWallet };
+const IMPORT_HINT = {
+  ton: '24-word mnemonic or 64-char hex private key',
+  sol: 'Base58 key, 128-char hex, or [1,2,…] JSON array',
+  evm: '12/24-word recovery phrase or 0x… private key',
+};
+
+function openForm(chain, mode) {
+  ctx.formChain = chain; ctx.formMode = mode;
+  const cfg = CHAINS[chain];
+  $('wltFormTitle').textContent = (mode === 'create' ? 'Create ' : 'Import ') + cfg.name + ' Wallet';
+  const isImport = mode === 'import';
+  $('wltFormImportWrap').style.display = isImport ? '' : 'none';
+  $('wltFormInput').value = '';
+  $('wltFormInput').placeholder = isImport ? (IMPORT_HINT[cfg.evm ? 'evm' : chain]) : '';
+  $('wltFormHint').textContent = isImport
+    ? 'Your key is encrypted with your wallet password before being stored.'
+    : 'A new wallet will be generated and encrypted with your session password.' + (cfg.evm || chain === 'ton' ? ' Back up the recovery phrase shown next.' : '');
+  $('wltFormSubmit').textContent = mode === 'create' ? 'Generate Wallet' : 'Import Wallet';
+  showModal('wltFormModal');
+}
+
+function setupForm() {
+  $('wltFormClose').onclick = () => hideModal('wltFormModal');
+  $('wltFormSubmit').onclick = async () => {
+    const chain = ctx.formChain, mode = ctx.formMode;
+    if (!sessionPwd) return toast('Session locked — please unlock again', 'error');
+    const btn = $('wltFormSubmit'); btn.disabled = true; btn.textContent = mode === 'create' ? 'Generating…' : 'Importing…';
+    try {
+      let wd;
+      if (mode === 'create') wd = await Promise.resolve(CREATORS[chain]());
+      else {
+        const input = $('wltFormInput').value;
+        if (!input.trim()) throw new Error('Enter your recovery phrase or private key');
+        wd = await Promise.resolve(IMPORTERS[chain](input));
+      }
+      await saveWallet(currentUser.uid, chain, wd, sessionPwd);
+      const fresh = await loadUserDoc(currentUser.uid);
+      wallets = fresh.wallets || {};
+      hideModal('wltFormModal');
+      renderManage(); renderNetworkFilter(); refreshPortfolio();
+      toast(`${CHAINS[chain].name} wallet ${mode === 'create' ? 'created' : 'imported'}!`, 'success');
+      if (mode === 'create' && wd.mnemonic) showMnemonicModal(wd.mnemonic);
+    } catch (e) { toast(e.message || 'Failed', 'error'); }
+    finally { btn.disabled = false; btn.textContent = mode === 'create' ? 'Generate Wallet' : 'Import Wallet'; }
+  };
+}
+
+// ─── Add token ──────────────────────────────────────────────────────────────────
+function openAddToken(chain) {
+  ctx.tokenChain = chain;
+  $('wltTokenTitle').textContent = `Add ${CHAINS[chain].name} Token`;
+  $('wltTokenInput').value = '';
+  showModal('wltTokenModal');
+}
+function setupAddToken() {
+  $('wltTokenClose').onclick = () => hideModal('wltTokenModal');
+  $('wltTokenConfirm').onclick = async () => {
+    const chain = ctx.tokenChain;
+    const addr = $('wltTokenInput').value.trim();
+    if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) return toast('Enter a valid contract address (0x…)', 'error');
+    const btn = $('wltTokenConfirm'); btn.disabled = true; btn.textContent = 'Adding…';
+    try {
+      const cfg = CHAINS[chain];
+      const tokens = [...(wallets[chain]?.tokens || [])];
+      if (tokens.some(t => t.address.toLowerCase() === addr.toLowerCase())) { toast('Token already added', 'info'); return; }
+      const meta = await getEvmTokenMeta(addr, cfg.rpcs);
+      tokens.push({ address: addr, symbol: meta.symbol, decimals: meta.decimals });
+      await saveTokens(currentUser.uid, chain, tokens);
+      wallets[chain].tokens = tokens;
+      hideModal('wltTokenModal');
+      renderManage(); refreshPortfolio();
+      toast(`${meta.symbol} added!`, 'success');
+    } catch (e) { toast(e.message || 'Failed to add token', 'error'); }
+    finally { btn.disabled = false; btn.textContent = 'Add Token'; }
+  };
+}
+
+// ─── Wire static UI ─────────────────────────────────────────────────────────────
+function setupStaticUI() {
+  $('wltSendBtn').onclick = () => {
+    // Send from portfolio: default to first asset with balance, else first native
+    const a = assets.find(x => x.balance) || assets[0];
+    if (!a) return toast('Add a wallet first', 'info');
+    openSend(a);
+  };
+  $('wltReceiveBtn').onclick = () => {
+    const a = assets[0];
+    if (!a) return toast('Add a wallet first', 'info');
+    openReceive(a);
+  };
+  $('wltManageBtn').onclick = openManage;
+  $('wltLockBtn').onclick   = lockWallet;
+  $('wltRefreshBtn').onclick = refreshPortfolio;
+  $('wltManageClose').onclick = () => hideModal('wltManageModal');
+  $('wltManageAdd') && ($('wltManageAdd').onclick = renderManage);
+
+  // Asset modal
+  $('wltAssetClose').onclick = () => hideModal('wltAssetModal');
+  $('wltAssetSend').onclick    = () => { hideModal('wltAssetModal'); openSend(ctx.asset); };
+  $('wltAssetReceive').onclick = () => { hideModal('wltAssetModal'); openReceive(ctx.asset); };
+  $('wltAssetKey').onclick      = () => openReveal(ctx.asset.chain, 'key');
+  $('wltAssetMnemonic').onclick = () => openReveal(ctx.asset.chain, 'mnemonic');
+
+  $('wltMnDone').onclick = () => hideModal('wltMnemonicModal');
+
+  // Close modal on backdrop click
+  document.querySelectorAll('.wlt-modal-bg').forEach(bg =>
+    bg.addEventListener('click', e => { if (e.target === bg) bg.style.display = 'none'; }));
+}
+
+// ─── Side menu ────────────────────────────────────────────────────────────────
+function setupMenu() {
+  const menuBtn = $('menuBtn'), sideMenu = $('sideMenu'), closeBtn = $('closeMenuBtn'), overlay = $('menuOverlay');
+  const open  = e => { e.stopPropagation(); sideMenu.classList.add('open'); overlay?.classList.add('visible'); };
+  const close = ()  => { sideMenu.classList.remove('open'); overlay?.classList.remove('visible'); };
+  menuBtn.addEventListener('click', open);
+  menuBtn.addEventListener('touchstart', open);
+  closeBtn.addEventListener('click', close);
+  closeBtn.addEventListener('touchstart', close);
+  overlay?.addEventListener('click', close);
+  $('sideLogoutBtn').onclick = () => signOut(auth).then(() => { window.location.href = 'login.html'; });
+}
+
+// ─── Init ──────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   initTonWeb();
-  setupChainTabs();
-
-  setupChain('ton',   TON_IDS,   createTONWallet,   importTONWallet);
-  setupChain('base',  BASE_IDS,  createBaseWallet,  importBaseWallet);
-  setupChain('bsc',   BSC_IDS,   createBscWallet,   importBscWallet);
-  setupChain('eth',   ETH_IDS,   createEthWallet,   importEthWallet);
-  setupChain('matic', MATIC_IDS, createMaticWallet, importMaticWallet);
-  setupChain('sol',   SOL_IDS,   createSolWallet,   importSolWallet);
-
-  setupRevealModal();
-  setupMnemonicModal();
-  setupSendModal();
-  setupReceiveModal();
+  setupLockScreen();
+  setupSend();
+  setupReceive();
+  setupReveal();
+  setupForm();
+  setupAddToken();
+  setupStaticUI();
   setupMenu();
 
   requireAuth(async user => {
     currentUser = user;
-
     let initials = user.email[0].toUpperCase();
-    document.getElementById('profileInitials').textContent = initials;
+    $('profileInitials').textContent = initials;
     try {
-      const snap = await getDoc(doc(db, 'users', user.uid));
-      if (snap.exists()) {
-        const d = snap.data();
-        if (d.firstName || d.lastName) {
-          const f = d.firstName ? d.firstName[0] : '';
-          const l = d.lastName  ? d.lastName[0]  : '';
-          document.getElementById('profileInitials').textContent = (f + l).toUpperCase();
-        }
+      userDoc = await loadUserDoc(user.uid);
+      wallets = userDoc.wallets || {};
+      if (userDoc.firstName || userDoc.lastName) {
+        const f = userDoc.firstName ? userDoc.firstName[0] : '';
+        const l = userDoc.lastName ? userDoc.lastName[0] : '';
+        $('profileInitials').textContent = (f + l).toUpperCase();
       }
-    } catch {}
-
-    try { wallets = await loadWallets(user.uid); } catch { wallets = {}; }
-    renderAll();
+    } catch { userDoc = {}; wallets = {}; }
+    renderLockScreen();
   });
 });

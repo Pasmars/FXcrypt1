@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#00c853" />
     <link rel="manifest" href="manifest.json" />
-    <title>FXcrypt - PnL Calculator for Forex and Crypto</title>
+    <title>PnL Calculator - FXcrypt</title>
     <link rel="stylesheet" href="style.css?v=15" />
     <link
       href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap"
@@ -51,7 +51,7 @@
         <li><a href="tracker.html">Token Tracker</a></li>
         <li><a href="bot.html">DEX Bot</a></li>
         <li><a href="agent.html">AI Agent</a></li>
-                <li><a href="wallet.html">Wallet</a></li>
+        <li><a href="wallet.html">Wallet</a></li>
         <li>
           <button id="sideLogoutBtn" class="side-logout-btn">Logout</button>
         </li>
@@ -68,10 +68,10 @@
         <a href="tracker.html" class="tab">Tracker</a>
         <a href="bot.html"     class="tab">DEX Bot</a>
         <a href="agent.html"   class="tab">AI Agent</a>
-                <a href="wallet.html"  class="tab">Wallet</a>
+        <a href="wallet.html"  class="tab">Wallet</a>
       </nav>
       <form id="pnlForm" novalidate>
-        <label for="tradeType">Trade Type:</label>
+        <label for="tradeType">Trade Type</label>
         <select id="tradeType" style="margin-bottom: 16px;">
           <option value="crypto">Crypto</option>
           <option value="forex">Forex</option>
@@ -83,15 +83,15 @@
             <div class="pos-btn short" data-pos="short">Short</div>
           </div>
           <input type="hidden" id="positionType" value="long" />
-          <label for="leverage">Leverage:</label>
+          <label for="leverage">Leverage</label>
           <input type="number" id="leverage" step="any" value="20" min="1" />
         </div>
 
-        <label for="entryPrice">Entry Price:</label>
+        <label for="entryPrice">Entry Price</label>
         <input type="number" id="entryPrice" step="any" required />
-        <label for="exitPrice">Exit Price:</label>
+        <label for="exitPrice">Exit Price</label>
         <input type="number" id="exitPrice" step="any" required />
-        <label for="capital" id="capitalLabel">Margin (Capital):</label>
+        <label for="capital" id="capitalLabel">Margin (Capital)</label>
         <input type="number" id="capital" step="any" />
         <div id="forexOptions" style="display: none" class="forex-options">
           <div class="position-toggles" id="forexPositionToggles">
@@ -100,33 +100,33 @@
           </div>
           <input type="hidden" id="forexDirection" value="buy" />
           <div class="form-row">
-            <label for="fxVolume">Volume (Lots):</label>
+            <label for="fxVolume">Volume (Lots)</label>
             <input type="number" id="fxVolume" step="any" value="1" min="0.01" />
           </div>
           <div class="form-row">
-            <label for="contractSize">Contract Size:</label>
+            <label for="contractSize">Contract Size</label>
             <input type="number" id="contractSize" step="any" value="100000" />
           </div>
           <div class="form-row">
-            <label for="fxLeverage">Leverage:</label>
+            <label for="fxLeverage">Leverage</label>
             <input type="number" id="fxLeverage" step="any" value="500" min="1" />
           </div>
           <div class="form-row">
-            <label for="exchangeRate">Acct. Currency Rate:</label>
+            <label for="exchangeRate">Acct. Currency Rate</label>
             <input type="number" id="exchangeRate" step="any" value="1" />
           </div>
           <div class="converter-section">
             <h3>Currency Converter</h3>
             <div class="form-row">
-              <label for="fromCurrency">From:</label>
+              <label for="fromCurrency">From</label>
               <select id="fromCurrency"></select>
             </div>
             <div class="form-row">
-              <label for="toCurrency">To:</label>
+              <label for="toCurrency">To</label>
               <select id="toCurrency"></select>
             </div>
             <div class="form-row">
-              <label for="convertAmount">Amount:</label>
+              <label for="convertAmount">Amount</label>
               <input
                 type="number"
                 id="convertAmount"
@@ -144,6 +144,7 @@
       </form>
       <div id="result"></div>
     </div>
+    <div id="menuOverlay" class="menu-overlay"></div>
     <script type="module">
       import { requireAuth } from './authObserver.js';
       import { signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
@@ -201,7 +202,6 @@
         }
       });
     </script>
-    <div id="menuOverlay" class="menu-overlay"></div>
     <script src="script.js?v=2"></script>
     <script>
       if ("serviceWorker" in navigator) {
