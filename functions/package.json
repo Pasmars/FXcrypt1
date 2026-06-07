@@ -4,12 +4,27 @@
   "scripts": {
     "serve": "firebase emulators:start --only functions",
     "deploy": "firebase deploy --only functions",
-    "logs": "firebase functions:log"
+    "logs": "firebase functions:log",
+    "test": "jest --coverage",
+    "test:watch": "jest --watch"
   },
   "engines": {
     "node": "22"
   },
   "main": "index.js",
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": [
+      "**/__tests__/**/*.test.js"
+    ],
+    "coverageReporters": [
+      "text",
+      "lcov"
+    ]
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  },
   "dependencies": {
     "@noble/hashes": "^1.4.0",
     "@solana/web3.js": "^1.87.6",
