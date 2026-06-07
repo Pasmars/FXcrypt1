@@ -7,6 +7,10 @@ functions/node_modules/
 deploy_output.txt
 login_output.txt
 
+# Test coverage output
+coverage/
+functions/coverage/
+
 # OS
 .DS_Store
 Thumbs.db
