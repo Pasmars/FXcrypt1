@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { useAuth } from '@/lib/auth';
 import { NAV_ITEMS } from '@/lib/nav';
 import { Logo } from './Logo';
+import { InstallAppButton } from './InstallAppButton';
 import { IconMenu, IconClose, IconLogout, IconUser } from './icons';
 
 function Avatar({ initials, size = 38 }: { initials: string; size?: number }) {
@@ -79,6 +80,9 @@ export function AppShell({ children, title }: { children: ReactNode; title?: str
         <div className="mt-4 flex-1">
           <NavLinks />
         </div>
+        <div className="px-1 py-2">
+          <InstallAppButton context="desktop" />
+        </div>
         <div className="mt-2 border-t border-border pt-3">
           <Link href="/profile" className="flex items-center gap-3 rounded-xl px-3 py-2.5 hover:bg-surface-3/60">
             <Avatar initials={initials} size={34} />
@@ -129,7 +133,10 @@ export function AppShell({ children, title }: { children: ReactNode; title?: str
             <div className="mt-4">
               <NavLinks onNavigate={() => setDrawer(false)} />
             </div>
-            <div className="mt-4 border-t border-border pt-3">
+            <div className="mt-3">
+              <InstallAppButton context="mobile" onDone={() => setDrawer(false)} />
+            </div>
+            <div className="mt-3 border-t border-border pt-3">
               <Link href="/profile" className="flex items-center gap-3 rounded-xl px-3 py-2.5 hover:bg-surface-3/60">
                 <Avatar initials={initials} size={34} />
                 <span className="truncate text-sm">{user.email}</span>

@@ -217,8 +217,29 @@ export default function WalletPage() {
                 })}
               </div>
 
-              <div className="mt-3 mb-2 flex items-center justify-between"><h3 className="text-sm font-bold">Assets</h3>{loadingAssets && <span className="text-xs text-muted">Updating…</span>}</div>
+              <div className="mt-3 mb-2 flex items-center justify-between">
+                <h3 className="text-sm font-bold">Assets</h3>
+                {loadingAssets && (
+                  <span className="flex items-center gap-1.5 text-xs text-muted">
+                    <span className="h-3 w-3 animate-spin rounded-full border border-border-2 border-t-brand" />
+                    Updating balances…
+                  </span>
+                )}
+              </div>
               <div className="flex flex-col gap-2">
+                {loadingAssets && !assets.length && [1, 2, 3].map((i) => (
+                  <div key={i} className="card flex animate-pulse items-center gap-3 p-3.5">
+                    <div className="h-10 w-10 rounded-full bg-surface-3" />
+                    <div className="flex-1 space-y-2">
+                      <div className="h-3 w-24 rounded bg-surface-3" />
+                      <div className="h-2 w-16 rounded bg-surface-3" />
+                    </div>
+                    <div className="space-y-2 text-right">
+                      <div className="ml-auto h-3 w-16 rounded bg-surface-3" />
+                      <div className="ml-auto h-2 w-12 rounded bg-surface-3" />
+                    </div>
+                  </div>
+                ))}
                 {shownAssets.map((a) => (
                   <button key={a.id} onClick={() => setDetail(a)} className="card flex items-center gap-3 p-3.5 text-left transition hover:border-border-2">
                     <CoinIcon symbol={a.symbol} chain={a.chain} logo={a.logo} />
@@ -232,7 +253,7 @@ export default function WalletPage() {
                     </div>
                   </button>
                 ))}
-                {shownAssets.length === 0 && <p className="py-6 text-center text-sm text-muted">No assets on this network.</p>}
+                {!loadingAssets && shownAssets.length === 0 && <p className="py-6 text-center text-sm text-muted">No assets on this network.</p>}
               </div>
             </>
           ) : (
@@ -284,9 +305,9 @@ function LockScreen({ create, onUnlock }: { create: boolean; onUnlock: (pwd: str
 function Sheet({ title, onClose, children }: any) {
   return (
     <Portal>
-      <div className="fixed inset-0 z-[60] flex items-end justify-center sm:items-center" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="fixed inset-0 z-[60] flex items-end justify-center sm:items-center sm:p-4" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
         <div className="absolute inset-0 bg-black/70" />
-        <div className="relative max-h-[88vh] w-full max-w-md animate-slide-up overflow-y-auto rounded-t-2xl border border-border bg-surface p-5 sm:rounded-2xl">
+        <div className="relative max-h-[90dvh] w-full max-w-md animate-slide-up overflow-y-auto overscroll-contain rounded-t-2xl border border-border bg-surface p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] sm:max-h-[88vh] sm:rounded-2xl sm:pb-5">
           <div className="mb-4 flex items-center justify-between"><h3 className="font-bold">{title}</h3><button onClick={onClose} className="text-2xl leading-none text-muted hover:text-foreground">×</button></div>
           {children}
         </div>

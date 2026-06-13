@@ -893,7 +893,7 @@ exports.scanGems = fn.https.onCall(async (data, context) => {
   const maxAgeHours  = Math.max(1, Math.min(parseInt(data?.maxAgeHours) || 24, 168))
   const minScore     = Math.max(0, Math.min(parseInt(data?.minScore) || 40, 100))
 
-  const gems = await gemscanner.discoverGems(chains, { minLiquidity, maxAgeHours, minScore })
+  const gems = await gemscanner.discoverGems(chains, { minLiquidity, maxAgeHours, minScore, dextoolsKey: process.env.DEXTOOLS_API_KEY || null })
   return { gems, scannedAt: Date.now() }
 })
 
@@ -918,13 +918,20 @@ exports.processGemScanner = fn.pubsub
 
       if (!chatId || !tgToken) return
 
-      const chains = (settings.gemChains || ['bsc', 'sol']).filter(c => VALID_CHAINS.has(c))
+      const chains = (settings.gemChains || ['bsc', 'eth', 'sol', 'base']).filter(c => VALID_CHAINS.has(c))
       if (!chains.length) return
 
       const filters = {
         minLiquidity: settings.gemMinLiquidity || 5000,
         maxAgeHours:  settings.gemMaxAge       || 24,
         minScore:     settings.gemMinScore     || 60,
+        minVolume:    settings.gemMinVolume != null ? settings.gemMinVolume : 1000,
+        maxVolume:    settings.gemMaxVolume    || 0,
+        narrative:    settings.gemNarrative    || 'all',
+        minMarketCap: settings.gemMinMcap      || 0,
+        maxMarketCap: settings.gemMaxMcap      || 0,
+        sort:         settings.gemSort         || 'score',
+        dextoolsKey:  process.env.DEXTOOLS_API_KEY || null,
       }
 
       try {

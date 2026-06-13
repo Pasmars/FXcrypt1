@@ -13,7 +13,7 @@ const CHAIN_ID: Record<string, string> = { bsc: 'bsc', eth: 'ethereum', sol: 'so
 const change = (v: any) => {
   if (v == null) return { text: 'N/A', up: true };
   const n = parseFloat(v);
-  return { text: `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`, up: n >= 0 };
+  return { text: `${n >= 0 ? '▲' : '▼'} ${Math.abs(n).toFixed(2)}%`, up: n >= 0 };
 };
 const explorer = (c: string, a: string) =>
   c === 'bsc' ? `https://bscscan.com/token/${a}` : c === 'eth' ? `https://etherscan.io/token/${a}` : `https://solscan.io/token/${a}`;

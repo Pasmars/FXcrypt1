@@ -53,9 +53,9 @@ export function TxModal({ tx, onClose }: { tx: TxData | null; onClose: () => voi
   const activeStep = success ? tx.steps.length : error ? 2 : step;
 
   return createPortal(
-    <div className="fixed inset-0 z-[70] flex items-end justify-center sm:items-center" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className="fixed inset-0 z-[70] flex items-end justify-center sm:items-center sm:p-4" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="absolute inset-0 bg-black/70" />
-      <div className="relative w-full max-w-md animate-slide-up rounded-t-2xl border border-border bg-surface p-6 text-center sm:rounded-2xl">
+      <div className="relative max-h-[90dvh] w-full max-w-md animate-slide-up overflow-y-auto overscroll-contain rounded-t-2xl border border-border bg-surface p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] text-center sm:max-h-[88vh] sm:rounded-2xl sm:pb-6">
         <button onClick={onClose} className="absolute right-4 top-4 text-xl leading-none text-muted hover:text-foreground">×</button>
 
         {/* Icon */}
@@ -126,7 +126,6 @@ export function TxModal({ tx, onClose }: { tx: TxData | null; onClose: () => voi
           <button onClick={onClose} className="btn-ghost mt-4 w-full">Dismiss</button>
         )}
       </div>
-      <style jsx>{`@keyframes shrinkbar { from { width: 100%; } to { width: 0%; } }`}</style>
     </div>,
     document.body
   );

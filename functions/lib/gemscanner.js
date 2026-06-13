@@ -9,6 +9,8 @@ const DEXSCREENER_BOOSTED     = 'https://api.dexscreener.com/token-boosts/latest
 const DEXSCREENER_TOP_BOOSTED = 'https://api.dexscreener.com/token-boosts/top/v1'
 const DEXSCREENER_PAIRS       = 'https://api.dexscreener.com/latest/dex/tokens/'
 
+const DEXSCREENER_SEARCH = 'https://api.dexscreener.com/latest/dex/search?q='
+
 // Chain ID mappings for DexScreener
 const CHAIN_MAP = {
   bsc:  'bsc',
@@ -16,6 +18,42 @@ const CHAIN_MAP = {
   sol:  'solana',
   base: 'base',
   ton:  'ton',
+}
+
+// ── Narratives (meme/theme keyword buckets) ────────────────────────────────
+const NARRATIVES = {
+  dog:    ['dog','doge','shib','inu','puppy','wif','dogwif','floki','husky','corgi','akita','shiba','pup','woof','kabosu','samoyed','bonk','snoopy'],
+  cat:    ['cat','kitty','meow','neko','feline','popcat','mew','garfield','kitten','catto','tom','purr'],
+  frog:   ['frog','pepe','toad','ribbit','kek','kermit','croak','wojak','froge'],
+  duck:   ['duck','quack','mallard','daffy','duckie','ducky'],
+  bear:   ['bear','grizzly','teddy','bruno','pooh','bera','beruh','paddington'],
+  monkey: ['monkey','ape','kong','chimp','gorilla','banana','bonobo','mandrill','gmoon'],
+  fish:   ['fish','shark','whale','tuna','salmon','koi','dolphin','orca','fishy','nemo'],
+  ai:     ['ai','gpt','agent','neural','robot','llm','brain','intelligence','deepseek','grok','tao','fetch','autonomous','sentient','agentic'],
+}
+const NARRATIVE_SEARCH = {
+  dog:['doge','shib','inu','dog','wif','floki','bonk'], cat:['cat','popcat','kitty','meow','mew'],
+  frog:['pepe','frog','toad','kek'], duck:['duck','quack','donald'], bear:['bear','pooh','teddy','bera'],
+  monkey:['ape','monkey','kong','banana'], fish:['fish','shark','whale'], ai:['ai','agent','gpt','grok'],
+}
+const _narRe = {}
+function narrativeMatch(pair, key) {
+  const kws = NARRATIVES[key]
+  if (!kws) return true
+  if (!_narRe[key]) _narRe[key] = new RegExp('\\b(' + kws.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')', 'i')
+  return _narRe[key].test((pair.baseToken?.name || '') + ' ' + (pair.baseToken?.symbol || ''))
+}
+async function searchNarrativePairs(narrative, chainId) {
+  const terms = NARRATIVE_SEARCH[narrative] || [narrative]
+  const out = []
+  for (const term of terms) {
+    try {
+      const { data } = await axios.get(DEXSCREENER_SEARCH + encodeURIComponent(term), { timeout: HTTP_TIMEOUT })
+      if (Array.isArray(data?.pairs)) out.push(...data.pairs.filter(p => p.chainId === chainId))
+    } catch { /* continue */ }
+    await new Promise(r => setTimeout(r, 150))
+  }
+  return out
 }
 
 // ── Token scoring algorithm (0-100) ───────────────────────────────────────
@@ -193,6 +231,99 @@ async function fetchPairData(addresses, chainId) {
   return results
 }
 
+// ── GeckoTerminal (free, paginated — new + established/old pools) ──────────
+const GT_NET = { eth: 'eth', bsc: 'bsc', sol: 'solana', base: 'base', matic: 'polygon_pos', ton: 'ton' }
+function normalizeGtPool(pool, included, dsChainId, net) {
+  const a = pool.attributes || {}
+  const btId = pool.relationships?.base_token?.data?.id
+  const tok = btId ? included.find(x => x.id === btId) : null
+  const addr = btId ? btId.substring(btId.indexOf('_') + 1) : ''
+  const img = tok?.attributes?.image_url
+  const pc = a.price_change_percentage || {}
+  const tx = a.transactions || {}
+  return {
+    chainId: dsChainId,
+    baseToken: { address: addr, name: tok?.attributes?.name || (a.name || '').split(' / ')[0] || 'Unknown', symbol: tok?.attributes?.symbol || '' },
+    quoteToken: { symbol: (a.name || '').split(' / ')[1] || '' },
+    priceUsd: a.base_token_price_usd || 0,
+    priceNative: 0,
+    liquidity: { usd: parseFloat(a.reserve_in_usd || 0) },
+    volume: { h24: parseFloat(a.volume_usd?.h24 || 0) },
+    marketCap: parseFloat(a.market_cap_usd || a.fdv_usd || 0),
+    fdv: parseFloat(a.fdv_usd || 0),
+    priceChange: { m5: +(pc.m5 || 0), h1: +(pc.h1 || 0), h6: +(pc.h6 || 0), h24: +(pc.h24 || 0) },
+    txns: { h24: { buys: tx.h24?.buys || 0, sells: tx.h24?.sells || 0 }, h1: { buys: tx.h1?.buys || 0, sells: tx.h1?.sells || 0 } },
+    pairCreatedAt: a.pool_created_at ? Date.parse(a.pool_created_at) : null,
+    info: { imageUrl: img && !String(img).includes('missing') ? img : null },
+    pairAddress: a.address,
+    dexId: pool.relationships?.dex?.data?.id || 'geckoterminal',
+    url: `https://www.geckoterminal.com/${net}/pools/${a.address}`,
+  }
+}
+async function fetchGeckoTerminalPairs(chain) {
+  const net = GT_NET[chain]
+  if (!net) return []
+  const dsId = CHAIN_MAP[chain]
+  const out = []
+  const lists = [['new_pools', 2], ['pools', 2], ['trending_pools', 1]]
+  for (const [path, pages] of lists) {
+    for (let p = 1; p <= pages; p++) {
+      try {
+        const { data } = await axios.get(
+          `https://api.geckoterminal.com/api/v2/networks/${net}/${path}?include=base_token&page=${p}`,
+          { timeout: HTTP_TIMEOUT, headers: { accept: 'application/json' } }
+        )
+        const inc = data.included || []
+        for (const pool of (data.data || [])) out.push(normalizeGtPool(pool, inc, dsId, net))
+      } catch { break }
+      await new Promise(r => setTimeout(r, 260))
+    }
+  }
+  return out
+}
+
+// ── DexTools (optional — requires DEXTOOLS_API_KEY; paid/trial plan) ────────
+const DEXTOOLS_CHAIN = { eth: 'ether', bsc: 'bsc', sol: 'solana', base: 'base', matic: 'polygon' }
+function normalizeDexToolsRow(row, dsChainId) {
+  const mt = row.mainToken || row.token || {}
+  const m = row.metrics || {}
+  return {
+    chainId: dsChainId,
+    baseToken: { address: mt.address || row.address || '', name: mt.name || '', symbol: mt.symbol || '' },
+    quoteToken: { symbol: (row.sideToken?.symbol) || '' },
+    priceUsd: row.price || m.price || 0,
+    liquidity: { usd: parseFloat(m.liquidity || row.liquidity || 0) },
+    volume: { h24: parseFloat(m.volume24h || row.volume || 0) },
+    marketCap: parseFloat(m.mcap || m.fdv || 0),
+    fdv: parseFloat(m.fdv || 0),
+    priceChange: { m5: 0, h1: 0, h6: 0, h24: parseFloat(row.variation24h || m.priceChange24h || 0) },
+    txns: { h24: { buys: 0, sells: 0 } },
+    pairCreatedAt: row.creationTime ? Date.parse(row.creationTime) : null,
+    info: { imageUrl: mt.logo || null },
+    pairAddress: row.address || '',
+    dexId: row.exchange?.name || 'dextools',
+    url: '',
+  }
+}
+async function fetchDexToolsPairs(chain, key) {
+  const dtChain = DEXTOOLS_CHAIN[chain]
+  if (!dtChain || !key) return []
+  const dsId = CHAIN_MAP[chain]
+  const out = []
+  for (const ep of ['hotpools', 'gainers']) {
+    try {
+      const { data } = await axios.get(
+        `https://public-api.dextools.io/trial/v2/ranking/${dtChain}/${ep}`,
+        { timeout: HTTP_TIMEOUT, headers: { 'X-API-KEY': key, accept: 'application/json' } }
+      )
+      const rows = data?.data || data?.results || []
+      for (const row of (Array.isArray(rows) ? rows : [])) out.push(normalizeDexToolsRow(row, dsId))
+    } catch { /* key missing/invalid/rate-limited — skip */ }
+    await new Promise(r => setTimeout(r, 200))
+  }
+  return out
+}
+
 // ── Main gem discovery function ───────────────────────────────────────────
 async function discoverGems(chains, filters = {}) {
   const {
@@ -200,9 +331,16 @@ async function discoverGems(chains, filters = {}) {
     maxAgeHours  = 24,
     minScore     = 40,
     minVolume    = 1000,
+    maxVolume    = 0,
+    narrative    = 'all',
+    minMarketCap = 0,
+    maxMarketCap = 0,
+    sort         = 'score',
+    dextoolsKey  = null,
     limit: maxResults = 50,
   } = filters
 
+  const useNarrative = narrative && narrative !== 'all'
   const allGems = []
 
   for (const chain of chains) {
@@ -211,11 +349,14 @@ async function discoverGems(chains, filters = {}) {
 
     // Step 1: Discover trending/new token addresses
     const latestTokens = await fetchLatestTokens(chainId)
-    if (!latestTokens.length) continue
 
-    // Step 2: Get pair data for those tokens
+    // Step 2: Get pair data for those tokens (+ narrative search + GeckoTerminal + DexTools)
     const addresses = latestTokens.map(t => t.address)
-    const pairs     = await fetchPairData(addresses, chainId)
+    let pairs       = addresses.length ? await fetchPairData(addresses, chainId) : []
+    if (useNarrative) pairs = pairs.concat(await searchNarrativePairs(narrative, chainId))
+    pairs = pairs.concat(await fetchGeckoTerminalPairs(chain))
+    if (dextoolsKey) pairs = pairs.concat(await fetchDexToolsPairs(chain, dextoolsKey))
+    if (!pairs.length) continue
 
     // Step 3: Group pairs by token, keep best pair per token
     const bestPairByToken = new Map()
@@ -225,14 +366,24 @@ async function discoverGems(chains, filters = {}) {
 
       if (liq < minLiquidity) continue
 
-      // Check age
+      // Narrative match (by token name / symbol)
+      if (useNarrative && !narrativeMatch(pair, narrative)) continue
+
+      // Market cap range
+      const mcap = pair.marketCap || pair.fdv || 0
+      if (minMarketCap && mcap < minMarketCap) continue
+      if (maxMarketCap && mcap > maxMarketCap) continue
+
+      // Age — enforce the window only when the creation time is known
       if (pair.pairCreatedAt) {
         const ageH = (Date.now() - pair.pairCreatedAt) / (1000 * 60 * 60)
         if (ageH > maxAgeHours) continue
       }
 
-      // Check volume
-      if ((pair.volume?.h24 || 0) < minVolume) continue
+      // 24h volume range (supports low-volume gem hunting)
+      const vol = pair.volume?.h24 || 0
+      if (minVolume && vol < minVolume) continue
+      if (maxVolume && vol > maxVolume) continue
 
       const existing = bestPairByToken.get(addr)
       if (!existing || liq > (existing.liquidity?.usd || 0)) {
@@ -240,14 +391,15 @@ async function discoverGems(chains, filters = {}) {
       }
     }
 
-    // Step 4: Build candidate list for the safety filter
+    // Step 4: Build candidate list for the safety filter.
+    // Pre-score and keep only the highest-scoring 40 so the (expensive) safety
+    // checks aren't overwhelmed now that GeckoTerminal/DexTools widen the pool.
     const tokenMetaMap = new Map(latestTokens.map(t => [t.address.toLowerCase(), t]))
 
-    const candidates = Array.from(bestPairByToken.entries()).map(([addr, pair]) => ({
-      address: pair.baseToken?.address || addr,
-      pair,
-      meta:    tokenMetaMap.get(addr) || {},
-    }))
+    const candidates = Array.from(bestPairByToken.entries())
+      .map(([addr, pair]) => ({ address: pair.baseToken?.address || addr, pair, meta: tokenMetaMap.get(addr) || {} }))
+      .sort((a, b) => scoreToken(b.pair) - scoreToken(a.pair))
+      .slice(0, 40)
 
     // Step 5: Multi-layer safety filter — runs BEFORE scoring.
     // GoPlus Security + Honeypot.is (BSC) / RugCheck.xyz (SOL)
@@ -319,8 +471,11 @@ async function discoverGems(chains, filters = {}) {
     }
   }
 
-  // Sort by gem score descending
-  allGems.sort((a, b) => b.gemScore - a.gemScore)
+  // Sort by requested trend
+  if (sort === 'trending')      allGems.sort((a, b) => b.volume24h - a.volume24h)
+  else if (sort === 'new')      allGems.sort((a, b) => (a.ageHours ?? 1e9) - (b.ageHours ?? 1e9))
+  else if (sort === 'gainers')  allGems.sort((a, b) => b.priceChange24h - a.priceChange24h)
+  else                          allGems.sort((a, b) => b.gemScore - a.gemScore)
   return allGems.slice(0, maxResults)
 }
 

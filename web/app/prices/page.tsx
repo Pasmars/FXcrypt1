@@ -106,9 +106,9 @@ function CoinModal({ coinId, onClose }: { coinId: string; onClose: () => void })
 
   return (
     <Portal>
-    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-4">
       <div className="absolute inset-0 bg-black/70" onClick={onClose} />
-      <div className="relative max-h-[88vh] w-full max-w-lg animate-slide-up overflow-y-auto rounded-t-2xl border border-border bg-surface p-5 sm:rounded-2xl">
+      <div className="relative max-h-[90dvh] w-full max-w-lg animate-slide-up overflow-y-auto overscroll-contain rounded-t-2xl border border-border bg-surface p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] sm:max-h-[88vh] sm:rounded-2xl sm:pb-5">
         {loading ? (
           <div className="grid place-items-center gap-3 py-16 text-muted">
             <span className="h-7 w-7 animate-spin rounded-full border-2 border-border-2 border-t-brand" />
@@ -218,6 +218,7 @@ export default function PricesPage() {
   const [hasMore, setHasMore] = useState(true);
   const [search, setSearch] = useState('');
   const [searchMode, setSearchMode] = useState(false);
+  const [searching, setSearching] = useState(false);
   const [searchResults, setSearchResults] = useState<Coin[]>([]);
   const [searchLabel, setSearchLabel] = useState('');
   const [countdown, setCountdown] = useState(60);
@@ -275,13 +276,14 @@ export default function PricesPage() {
   };
 
   const runSearch = async (query: string) => {
-    if (!query.trim()) { setSearchMode(false); setSearchResults([]); setSearchLabel(''); return; }
+    if (!query.trim()) { setSearchMode(false); setSearching(false); setSearchResults([]); setSearchLabel(''); return; }
     setSearchMode(true);
     const q = query.toLowerCase();
     const local = coins.filter((c) => c.name.toLowerCase().includes(q) || c.symbol.toLowerCase().includes(q));
     if (local.length) { setSearchResults(local); setSearchLabel(`${local.length} result${local.length !== 1 ? 's' : ''} for "${query}"`); return; }
     setSearchLabel(`Searching for "${query}"…`);
     setSearchResults([]);
+    setSearching(true);
     try {
       const res = await fetch(`${CG_BASE}/search?query=${encodeURIComponent(query)}`);
       const data = await res.json();
@@ -293,6 +295,8 @@ export default function PricesPage() {
       setSearchLabel(`${md.length} result${md.length !== 1 ? 's' : ''} for "${query}"`);
     } catch {
       setSearchLabel('Search error');
+    } finally {
+      setSearching(false);
     }
   };
 
@@ -336,6 +340,11 @@ export default function PricesPage() {
           <div className="flex items-center gap-2 p-6 text-sm text-muted">
             <span className="h-5 w-5 animate-spin rounded-full border-2 border-border-2 border-t-brand" />
             Loading cryptocurrencies…
+          </div>
+        ) : searching ? (
+          <div className="flex items-center gap-2 p-6 text-sm text-muted">
+            <span className="h-5 w-5 animate-spin rounded-full border-2 border-border-2 border-t-brand" />
+            Searching CoinGecko…
           </div>
         ) : rows.length === 0 ? (
           <div className="p-8 text-center text-sm text-muted">No coins found.</div>

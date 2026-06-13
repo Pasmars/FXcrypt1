@@ -1,0 +1,10 @@
+# Never commit signing secrets
+android.keystore
+keystore-credentials.txt
+
+# Bubblewrap build output
+app-release-*.apk
+app-release-*.aab
+build/
+.gradle/
+*.idsig

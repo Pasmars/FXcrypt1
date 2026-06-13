@@ -31,6 +31,7 @@ export default function PnlCalculatorPage() {
   const [toCurrency, setToCurrency] = useState('EUR');
   const [convertAmount, setConvertAmount] = useState('');
   const [convertResult, setConvertResult] = useState<{ text: string; tone: string } | null>(null);
+  const [converting, setConverting] = useState(false);
 
   const [rows, setRows] = useState<Row[] | null>(null);
   const [error, setError] = useState('');
@@ -101,6 +102,8 @@ export default function PnlCalculatorPage() {
       setConvertResult({ text: 'Please enter a valid amount', tone: 'text-danger' });
       return;
     }
+    setConverting(true);
+    setConvertResult({ text: 'Fetching live exchange rate…', tone: 'text-muted' });
     try {
       const res = await fetch(`https://api.exchangerate-api.com/v4/latest/${fromCurrency}`);
       if (!res.ok) throw new Error('rate');
@@ -110,6 +113,8 @@ export default function PnlCalculatorPage() {
       setExchangeRate(rate.toFixed(6));
     } catch {
       setConvertResult({ text: 'Error fetching exchange rate. Using offline conversion.', tone: 'text-brand' });
+    } finally {
+      setConverting(false);
     }
   };
 
@@ -210,7 +215,7 @@ export default function PnlCalculatorPage() {
                   <Label htmlFor="amt">Amount</Label>
                   <Input id="amt" type="number" step="any" placeholder="Enter amount" value={convertAmount} onChange={(e) => setConvertAmount(e.target.value)} />
                 </div>
-                <Button type="button" variant="accent" className="mt-3 w-full" onClick={handleConvert}>Convert</Button>
+                <Button type="button" variant="accent" className="mt-3 w-full" loading={converting} onClick={handleConvert}>{converting ? 'Converting…' : 'Convert'}</Button>
                 {convertResult && <div className={`mt-3 rounded-lg bg-surface-3 p-2.5 text-center text-sm ${convertResult.tone}`}>{convertResult.text}</div>}
               </div>
             </div>

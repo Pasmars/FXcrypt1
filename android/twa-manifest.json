@@ -1,0 +1,57 @@
+{
+  "packageId": "app.web.fxcrypt",
+  "host": "fxcrypt-app.web.app",
+  "name": "FXcrypt",
+  "launcherName": "FXcrypt",
+  "display": "standalone",
+  "themeColor": "#0B0E11",
+  "themeColorDark": "#0B0E11",
+  "navigationColor": "#0B0E11",
+  "navigationColorDark": "#0B0E11",
+  "navigationDividerColor": "#0B0E11",
+  "navigationDividerColorDark": "#0B0E11",
+  "backgroundColor": "#0B0E11",
+  "enableNotifications": true,
+  "startUrl": "/",
+  "iconUrl": "https://fxcrypt-app.web.app/icons/icon-512.png",
+  "maskableIconUrl": "https://fxcrypt-app.web.app/icons/icon-512.png",
+  "splashScreenFadeOutDuration": 300,
+  "signingKey": {
+    "path": "./android.keystore",
+    "alias": "android"
+  },
+  "appVersionName": "1.0.0",
+  "appVersionCode": 3,
+  "shortcuts": [
+    {
+      "name": "Gem Scanner",
+      "shortName": "Gems",
+      "url": "https://fxcrypt-app.web.app/bot",
+      "chosenIconUrl": "https://fxcrypt-app.web.app/icons/icon-192.png"
+    },
+    {
+      "name": "Wallet",
+      "shortName": "Wallet",
+      "url": "https://fxcrypt-app.web.app/wallet",
+      "chosenIconUrl": "https://fxcrypt-app.web.app/icons/icon-192.png"
+    }
+  ],
+  "generatorApp": "bubblewrap-cli",
+  "webManifestUrl": "https://fxcrypt-app.web.app/manifest.json",
+  "fallbackType": "customtabs",
+  "features": {},
+  "alphaDependencies": {
+    "enabled": false
+  },
+  "enableSiteSettingsShortcut": true,
+  "isChromeOSOnly": false,
+  "isMetaQuest": false,
+  "fullScopeUrl": "https://fxcrypt-app.web.app/",
+  "minSdkVersion": 21,
+  "orientation": "portrait",
+  "fingerprints": [],
+  "additionalTrustedOrigins": [],
+  "retainedBundles": [],
+  "displayOverride": [],
+  "appVersion": "1.0.0"
+}

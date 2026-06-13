@@ -159,7 +159,7 @@ function ExchangesTab({ s, reload, notify }: any) {
   const keys = s.cexKeys || {};
   const [ex, setEx] = useState('binance');
   const [apiKey, setApiKey] = useState(''); const [secret, setSecret] = useState(''); const [passphrase, setPassphrase] = useState('');
-  const [busy, setBusy] = useState(false); const [balances, setBalances] = useState<any>(null);
+  const [busy, setBusy] = useState(false); const [balances, setBalances] = useState<any>(null); const [loadingBal, setLoadingBal] = useState(false);
 
   const save = async () => {
     if (apiKey.trim().length < 10 || secret.trim().length < 10) return notify('Enter a valid API key and secret');
@@ -168,7 +168,12 @@ function ExchangesTab({ s, reload, notify }: any) {
     catch (e: any) { notify(e.message || 'Failed to save key'); } finally { setBusy(false); }
   };
   const remove = async (e: string) => { if (!confirm(`Remove ${e} API key?`)) return; await callRemoveCexApiKey({ exchange: e }); await reload(); notify('Key removed'); };
-  const loadBalances = async () => { try { setBalances(((await callGetCexBalances({})).data as any).balances || {}); } catch (e: any) { notify(e.message || 'Failed'); } };
+  const loadBalances = async () => {
+    setLoadingBal(true);
+    try { setBalances(((await callGetCexBalances({})).data as any).balances || {}); }
+    catch (e: any) { notify(e.message || 'Failed'); }
+    finally { setLoadingBal(false); }
+  };
 
   return (
     <div className="space-y-4">
@@ -182,7 +187,15 @@ function ExchangesTab({ s, reload, notify }: any) {
         <Button loading={busy} onClick={save} className="mt-1 w-full">Save Key</Button>
       </Card>
       <Card>
-        <div className="mb-3 flex items-center justify-between"><h3 className="text-sm font-bold">Connected Exchanges</h3>{Object.keys(keys).length > 0 && <button onClick={loadBalances} className="text-xs text-brand">Load balances</button>}</div>
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="text-sm font-bold">Connected Exchanges</h3>
+          {Object.keys(keys).length > 0 && (
+            <button onClick={loadBalances} disabled={loadingBal} className="flex items-center gap-1.5 text-xs text-brand disabled:opacity-60">
+              {loadingBal && <span className="h-3 w-3 animate-spin rounded-full border border-brand/40 border-t-brand" />}
+              {loadingBal ? 'Fetching balances…' : 'Load balances'}
+            </button>
+          )}
+        </div>
         {Object.keys(keys).length === 0 ? <p className="text-sm text-muted">No exchanges connected yet.</p> : (
           <div className="flex flex-col gap-2">
             {Object.entries(keys).map(([name, k]: any) => (
@@ -244,7 +257,13 @@ function SignalsTab({ uid, riskPercent, configuredExchanges, notify, setTx, relo
     if (configuredExchanges.length === 1) doApprove(signal, configuredExchanges[0]);
     else setPicker({ signalId: signal.id, signal });
   };
-  const skip = async (id: string) => { try { await callSkipSignal({ signalId: id }); load(); } catch (e: any) { notify(e.message || 'Failed'); } };
+  const [skippingId, setSkippingId] = useState<string | null>(null);
+  const skip = async (id: string) => {
+    setSkippingId(id);
+    try { await callSkipSignal({ signalId: id }); await load(); }
+    catch (e: any) { notify(e.message || 'Failed'); }
+    finally { setSkippingId(null); }
+  };
 
   return (
     <div>
@@ -262,13 +281,13 @@ function SignalsTab({ uid, riskPercent, configuredExchanges, notify, setTx, relo
 
       {loading ? <div className="loading-msg"><span className="spinner" />Loading signals…</div>
         : shown.length === 0 ? <Card className="text-center text-sm text-muted">📡 No {mktFilter !== 'all' ? mktFilter + ' ' : ''}signals yet. Run a scan or enable the agent.</Card>
-        : <div className="flex flex-col gap-3">{shown.map((sig) => <SignalCard key={sig.id} s={sig} onApprove={() => approve(sig)} onSkip={() => skip(sig.id)} />)}</div>}
+        : <div className="flex flex-col gap-3">{shown.map((sig) => <SignalCard key={sig.id} s={sig} skipping={skippingId === sig.id} onApprove={() => approve(sig)} onSkip={() => skip(sig.id)} />)}</div>}
 
       {picker && (
         <Portal>
-        <div className="fixed inset-0 z-[65] flex items-end justify-center sm:items-center" onClick={(e) => { if (e.target === e.currentTarget) setPicker(null); }}>
+        <div className="fixed inset-0 z-[65] flex items-end justify-center sm:items-center sm:p-4" onClick={(e) => { if (e.target === e.currentTarget) setPicker(null); }}>
           <div className="absolute inset-0 bg-black/70" />
-          <div className="relative w-full max-w-md animate-slide-up rounded-t-2xl border border-border bg-surface p-5 sm:rounded-2xl">
+          <div className="relative max-h-[90dvh] w-full max-w-md animate-slide-up overflow-y-auto overscroll-contain rounded-t-2xl border border-border bg-surface p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] sm:max-h-[88vh] sm:rounded-2xl sm:pb-5">
             <h3 className="mb-1 font-bold">Choose Exchange</h3>
             <p className="mb-4 text-xs text-muted">Place this trade on which connected exchange?</p>
             <div className="grid grid-cols-2 gap-2">
@@ -287,7 +306,7 @@ function SignalsTab({ uid, riskPercent, configuredExchanges, notify, setTx, relo
   );
 }
 
-function SignalCard({ s, onApprove, onSkip }: any) {
+function SignalCard({ s, skipping, onApprove, onSkip }: any) {
   const pending = s.status === 'pending';
   const long = s.bias === 'long';
   const tags = [
@@ -330,7 +349,7 @@ function SignalCard({ s, onApprove, onSkip }: any) {
       {pending ? (
         <div className="mt-3 flex gap-2">
           <Button variant="accent" className="flex-1 py-2 text-xs" onClick={onApprove}>✅ Approve Trade</Button>
-          <Button variant="ghost" className="py-2 text-xs" onClick={onSkip}>❌ Skip</Button>
+          <Button variant="ghost" className="py-2 text-xs" loading={skipping} onClick={onSkip}>{skipping ? 'Skipping…' : '❌ Skip'}</Button>
         </div>
       ) : (
         <div className="mt-3 text-center text-xs font-semibold text-muted">{({ executed: '✅ Executed', skipped: '❌ Skipped', expired: '⏰ Expired' } as any)[s.status] || s.status}</div>

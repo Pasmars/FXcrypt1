@@ -5,8 +5,13 @@ import { updateDoc, doc, collection, query, orderBy, limit, getDocs } from 'fire
 import { db } from '@/lib/firebase';
 import { Card, Button, Input } from '@/components/ui';
 import { TxModal, TxData } from '@/components/TxModal';
-import { scanGems, Gem } from '@/lib/gem-scanner';
+import { scanGems, Gem, NARRATIVES, GemSort } from '@/lib/gem-scanner';
 import { callExecuteTrade } from '@/lib/functions';
+
+const SORTS: { key: GemSort; label: string }[] = [
+  { key: 'score', label: '⭐ Best Score' }, { key: 'trending', label: '🔥 Trending (Volume)' },
+  { key: 'new', label: '🆕 Newest' }, { key: 'gainers', label: '📈 Top Gainers' }
+];
 
 const CHAINS = [
   { key: 'bsc', label: 'BSC' }, { key: 'eth', label: 'ETH' }, { key: 'sol', label: 'SOL' },
@@ -18,13 +23,28 @@ const NATIVE_OF: Record<string, string> = { bsc: 'bnb', eth: 'eth', base: 'eth',
 const NATIVE_TICKER: Record<string, string> = { bnb: 'BNB', eth: 'ETH', sol: 'SOL', matic: 'MATIC' };
 const AGE_UNITS: Record<string, number> = { hours: 1, days: 24, weeks: 168, months: 720, years: 8760 };
 const compact = (n: number) => (n >= 1e9 ? `$${(n / 1e9).toFixed(2)}B` : n >= 1e6 ? `$${(n / 1e6).toFixed(2)}M` : n >= 1e3 ? `$${(n / 1e3).toFixed(1)}K` : `$${n.toFixed(0)}`);
+const parseMoney = (s: string) => {
+  if (!s) return 0;
+  const m = String(s).trim().toLowerCase().replace(/[$,\s]/g, '');
+  const mult = m.endsWith('k') ? 1e3 : m.endsWith('m') ? 1e6 : m.endsWith('b') ? 1e9 : 1;
+  const n = parseFloat(m);
+  return isNaN(n) ? 0 : n * mult;
+};
+const ALL_NARRATIVE = { key: 'all', emoji: '🌐', label: 'All Narratives' };
 
 export function GemScanner({ uid, settings, reload, notify }: { uid?: string; settings: any; reload: () => void; notify: (m: string) => void }) {
-  const [selected, setSelected] = useState<string[]>(['bsc', 'sol']);
+  const [selected, setSelected] = useState<string[]>(['bsc', 'eth', 'sol', 'base']);
+  const [narrative, setNarrative] = useState('all');
+  const [narOpen, setNarOpen] = useState(false);
+  const [sort, setSort] = useState<GemSort>('score');
+  const [minMcap, setMinMcap] = useState('');
+  const [maxMcap, setMaxMcap] = useState('');
+  const [minVol, setMinVol] = useState('');
+  const [maxVol, setMaxVol] = useState('');
   const [minLiquidity, setMinLiquidity] = useState('5000');
-  const [maxAge, setMaxAge] = useState('72');
-  const [maxAgeUnit, setMaxAgeUnit] = useState('hours');
-  const [minScore, setMinScore] = useState('40');
+  const [maxAge, setMaxAge] = useState('30');
+  const [maxAgeUnit, setMaxAgeUnit] = useState('days');
+  const [minScore, setMinScore] = useState('30');
 
   // Buy config
   const [buyMode, setBuyMode] = useState<'native' | 'usd'>('native');
@@ -63,9 +83,33 @@ export function GemScanner({ uid, settings, reload, notify }: { uid?: string; se
 
   const autoEnabled = !!settings.gemAutoEnabled;
   const autoBuy = !!settings.gemAutoBuy;
+
+  // Persist the current scanner filters so the backend auto-scan + Telegram alerts use them
+  const buildAutoConfig = () => ({
+    'botSettings.gemChains': selected,
+    'botSettings.gemNarrative': narrative,
+    'botSettings.gemSort': sort,
+    'botSettings.gemMinLiquidity': parseInt(minLiquidity) || 5000,
+    'botSettings.gemMaxAge': (parseFloat(maxAge) || 72) * (AGE_UNITS[maxAgeUnit] || 1),
+    'botSettings.gemMinScore': parseInt(minScore) || 40,
+    'botSettings.gemMinMcap': parseMoney(minMcap),
+    'botSettings.gemMaxMcap': parseMoney(maxMcap),
+    'botSettings.gemMinVolume': parseMoney(minVol),
+    'botSettings.gemMaxVolume': parseMoney(maxVol)
+  });
+  const saveAutoConfig = async (silent = false) => {
+    if (!uid) return;
+    try { await updateDoc(doc(db, 'users', uid), buildAutoConfig()); reload(); if (!silent) notify('Auto-scan filters saved ✓'); }
+    catch (e: any) { notify(e.message || 'Failed'); }
+  };
   const setAuto = async (field: string, val: boolean) => {
     if (!uid) return;
-    try { await updateDoc(doc(db, 'users', uid), { [`botSettings.${field}`]: val }); reload(); } catch (e: any) { notify(e.message || 'Failed'); }
+    try {
+      // When turning auto-scan on, also snapshot the current filters
+      const patch: any = { [`botSettings.${field}`]: val };
+      if (field === 'gemAutoEnabled' && val) Object.assign(patch, buildAutoConfig());
+      await updateDoc(doc(db, 'users', uid), patch); reload();
+    } catch (e: any) { notify(e.message || 'Failed'); }
   };
 
   const toggleChain = (c: string) => setSelected((s) => (s.includes(c) ? s.filter((x) => x !== c) : [...s, c]));
@@ -75,7 +119,7 @@ export function GemScanner({ uid, settings, reload, notify }: { uid?: string; se
     setScanning(true); setGems(null); setStep('Starting scan…');
     try {
       const maxAgeHours = (parseFloat(maxAge) || 72) * (AGE_UNITS[maxAgeUnit] || 1);
-      const res = await scanGems({ chains: selected, minLiquidity: parseInt(minLiquidity) || 5000, maxAgeHours, minScore: parseInt(minScore) || 40 }, setStep);
+      const res = await scanGems({ chains: selected, minLiquidity: parseInt(minLiquidity) || 5000, maxAgeHours, minScore: parseInt(minScore) || 40, narrative, sort, minMarketCap: parseMoney(minMcap), maxMarketCap: parseMoney(maxMcap), minVolume: parseMoney(minVol), maxVolume: parseMoney(maxVol) }, setStep);
       setGems(res); setFilter('all'); setFound(res.length); setLastScan(new Date().toLocaleTimeString());
       notify(res.length ? `Found ${res.length} gem${res.length === 1 ? '' : 's'}!` : 'No gems found — try lowering min score');
     } catch (e: any) { notify('Scan error: ' + (e.message || 'failed')); } finally { setScanning(false); }
@@ -133,14 +177,67 @@ export function GemScanner({ uid, settings, reload, notify }: { uid?: string; se
             </button>
           </div>
         )}
+        {autoEnabled && (
+          <div className="mt-3 border-t border-border pt-3">
+            <Button variant="ghost" className="w-full text-xs" onClick={() => saveAutoConfig()}>💾 Save current filters for Telegram auto-scan</Button>
+            <p className="mt-2 text-[11px] text-muted">Scans <b>{(settings.gemChains || selected).map((c: string) => c.toUpperCase()).join(', ')}</b> every 5 min and sends matching gems to your Telegram. Link Telegram in the <b>Telegram</b> tab to receive alerts.</p>
+          </div>
+        )}
       </Card>
 
       {/* Scanner settings */}
       <Card>
         <h3 className="mb-3 text-sm font-bold">Scanner Settings</h3>
+
+        {/* Chains */}
+        <label className="label-base">Chains</label>
         <div className="mb-3 flex flex-wrap gap-2">
           {CHAINS.map((c) => <button key={c.key} onClick={() => toggleChain(c.key)} className={`chain-pill ${c.key} ${selected.includes(c.key) ? 'active' : ''}`}>{c.label}</button>)}
         </div>
+
+        {/* Narrative dropdown */}
+        <label className="label-base">Narrative</label>
+        <div className="relative mb-3">
+          <button type="button" onClick={() => setNarOpen((o) => !o)} className="input-base flex items-center justify-between">
+            <span>{narrative === 'all' ? `${ALL_NARRATIVE.emoji} ${ALL_NARRATIVE.label}` : `${NARRATIVES.find((n) => n.key === narrative)?.emoji} ${NARRATIVES.find((n) => n.key === narrative)?.label}`}</span>
+            <span className={`text-muted transition-transform ${narOpen ? 'rotate-180' : ''}`}>▾</span>
+          </button>
+          {narOpen && (
+            <>
+              <div className="fixed inset-0 z-10" onClick={() => setNarOpen(false)} />
+              <div className="absolute left-0 right-0 z-20 mt-1.5 max-h-72 overflow-y-auto rounded-xl border border-border bg-surface p-1 shadow-card animate-fade-in">
+                {[ALL_NARRATIVE, ...NARRATIVES].map((n) => (
+                  <button key={n.key} type="button" onClick={() => { setNarrative(n.key); setNarOpen(false); }} className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm transition hover:bg-surface-3 ${narrative === n.key ? 'bg-surface-3 text-foreground' : 'text-muted'}`}>
+                    <span className="text-base">{n.emoji}</span><span className="font-medium">{n.label}</span>
+                    {narrative === n.key && <span className="ml-auto text-brand">✓</span>}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+        {narrative !== 'all' && <p className="mb-3 -mt-1 text-[11px] text-muted">Searching tokens by name/symbol across the selected chains.</p>}
+
+        {/* Trend / sort + market cap */}
+        <label className="label-base">Trend &amp; Sort</label>
+        <select value={sort} onChange={(e) => setSort(e.target.value as GemSort)} className="input-base mb-3">
+          {SORTS.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
+        </select>
+        <div className="mb-3 grid grid-cols-2 gap-3">
+          <div><label className="label-base">Min market cap</label><Input placeholder="e.g. 100k" value={minMcap} onChange={(e) => setMinMcap(e.target.value)} /></div>
+          <div><label className="label-base">Max market cap</label><Input placeholder="e.g. 5m" value={maxMcap} onChange={(e) => setMaxMcap(e.target.value)} /></div>
+        </div>
+        <label className="label-base">24h Volume range</label>
+        <div className="mb-1 grid grid-cols-2 gap-3">
+          <div><Input placeholder="Min (e.g. 0)" value={minVol} onChange={(e) => setMinVol(e.target.value)} /></div>
+          <div><Input placeholder="Max (e.g. 10k)" value={maxVol} onChange={(e) => setMaxVol(e.target.value)} /></div>
+        </div>
+        <div className="mb-3 flex flex-wrap gap-1.5">
+          <button type="button" onClick={() => { setMinVol(''); setMaxVol('10k'); }} className="rounded-full bg-surface-2 px-3 py-1 text-[11px] font-semibold text-muted hover:text-foreground">🔎 Low volume (&lt;$10k)</button>
+          <button type="button" onClick={() => { setMinVol(''); setMaxVol('50k'); }} className="rounded-full bg-surface-2 px-3 py-1 text-[11px] font-semibold text-muted hover:text-foreground">&lt;$50k</button>
+          <button type="button" onClick={() => { setMinVol(''); setMaxVol(''); }} className="rounded-full bg-surface-2 px-3 py-1 text-[11px] font-semibold text-muted hover:text-foreground">Any volume</button>
+        </div>
+
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <div><label className="label-base">Min liquidity ($)</label><Input type="number" value={minLiquidity} onChange={(e) => setMinLiquidity(e.target.value)} /></div>
           <div>
@@ -154,7 +251,9 @@ export function GemScanner({ uid, settings, reload, notify }: { uid?: string; se
           </div>
           <div><label className="label-base">Min score</label><Input type="number" value={minScore} onChange={(e) => setMinScore(e.target.value)} /></div>
         </div>
-        <Button loading={scanning} onClick={run} className="mt-4 w-full">{scanning ? 'Scanning…' : '🔍 Scan for Gems'}</Button>
+        <Button loading={scanning} onClick={run} className="mt-4 w-full">
+          {scanning ? 'Scanning…' : narrative === 'all' ? '🔍 Scan for Gems' : `${NARRATIVES.find((n) => n.key === narrative)?.emoji} Scan ${NARRATIVES.find((n) => n.key === narrative)?.label} Gems`}
+        </Button>
         {/* Stats */}
         {(found > 0 || boughtCount > 0) && (
           <div className="mt-3 grid grid-cols-2 gap-2">

@@ -13,6 +13,7 @@ import {
 } from '@/lib/functions';
 import { importWallet } from '@/lib/wallet-crypto';
 import { GemScanner } from '@/components/GemScanner';
+import { TxModal, TxData } from '@/components/TxModal';
 
 const CHAINS = ['bsc', 'eth', 'sol', 'base'];
 const EXPLORER: Record<string, string> = { bsc: 'https://bscscan.com/tx/', eth: 'https://etherscan.io/tx/', base: 'https://basescan.org/tx/', sol: 'https://solscan.io/tx/' };
@@ -100,6 +101,13 @@ export default function BotPage() {
   );
 }
 
+const TRADE_NATIVE: Record<string, { id: string; ticker: string }> = {
+  bsc: { id: 'binancecoin', ticker: 'BNB' },
+  eth: { id: 'ethereum', ticker: 'ETH' },
+  base: { id: 'ethereum', ticker: 'ETH' },
+  sol: { id: 'solana', ticker: 'SOL' }
+};
+
 function TradeTab({ notify, onDone }: any) {
   const [chain, setChain] = useState('bsc');
   const [token, setToken] = useState('');
@@ -107,17 +115,42 @@ function TradeTab({ notify, onDone }: any) {
   const [amount, setAmount] = useState('');
   const [percent, setPercent] = useState('100');
   const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<{ ok: boolean; text: string; tx?: string } | null>(null);
+  const [tx, setTx] = useState<TxData | null>(null);
+  const [prices, setPrices] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    fetch('https://api.coingecko.com/api/v3/simple/price?ids=binancecoin,ethereum,solana&vs_currencies=usd')
+      .then((r) => r.json())
+      .then((d) => setPrices({ binancecoin: d.binancecoin?.usd || 0, ethereum: d.ethereum?.usd || 0, solana: d.solana?.usd || 0 }))
+      .catch(() => {});
+  }, []);
+
+  const nat = TRADE_NATIVE[chain];
+  const nativePrice = prices[nat.id] || 0;
+  const usdEquiv = (parseFloat(amount) || 0) * nativePrice;
 
   const execute = async () => {
     if (!token.trim()) return notify('Enter a token address');
-    setBusy(true); setResult(null);
+    setBusy(true);
+    const isBuy = action === 'buy';
+    setTx({
+      id: Date.now(),
+      steps: ['Preparing', isBuy ? 'Swapping' : 'Selling', 'Confirming', 'Complete'],
+      status: 'processing',
+      title: isBuy ? 'Processing Buy' : 'Processing Sell',
+      subtitle: 'Submitting your trade to the chain…',
+      tokenName: `${token.trim().slice(0, 8)}…${token.trim().slice(-6)}`,
+      tokenMeta: isBuy
+        ? `Buy ${amount || '?'} ${nat.ticker}${usdEquiv > 0 ? ` (≈$${usdEquiv.toFixed(2)})` : ''} · ${chain.toUpperCase()}`
+        : `Sell ${percent}% · ${chain.toUpperCase()}`
+    });
     try {
-      const res: any = (await callExecuteTrade({ chain, tokenAddress: token.trim(), action, amount: action === 'buy' ? amount : undefined, percent: action === 'sell' ? percent : undefined })).data;
-      setResult({ ok: true, text: 'Trade executed', tx: res?.txHash || res?.signature || res?.hash });
+      const res: any = (await callExecuteTrade({ chain, tokenAddress: token.trim(), action, amount: isBuy ? amount : undefined, percent: !isBuy ? percent : undefined })).data;
+      const hash = res?.txHash || res?.signature || res?.hash;
+      setTx((t) => t && { ...t, status: 'success', title: 'Trade Executed!', subtitle: 'Your trade was submitted successfully.', result: hash ? { hash, explorer: EXPLORER[chain] } : {} });
       onDone();
     } catch (e: any) {
-      setResult({ ok: false, text: e.message || 'Trade failed' });
+      setTx((t) => t && { ...t, status: 'error', title: 'Trade Failed', result: { errorMsg: e.message || 'Trade failed' } });
     } finally { setBusy(false); }
   };
 
@@ -132,7 +165,14 @@ function TradeTab({ notify, onDone }: any) {
       </div>
       <Input className="mb-3 font-mono" placeholder="Token contract address" value={token} onChange={(e) => setToken(e.target.value)} />
       {action === 'buy' ? (
-        <Input className="mb-4" type="number" step="any" placeholder="Amount (native currency)" value={amount} onChange={(e) => setAmount(e.target.value)} />
+        <div className="mb-4">
+          <Input type="number" step="any" placeholder={`Amount (${nat.ticker})`} value={amount} onChange={(e) => setAmount(e.target.value)} />
+          <div className="mt-1.5 text-xs text-muted">
+            {amount
+              ? (nativePrice ? `≈ $${usdEquiv.toFixed(2)} USD` : '≈ $— (price unavailable)')
+              : `Enter amount in ${nat.ticker}${nativePrice ? ` · 1 ${nat.ticker} ≈ $${nativePrice.toLocaleString()}` : ''}`}
+          </div>
+        </div>
       ) : (
         <div className="mb-4">
           <label className="label-base">Sell percent: {percent}%</label>
@@ -140,14 +180,9 @@ function TradeTab({ notify, onDone }: any) {
         </div>
       )}
       <Button loading={busy} onClick={execute} className="w-full" variant={action === 'buy' ? 'accent' : 'primary'}>
-        {action === 'buy' ? 'Execute Buy' : 'Execute Sell'}
+        {busy ? 'Processing…' : action === 'buy' ? 'Execute Buy' : 'Execute Sell'}
       </Button>
-      {result && (
-        <div className={`mt-4 rounded-xl px-4 py-3 text-sm ${result.ok ? 'bg-success-soft text-success' : 'bg-danger-soft text-danger'}`}>
-          {result.text}
-          {result.tx && <a href={EXPLORER[chain] + result.tx} target="_blank" rel="noopener" className="ml-2 underline">View Tx ↗</a>}
-        </div>
-      )}
+      <TxModal tx={tx} onClose={() => setTx(null)} />
     </Card>
   );
 }
