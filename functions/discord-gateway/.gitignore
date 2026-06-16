@@ -1,0 +1,4 @@
+.env
+serviceAccount.json
+*.json
+!.env.example

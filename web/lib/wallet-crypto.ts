@@ -6,11 +6,12 @@
 
 declare global { interface Window { ethers: any; TonWeb: any; } }
 
-export const BASE_RPCS  = ['https://mainnet.base.org', 'https://base.publicnode.com'];
-export const BSC_RPCS   = ['https://bsc-dataseed.binance.org', 'https://bsc.publicnode.com'];
-export const ETH_RPCS   = ['https://cloudflare-eth.com', 'https://eth.llamarpc.com'];
+export const BASE_RPCS  = ['https://mainnet.base.org', 'https://base.publicnode.com', 'https://base-rpc.publicnode.com'];
+export const BSC_RPCS   = ['https://bsc-dataseed.binance.org', 'https://bsc.publicnode.com', 'https://bsc-rpc.publicnode.com'];
+export const ETH_RPCS   = ['https://cloudflare-eth.com', 'https://eth.llamarpc.com', 'https://ethereum-rpc.publicnode.com'];
 export const MATIC_RPCS = ['https://polygon-bor-rpc.publicnode.com', 'https://polygon-rpc.com'];
-export const SOL_RPC    = 'https://api.mainnet-beta.solana.com';
+export const SOL_RPCS    = ['https://api.mainnet-beta.solana.com', 'https://solana-rpc.publicnode.com'];
+export const SOL_RPC    = SOL_RPCS[0]; // primary endpoint (used for sending/confirming)
 export const TON_API    = 'https://toncenter.com/api/v2';
 
 export const CHAIN_CFG: any = {
@@ -24,19 +25,26 @@ export const CHAIN_CFG: any = {
 function b64enc(buf) { return btoa(String.fromCharCode(...new Uint8Array(buf))); }
 function b64dec(s) { return Uint8Array.from(atob(s), (c) => c.charCodeAt(0)); }
 
+// OWASP-recommended floor for PBKDF2-HMAC-SHA256 (2023). New blobs store their
+// iteration count in `it`; legacy blobs without it were written at 100k and must
+// keep decrypting at 100k — so we never break existing encrypted wallets.
+const PBKDF2_ITERATIONS = 600000;
+const LEGACY_PBKDF2_ITERATIONS = 100000;
+
 export async function encryptData(plaintext, password) {
   const enc = new TextEncoder();
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const km = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
-  const key = await crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' }, km, { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
+  const key = await crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' }, km, { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
   const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(plaintext));
-  return { d: b64enc(ct), i: b64enc(iv), s: b64enc(salt) };
+  return { d: b64enc(ct), i: b64enc(iv), s: b64enc(salt), it: PBKDF2_ITERATIONS };
 }
 export async function decryptData(enc, password) {
   const te = new TextEncoder();
+  const iterations = enc.it || LEGACY_PBKDF2_ITERATIONS;
   const km = await crypto.subtle.importKey('raw', te.encode(password), 'PBKDF2', false, ['deriveKey']);
-  const key = await crypto.subtle.deriveKey({ name: 'PBKDF2', salt: b64dec(enc.s), iterations: 100000, hash: 'SHA-256' }, km, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+  const key = await crypto.subtle.deriveKey({ name: 'PBKDF2', salt: b64dec(enc.s), iterations, hash: 'SHA-256' }, km, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
   const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64dec(enc.i) }, key, b64dec(enc.d));
   return new TextDecoder().decode(pt);
 }
@@ -49,6 +57,20 @@ async function _jsonRpc(url, method, params, timeout = 8000) {
     const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }), signal: ctrl.signal });
     return await res.json();
   } finally { clearTimeout(t); }
+}
+
+// Race every RPC endpoint concurrently and resolve with the first VALID result.
+// This avoids the long sequential failover (up to `timeout` per dead endpoint),
+// which is the main cause of slow balance loads. Returns `undefined` if all fail.
+async function _raceRpc(rpcs, method, params, opts: any = {}) {
+  const timeout = opts.timeout ?? 7000;
+  const valid = opts.valid || ((r: any) => r !== undefined && r !== null);
+  const attempts = rpcs.map(async (url: string) => {
+    const data = await _jsonRpc(url, method, params, timeout);
+    if (data && data.error == null && valid(data.result)) return data.result;
+    throw new Error('rpc invalid');
+  });
+  try { return await Promise.any(attempts); } catch { return undefined; }
 }
 function _decodeABIStr(hex) {
   const h = hex.startsWith('0x') ? hex.slice(2) : hex;
@@ -66,7 +88,7 @@ export function initTonWeb() { if (typeof window !== 'undefined' && window.TonWe
 function bytesToHex(bytes) { return Array.from(bytes).map((b: any) => b.toString(16).padStart(2, '0')).join(''); }
 function hexToBytes(hex) { const h = hex.replace(/^0x/, ''); const b = new Uint8Array(h.length / 2); for (let i = 0; i < h.length; i += 2) b[i / 2] = parseInt(h.substr(i, 2), 16); return b; }
 let _tonMnLib = null;
-async function getTonMnLib() { if (_tonMnLib) return _tonMnLib; try { _tonMnLib = await import(/* webpackIgnore: true */ 'https://esm.sh/tonweb-mnemonic'); return _tonMnLib; } catch { return null; } }
+async function getTonMnLib() { if (_tonMnLib) return _tonMnLib; try { _tonMnLib = await import(/* webpackIgnore: true */ 'https://esm.sh/tonweb-mnemonic@1.0.1'); return _tonMnLib; } catch { return null; } }
 
 export async function createTONWallet() {
   if (!tonweb) throw new Error('TonWeb not loaded');
@@ -117,28 +139,42 @@ export async function sendTONNative(toAddress, amountTon, privKeyHex) {
 function getEthers() { const e = typeof window !== 'undefined' && window.ethers; if (!e) throw new Error('ethers library failed to load. Please refresh and try again.'); return e; }
 export function createEvmWallet() { const e = getEthers(); const w = e.Wallet.createRandom(); return { address: w.address, privateKey: w.privateKey, mnemonic: w.mnemonic?.phrase || null }; }
 export function importEvmWallet(input) { const e = getEthers(); const t = input.trim(); let w; if (t.split(/\s+/).length > 1) w = e.Wallet.fromMnemonic(t); else { const key = t.startsWith('0x') ? t : '0x' + t; w = new e.Wallet(key); } return { address: w.address, privateKey: w.privateKey, mnemonic: w.mnemonic?.phrase || null }; }
-export async function getEvmBalance(address, chain) { const cfg = CHAIN_CFG[chain]; for (const rpc of cfg.rpcs) { try { const data = await _jsonRpc(rpc, 'eth_getBalance', [address, 'latest']); if (!data.result) continue; return `${(Number(BigInt(data.result)) / 1e18).toFixed(6)} ${cfg.symbol}`; } catch {} } return '—'; }
+export async function getEvmBalance(address, chain) {
+  const cfg = CHAIN_CFG[chain];
+  const result = await _raceRpc(cfg.rpcs, 'eth_getBalance', [address, 'latest']);
+  if (result == null) return '—';
+  return `${(Number(BigInt(result)) / 1e18).toFixed(6)} ${cfg.symbol}`;
+}
 export async function getEvmTokenMeta(contractAddr, rpcs) {
-  let symbol = null, decimals = 18;
-  for (const rpc of rpcs) {
-    try {
-      const [symResp, decResp] = await Promise.all([_jsonRpc(rpc, 'eth_call', [{ to: contractAddr, data: '0x95d89b41' }, 'latest']), _jsonRpc(rpc, 'eth_call', [{ to: contractAddr, data: '0x313ce567' }, 'latest'])]);
-      if (symResp.result && symResp.result.length > 2) symbol = _decodeABIStr(symResp.result);
-      if (decResp.result && decResp.result !== '0x') { const d = Number(BigInt(decResp.result)); if (d >= 0 && d <= 30) decimals = d; }
-      if (symbol) break;
-    } catch {}
-  }
+  const [symResult, decResult] = await Promise.all([
+    _raceRpc(rpcs, 'eth_call', [{ to: contractAddr, data: '0x95d89b41' }, 'latest'], { valid: (r: any) => r && r.length > 2 }),
+    _raceRpc(rpcs, 'eth_call', [{ to: contractAddr, data: '0x313ce567' }, 'latest'], { valid: (r: any) => r && r !== '0x' })
+  ]);
+  let symbol = symResult ? _decodeABIStr(symResult) : null;
+  let decimals = 18;
+  if (decResult) { try { const d = Number(BigInt(decResult)); if (d >= 0 && d <= 30) decimals = d; } catch {} }
   return { symbol: symbol || '???', decimals };
 }
 export async function getEvmTokenBalance(walletAddr, contractAddr, rpcs) {
   const padded = walletAddr.replace(/^0x/, '').padStart(64, '0');
   const data = '0x70a08231' + padded;
-  for (const rpc of rpcs) { try { const resp = await _jsonRpc(rpc, 'eth_call', [{ to: contractAddr, data }, 'latest']); if (!resp.result || resp.result === '0x') continue; return BigInt(resp.result); } catch {} }
-  return null;
+  const result = await _raceRpc(rpcs, 'eth_call', [{ to: contractAddr, data }, 'latest'], { valid: (r: any) => r && r !== '0x' });
+  return result == null ? null : BigInt(result);
+}
+// Probe all endpoints in parallel and return them ordered fastest-live-first,
+// so a send signs against a responsive node instead of stalling on a dead one.
+async function _orderEvmRpcsByHealth(rpcs: string[]): Promise<string[]> {
+  const healthy: string[] = [];
+  await Promise.all(rpcs.map(async (rpc) => {
+    try { const d = await _jsonRpc(rpc, 'eth_blockNumber', [], 5000); if (d && d.result) healthy.push(rpc); } catch {}
+  }));
+  // Preserve discovery order (fastest responders pushed first); append any unprobed as fallback.
+  return [...healthy, ...rpcs.filter((r) => !healthy.includes(r))];
 }
 export async function sendEvmNative(chain, to, amountEther, privKey) {
   const e = getEthers(); const cfg = CHAIN_CFG[chain]; let lastErr;
-  for (const rpc of cfg.rpcs) { try { const provider = new e.providers.JsonRpcProvider(rpc); const signer = new e.Wallet(privKey, provider); return await signer.sendTransaction({ to, value: e.utils.parseEther(String(amountEther)), gasLimit: 21000 }); } catch (err) { lastErr = err; } }
+  const rpcs = await _orderEvmRpcsByHealth(cfg.rpcs);
+  for (const rpc of rpcs) { try { const provider = new e.providers.JsonRpcProvider(rpc); const signer = new e.Wallet(privKey, provider); return await signer.sendTransaction({ to, value: e.utils.parseEther(String(amountEther)), gasLimit: 21000 }); } catch (err) { lastErr = err; } }
   throw lastErr || new Error('Transaction failed on all endpoints');
 }
 export async function sendEvmToken(chain, contractAddr, to, amount, decimals, privKey) {
@@ -146,7 +182,8 @@ export async function sendEvmToken(chain, contractAddr, to, amount, decimals, pr
   const iface = new e.utils.Interface(['function transfer(address to, uint256 amount) returns (bool)']);
   const data = iface.encodeFunctionData('transfer', [to, e.utils.parseUnits(String(amount), decimals)]);
   let lastErr;
-  for (const rpc of cfg.rpcs) { try { const provider = new e.providers.JsonRpcProvider(rpc); const signer = new e.Wallet(privKey, provider); return await signer.sendTransaction({ to: contractAddr, data, gasLimit: 100000 }); } catch (err) { lastErr = err; } }
+  const rpcs = await _orderEvmRpcsByHealth(cfg.rpcs);
+  for (const rpc of rpcs) { try { const provider = new e.providers.JsonRpcProvider(rpc); const signer = new e.Wallet(privKey, provider); return await signer.sendTransaction({ to: contractAddr, data, gasLimit: 100000 }); } catch (err) { lastErr = err; } }
   throw lastErr || new Error('Token transfer failed on all endpoints');
 }
 
@@ -165,15 +202,28 @@ export async function importSolWallet(input) {
   const kp = Keypair.fromSecretKey(secretKey);
   return { address: kp.publicKey.toBase58(), privateKey: b58enc(kp.secretKey), publicKey: kp.publicKey.toBase58(), mnemonic: null };
 }
-export async function getSolBalance(address) { try { const data = await _jsonRpc(SOL_RPC, 'getBalance', [address, { commitment: 'confirmed' }]); if (data.result?.value == null) return '—'; return `${(data.result.value / 1e9).toFixed(6)} SOL`; } catch { return '—'; } }
+export async function getSolBalance(address) {
+  const value = await _raceRpc(SOL_RPCS, 'getBalance', [address, { commitment: 'confirmed' }], { valid: (r: any) => r && r.value != null });
+  if (value == null) return '—';
+  return `${(value.value / 1e9).toFixed(6)} SOL`;
+}
 export async function sendSolNative(toAddress, amountSol, secretKeyBase58) {
   const { Connection, PublicKey, Keypair, Transaction, SystemProgram, LAMPORTS_PER_SOL }: any = await getSolWeb3();
   const fromKp = Keypair.fromSecretKey(b58dec(secretKeyBase58));
-  const conn = new Connection(SOL_RPC, 'confirmed');
-  const tx = new Transaction().add(SystemProgram.transfer({ fromPubkey: fromKp.publicKey, toPubkey: new PublicKey(toAddress), lamports: Math.round(Number(amountSol) * LAMPORTS_PER_SOL) }));
-  const sig = await conn.sendTransaction(tx, [fromKp]);
-  await conn.confirmTransaction(sig, 'confirmed');
-  return sig;
+  const lamports = Math.round(Number(amountSol) * LAMPORTS_PER_SOL);
+  let lastErr;
+  // Try each endpoint in turn — a fresh blockhash+tx is built per attempt, so a
+  // failed (never-broadcast) attempt can safely be retried on the next node.
+  for (const rpc of SOL_RPCS) {
+    try {
+      const conn = new Connection(rpc, 'confirmed');
+      const tx = new Transaction().add(SystemProgram.transfer({ fromPubkey: fromKp.publicKey, toPubkey: new PublicKey(toAddress), lamports }));
+      const sig = await conn.sendTransaction(tx, [fromKp]);
+      await conn.confirmTransaction(sig, 'confirmed');
+      return sig;
+    } catch (err) { lastErr = err; }
+  }
+  throw lastErr || new Error('Solana transaction failed on all endpoints');
 }
 
 // ── Chain registry for the UI ──
@@ -199,6 +249,25 @@ export const CHAINS: ChainMeta[] = [
   { key: 'ton',   label: 'TON',      symbol: 'TON',   evm: false, coingeckoId: 'the-open-network', cgPlatform: null,                 dexId: 'ton',      explorer: 'https://tonscan.org',    txExplorer: 'https://tonscan.org/tx/',    addrExplorer: 'https://tonscan.org/address/',    blockscout: null,                             twSlug: 'ton',        logo: NATIVE_LOGO.ton,   color: '#0098EA' }
 ];
 export const chainMeta = (key: string) => CHAINS.find((c) => c.key === key);
+
+// Validate a recipient address for the given chain before signing a transfer.
+// Crypto sends are irreversible, so reject anything malformed up front.
+export function isValidAddress(chain: string, address: string): boolean {
+  const a = (address || '').trim();
+  if (!a) return false;
+  try {
+    if (chain === 'sol') { const d = b58dec(a); return d.length === 32; }
+    if (chain === 'ton') {
+      const TW = typeof window !== 'undefined' && window.TonWeb;
+      if (TW?.utils?.Address?.isValid) return TW.utils.Address.isValid(a);
+      return /^[A-Za-z0-9_-]{48}$/.test(a); // user-friendly TON address fallback
+    }
+    // EVM
+    const e = typeof window !== 'undefined' && window.ethers;
+    if (e?.utils?.isAddress) return e.utils.isAddress(a);
+    return /^0x[0-9a-fA-F]{40}$/.test(a);
+  } catch { return false; }
+}
 
 // TrustWallet token logo (with checksum address), null-safe
 export function tokenLogoUrl(chain: string, contract: string): string | null {
@@ -226,11 +295,9 @@ export async function getEvmTxs(chain: string, address: string) {
   } catch { return []; }
 }
 export async function getSolTxs(address: string) {
-  try {
-    const data = await _jsonRpc(SOL_RPC, 'getSignaturesForAddress', [address, { limit: 12 }]);
-    if (!Array.isArray(data.result)) return [];
-    return data.result.map((s: any) => ({ hash: s.signature, incoming: null, value: null, symbol: 'SOL', ts: (s.blockTime || 0) * 1000, counterparty: '', err: !!s.err }));
-  } catch { return []; }
+  const result = await _raceRpc(SOL_RPCS, 'getSignaturesForAddress', [address, { limit: 12 }], { valid: (r: any) => Array.isArray(r) });
+  if (!Array.isArray(result)) return [];
+  return result.map((s: any) => ({ hash: s.signature, incoming: null, value: null, symbol: 'SOL', ts: (s.blockTime || 0) * 1000, counterparty: '', err: !!s.err }));
 }
 export async function getTonTxs(address: string) {
   try {
@@ -289,13 +356,12 @@ export function getBalance(chain, address) {
 // ── Numeric native balances (for portfolio valuation) ──
 export async function getEvmBalanceNum(address: string, chain: string): Promise<number> {
   const cfg = CHAIN_CFG[chain];
-  for (const rpc of cfg.rpcs) {
-    try { const d = await _jsonRpc(rpc, 'eth_getBalance', [address, 'latest']); if (d.result) return Number(BigInt(d.result)) / 1e18; } catch {}
-  }
-  return 0;
+  const result = await _raceRpc(cfg.rpcs, 'eth_getBalance', [address, 'latest']);
+  return result != null ? Number(BigInt(result)) / 1e18 : 0;
 }
 export async function getSolBalanceNum(address: string): Promise<number> {
-  try { const d = await _jsonRpc(SOL_RPC, 'getBalance', [address, { commitment: 'confirmed' }]); return (d.result?.value || 0) / 1e9; } catch { return 0; }
+  const value = await _raceRpc(SOL_RPCS, 'getBalance', [address, { commitment: 'confirmed' }], { valid: (r: any) => r && r.value != null });
+  return value != null ? (value.value || 0) / 1e9 : 0;
 }
 export async function getTonBalanceNum(address: string): Promise<number> {
   try { const r = await fetch(`${TON_API}/getAddressBalance?address=${encodeURIComponent(address)}`); const d = await r.json(); return d.ok ? Number(BigInt(d.result)) / 1e9 : 0; } catch { return 0; }

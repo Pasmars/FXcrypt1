@@ -14,6 +14,10 @@ const marketAnalyzer = require('./lib/market-analyzer')
 const { scanFuturesExchange } = marketAnalyzer
 const cexTrader      = require('./lib/cex-trader')
 const signalGen      = require('./lib/signal-generator')
+const agentLib       = require('./lib/agent')
+const discordLib     = require('./lib/discord')
+
+const DISCORD_TOPIC = 'fxcrypt-discord-jobs'
 
 // ── Secrets (Cloud Secret Manager) ────────────────────────────────────────
 // Set values once with:
@@ -27,9 +31,17 @@ const SECRET_MORALIS = defineSecret('MORALIS_API_KEY')
 const SECRET_HELIUS  = defineSecret('HELIUS_API_KEY')
 const ALL_SECRETS = [SECRET_BOT, SECRET_TG, SECRET_MORALIS, SECRET_HELIUS]
 
+// Discord AI agent secrets (set with: firebase functions:secrets:set <NAME>)
+const SECRET_DEEPSEEK       = defineSecret('DEEPSEEK_API_KEY')    // DeepSeek (open-source) key
+const SECRET_OPENAI         = defineSecret('OPENAI_API_KEY')      // OpenAI / ChatGPT key
+const SECRET_DISCORD_PUBKEY = defineSecret('DISCORD_PUBLIC_KEY')  // app public key (verify signatures)
+const SECRET_DISCORD_APPID  = defineSecret('DISCORD_APP_ID')      // application id (for followups)
+const DISCORD_SECRETS = [...ALL_SECRETS, SECRET_DEEPSEEK, SECRET_OPENAI, SECRET_DISCORD_PUBKEY, SECRET_DISCORD_APPID]
+
 
 // Pre-bound function builder — europe-west1 avoids Binance geo-block (HTTP 451) on GCP us-central1
 const fn = functions.region('europe-west1').runWith({ secrets: ALL_SECRETS })
+const discordFn = functions.region('europe-west1').runWith({ secrets: DISCORD_SECRETS, timeoutSeconds: 120 })
 
 // Fail fast if secrets not configured — prevents silently using weak defaults
 const MASTER_SECRET = () => {
@@ -1572,5 +1584,192 @@ exports.processAgentScans = functions
   })
 
 
+// ══════════════════════════════════════════════════════════════════════════
+// Discord AI Operations Agent (DeepSeek or ChatGPT — switchable per user)
+// ══════════════════════════════════════════════════════════════════════════
+
+// ── Generate a code to link a Discord account to this user ─────────────────
+exports.generateDiscordCode = fn.https.onCall(async (data, context) => {
+  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
+  const uid    = context.auth.uid
+  const code   = crypto.randomBytes(4).toString('hex').toUpperCase()
+  const expiry = Date.now() + 10 * 60 * 1000
+  await db.doc(`users/${uid}`).set(
+    { botSettings: { discordLinkCode: code, discordLinkExpiry: expiry } },
+    { merge: true }
+  )
+  return { code }
+})
+
+// Resolve a Discord user id to a Firebase uid (null if unlinked)
+async function discordUidFor(discordUserId) {
+  if (!discordUserId) return null
+  const snap = await db.collection('users')
+    .where('botSettings.discordUserId', '==', String(discordUserId)).limit(1).get()
+  return snap.empty ? null : snap.docs[0].id
+}
+
+// ── Discord interactions endpoint (HTTP webhook) ───────────────────────────
+// Verifies the signature, ACKs within 3s, and hands real work to the Pub/Sub
+// worker below (Cloud Functions can't reliably run work after responding).
+exports.discordInteractions = discordFn.https.onRequest(async (req, res) => {
+  if (req.method !== 'POST') { res.status(405).send('Method Not Allowed'); return }
+
+  const sig = req.get('x-signature-ed25519')
+  const ts  = req.get('x-signature-timestamp')
+  const ok  = discordLib.verifyRequest(req.rawBody, sig, ts, SECRET_DISCORD_PUBKEY.value() || '')
+  if (!ok) { res.status(401).send('invalid request signature'); return }
+
+  const body = req.body || {}
+  const { T } = discordLib
+
+  // PING handshake
+  if (body.type === T.PING) { res.json({ type: T.PONG }); return }
+
+  const discordUserId = body.member?.user?.id || body.user?.id || null
+  const appId = SECRET_DISCORD_APPID.value()
+
+  // Slash commands
+  if (body.type === T.APP_COMMAND) {
+    const name = body.data?.name
+    const opt = (n) => (body.data?.options || []).find(o => o.name === n)?.value
+
+    if (name === 'link') {
+      const code = String(opt('code') || '').trim().toUpperCase()
+      const snap = await db.collection('users').where('botSettings.discordLinkCode', '==', code).limit(1).get()
+      let msg
+      if (snap.empty) msg = '❌ Invalid code. Generate a fresh one in the app.'
+      else {
+        const doc = snap.docs[0]
+        const exp = doc.data().botSettings?.discordLinkExpiry || 0
+        if (Date.now() > exp) msg = '❌ Code expired. Generate a new one.'
+        else {
+          await doc.ref.set({ botSettings: { discordUserId: String(discordUserId), discordVerified: true, discordLinkCode: null, discordLinkExpiry: null } }, { merge: true })
+          msg = '✅ Linked! You can now talk to your FXcrypt agent with `/ask`.'
+        }
+      }
+      res.json({ type: T.CHANNEL_MESSAGE, data: { content: msg, flags: 64 } }) // ephemeral
+      return
+    }
+
+    if (name === 'ask') {
+      const prompt = String(opt('prompt') || '').trim()
+      await publishDiscordJob({ kind: 'ask', prompt, discordUserId, token: body.token, appId })
+      res.json({ type: T.DEFERRED_CHANNEL_MESSAGE })
+      return
+    }
+
+    res.json({ type: T.CHANNEL_MESSAGE, data: { content: 'Unknown command.', flags: 64 } })
+    return
+  }
+
+  // Button clicks (trade approval)
+  if (body.type === T.MESSAGE_COMPONENT) {
+    const cid = body.data?.custom_id || ''
+    const [tag, proposalId] = cid.split(':')
+    if (tag === 'tappr' || tag === 'trej') {
+      await publishDiscordJob({ kind: tag === 'tappr' ? 'approve' : 'reject', proposalId, discordUserId, token: body.token, appId })
+      res.json({ type: T.DEFERRED_UPDATE_MESSAGE })
+      return
+    }
+    res.json({ type: T.DEFERRED_UPDATE_MESSAGE })
+    return
+  }
+
+  res.json({ type: T.PONG })
+})
+
+async function publishDiscordJob(payload) {
+  const { PubSub } = require('@google-cloud/pubsub')
+  const pubsub = new PubSub()
+  await pubsub.topic(DISCORD_TOPIC).publishMessage({ json: payload })
+}
+
+function tradeButtons(proposalId) {
+  return [{ type: 1, components: [
+    { type: 2, style: 3, label: '✅ Approve', custom_id: `tappr:${proposalId}` },
+    { type: 2, style: 4, label: '❌ Reject',  custom_id: `trej:${proposalId}` },
+  ] }]
+}
+
+// ── Pub/Sub worker: runs the agent / executes approved trades ──────────────
+exports.processDiscordAgent = discordFn
+  .runWith({ secrets: DISCORD_SECRETS, timeoutSeconds: 300, memory: '512MB' })
+  .pubsub.topic(DISCORD_TOPIC)
+  .onPublish(async (message) => {
+    const job = message.json || {}
+    const { kind, discordUserId, token, appId } = job
+    const edit = (payload) => discordLib.editOriginal(appId, token, payload).catch(e => console.error('Discord edit failed:', e.message))
+
+    const uid = await discordUidFor(discordUserId)
+    if (!uid) { await edit({ content: '🔗 Your Discord isn\'t linked yet. In the app generate a code, then run `/link <code>` here.' }); return }
+
+    const ctx = {
+      uid, db, admin, trader, gemscanner, encryption,
+      masterSecret: MASTER_SECRET(), heliusKey: SECRET_HELIUS.value() || null,
+      moralisKey: SECRET_MORALIS.value() || null,
+    }
+
+    try {
+      if (kind === 'ask') {
+        const stateRef = db.doc(`users/${uid}/agentState/discord`)
+        const [stateSnap, userSnap] = await Promise.all([stateRef.get(), db.doc(`users/${uid}`).get()])
+        const history = (stateSnap.exists && stateSnap.data().history) || []
+
+        // Per-user AI model choice (set from the app); default DeepSeek.
+        const provider = (userSnap.data()?.botSettings?.aiProvider) === 'openai' ? 'openai' : 'deepseek'
+        const apiKey = provider === 'openai' ? SECRET_OPENAI.value() : SECRET_DEEPSEEK.value()
+        if (!apiKey) { await edit({ content: `⚠️ No API key configured for ${provider === 'openai' ? 'ChatGPT' : 'DeepSeek'}. Set its key in Cloud secrets or switch models in the app.` }); return }
+
+        const { text, proposal, history: newHistory } = await agentLib.runAgent({
+          prompt: job.prompt, history, ctx, provider, apiKey,
+        })
+        await stateRef.set({ history: newHistory, updatedAt: Date.now() }, { merge: true })
+
+        if (proposal) {
+          const ref = await db.collection(`users/${uid}/discordProposals`).add({ ...proposal, status: 'pending', createdAt: Date.now() })
+          const native = agentLib.NATIVE[proposal.chain] || proposal.chain.toUpperCase()
+          const size = proposal.action === 'buy' ? `${proposal.amount} ${native}` : `${proposal.percent}%`
+          const card =
+            `${discordLib.clamp(text, 1400)}\n\n` +
+            `**🔔 Trade proposal — approval required**\n` +
+            `> ${proposal.action.toUpperCase()} **${proposal.tokenSymbol || proposal.tokenAddress}** on ${proposal.chain.toUpperCase()} · ${size}\n` +
+            `> \`${proposal.tokenAddress}\``
+          await edit({ content: card, components: tradeButtons(ref.id) })
+        } else {
+          await edit({ content: discordLib.clamp(text) })
+        }
+        return
+      }
+
+      if (kind === 'approve' || kind === 'reject') {
+        const pRef = db.doc(`users/${uid}/discordProposals/${job.proposalId}`)
+        const pSnap = await pRef.get()
+        if (!pSnap.exists) { await edit({ content: '⚠️ Proposal not found or expired.', components: [] }); return }
+        const p = pSnap.data()
+        if (p.status !== 'pending') { await edit({ content: `This proposal was already **${p.status}**.`, components: [] }); return }
+
+        if (kind === 'reject') {
+          await pRef.update({ status: 'rejected' })
+          await edit({ content: `❌ **Rejected** — ${p.action.toUpperCase()} ${p.tokenSymbol || p.tokenAddress} on ${p.chain.toUpperCase()}. No trade made.`, components: [] })
+          return
+        }
+
+        await edit({ content: `⏳ Executing ${p.action.toUpperCase()} ${p.tokenSymbol || p.tokenAddress} on ${p.chain.toUpperCase()}…`, components: [] })
+        try {
+          const result = await agentLib.executeProposedTrade(ctx, p)
+          await pRef.update({ status: 'executed', txHash: result.txHash || null })
+          await edit({ content: `✅ **Executed** — ${p.action.toUpperCase()} ${p.tokenSymbol || p.tokenAddress} on ${p.chain.toUpperCase()}\nStatus: ${result.status}` + (result.txHash ? `\nTx: \`${result.txHash}\`` : ''), components: [] })
+        } catch (e) {
+          await pRef.update({ status: 'failed', error: e.message })
+          await edit({ content: `⚠️ **Trade failed** — ${e.message}`, components: [] })
+        }
+        return
+      }
+    } catch (e) {
+      console.error('processDiscordAgent error:', e)
+      await edit({ content: '⚠️ Agent error: ' + (e.message || 'failed') })
+    }
+  })
 
 

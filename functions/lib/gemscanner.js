@@ -260,12 +260,18 @@ function normalizeGtPool(pool, included, dsChainId, net) {
     url: `https://www.geckoterminal.com/${net}/pools/${a.address}`,
   }
 }
-async function fetchGeckoTerminalPairs(chain) {
+async function fetchGeckoTerminalPairs(chain, sort = 'score') {
   const net = GT_NET[chain]
   if (!net) return []
   const dsId = CHAIN_MAP[chain]
   const out = []
-  const lists = [['new_pools', 2], ['pools', 2], ['trending_pools', 1]]
+  // Weight pool-list page counts by the chosen Trend & Sort so discovery
+  // actually favors the requested dimension (more pages = wider coverage).
+  let lists
+  if (sort === 'new')           lists = [['new_pools', 4], ['trending_pools', 1], ['pools', 1]]
+  else if (sort === 'trending') lists = [['trending_pools', 2], ['pools', 3], ['new_pools', 1]]
+  else if (sort === 'gainers')  lists = [['trending_pools', 2], ['pools', 2], ['new_pools', 1]]
+  else                          lists = [['new_pools', 2], ['pools', 2], ['trending_pools', 1]] // score = balanced
   for (const [path, pages] of lists) {
     for (let p = 1; p <= pages; p++) {
       try {
@@ -340,7 +346,8 @@ async function discoverGems(chains, filters = {}) {
     limit: maxResults = 50,
   } = filters
 
-  const useNarrative = narrative && narrative !== 'all'
+  // 'all' and 'default' are both narrative-agnostic; only a specific theme filters by name/symbol
+  const useNarrative = narrative && narrative !== 'all' && narrative !== 'default'
   const allGems = []
 
   for (const chain of chains) {
@@ -354,7 +361,7 @@ async function discoverGems(chains, filters = {}) {
     const addresses = latestTokens.map(t => t.address)
     let pairs       = addresses.length ? await fetchPairData(addresses, chainId) : []
     if (useNarrative) pairs = pairs.concat(await searchNarrativePairs(narrative, chainId))
-    pairs = pairs.concat(await fetchGeckoTerminalPairs(chain))
+    pairs = pairs.concat(await fetchGeckoTerminalPairs(chain, sort))
     if (dextoolsKey) pairs = pairs.concat(await fetchDexToolsPairs(chain, dextoolsKey))
     if (!pairs.length) continue
 
@@ -396,9 +403,18 @@ async function discoverGems(chains, filters = {}) {
     // checks aren't overwhelmed now that GeckoTerminal/DexTools widen the pool.
     const tokenMetaMap = new Map(latestTokens.map(t => [t.address.toLowerCase(), t]))
 
+    // Order candidates by the chosen Trend & Sort *before* the cap so picking
+    // Newest / Trending / Top Gainers actually surfaces those tokens into the
+    // safety filter — not just the highest-scoring ones re-ordered at the end.
+    const pairAge = p => (p.pairCreatedAt ? (Date.now() - p.pairCreatedAt) / 3.6e6 : 1e9)
+    const candidateSort =
+      sort === 'trending' ? (a, b) => (b.pair.volume?.h24 || 0) - (a.pair.volume?.h24 || 0)
+      : sort === 'new'    ? (a, b) => pairAge(a.pair) - pairAge(b.pair)
+      : sort === 'gainers' ? (a, b) => (b.pair.priceChange?.h24 || 0) - (a.pair.priceChange?.h24 || 0)
+      : (a, b) => scoreToken(b.pair) - scoreToken(a.pair)
     const candidates = Array.from(bestPairByToken.entries())
       .map(([addr, pair]) => ({ address: pair.baseToken?.address || addr, pair, meta: tokenMetaMap.get(addr) || {} }))
-      .sort((a, b) => scoreToken(b.pair) - scoreToken(a.pair))
+      .sort(candidateSort)
       .slice(0, 40)
 
     // Step 5: Multi-layer safety filter — runs BEFORE scoring.

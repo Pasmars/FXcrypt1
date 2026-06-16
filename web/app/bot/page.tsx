@@ -9,7 +9,7 @@ import { AppShell } from '@/components/AppShell';
 import { Button, Card, Input } from '@/components/ui';
 import {
   callGetBalances, callExecuteTrade, callSaveBotWallet, callRemoveBotWallet,
-  callGenerateTelegramCode, callGetBotInfo
+  callGenerateTelegramCode, callGenerateDiscordCode, callGetBotInfo
 } from '@/lib/functions';
 import { importWallet } from '@/lib/wallet-crypto';
 import { GemScanner } from '@/components/GemScanner';
@@ -22,7 +22,7 @@ const short = (a = '') => (a.length > 14 ? `${a.slice(0, 7)}…${a.slice(-5)}` :
 export default function BotPage() {
   const { user } = useAuth();
   const uid = user?.uid;
-  const [tab, setTab] = useState<'trade' | 'gems' | 'wallets' | 'telegram'>('trade');
+  const [tab, setTab] = useState<'trade' | 'gems' | 'wallets' | 'telegram' | 'discord'>('trade');
   const [settings, setSettings] = useState<any>({});
   const [balances, setBalances] = useState<any>({});
   const [loadingBal, setLoadingBal] = useState(false);
@@ -86,7 +86,7 @@ export default function BotPage() {
       </Card>
 
       <div className="no-scrollbar mb-5 flex gap-1 overflow-x-auto border-b border-border">
-        {([['trade', 'Trade'], ['gems', '💎 Gem Scanner'], ['wallets', 'Wallets'], ['telegram', 'Telegram']] as const).map(([t, l]) => (
+        {([['trade', 'Trade'], ['gems', '💎 Gem Scanner'], ['wallets', 'Wallets'], ['telegram', 'Telegram'], ['discord', '🤖 Discord AI']] as const).map(([t, l]) => (
           <button key={t} onClick={() => setTab(t)} className={`whitespace-nowrap border-b-2 px-4 py-2.5 text-sm font-semibold transition ${tab === t ? 'border-brand text-brand' : 'border-transparent text-muted hover:text-foreground'}`}>{l}</button>
         ))}
       </div>
@@ -95,6 +95,7 @@ export default function BotPage() {
       {tab === 'gems' && <GemScanner uid={uid} settings={settings} reload={load} notify={notify} />}
       {tab === 'wallets' && uid && <WalletsTab uid={uid} settings={settings} reload={load} notify={notify} />}
       {tab === 'telegram' && <TelegramTab notify={notify} />}
+      {tab === 'discord' && <DiscordTab uid={uid} settings={settings} reload={load} notify={notify} />}
 
       {toast && <div className="fixed bottom-24 left-1/2 z-[60] -translate-x-1/2 rounded-xl bg-surface-3 px-4 py-2.5 text-sm shadow-card md:bottom-8">{toast}</div>}
     </AppShell>
@@ -270,5 +271,68 @@ function TelegramTab({ notify }: any) {
         </div>
       )}
     </Card>
+  );
+}
+
+function DiscordTab({ uid, settings, reload, notify }: any) {
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const provider: 'deepseek' | 'openai' = settings?.aiProvider === 'openai' ? 'openai' : 'deepseek';
+
+  const gen = async () => {
+    setBusy(true);
+    try { setCode(((await callGenerateDiscordCode({})).data as any).code); } catch (e: any) { notify(e.message || 'Failed'); } finally { setBusy(false); }
+  };
+
+  const setProvider = async (p: 'deepseek' | 'openai') => {
+    if (!uid || p === provider) return;
+    try {
+      await setDoc(doc(db, 'users', uid), { botSettings: { aiProvider: p } }, { merge: true });
+      reload();
+      notify(`AI model set to ${p === 'openai' ? 'ChatGPT' : 'DeepSeek'}`);
+    } catch (e: any) { notify(e.message || 'Failed'); }
+  };
+
+  const MODELS = [
+    { key: 'deepseek', label: '🐬 DeepSeek', note: 'Open-source · low cost' },
+    { key: 'openai', label: '⚡ ChatGPT', note: 'OpenAI · strong tool use' },
+  ] as const;
+
+  return (
+    <div className="space-y-4">
+      {/* AI model switch */}
+      <Card>
+        <h3 className="mb-1 text-sm font-bold">AI Model</h3>
+        <p className="mb-3 text-sm text-muted">The brain that powers your Discord agent. Switch anytime — takes effect on your next message.</p>
+        <div className="grid grid-cols-2 gap-2">
+          {MODELS.map((m) => (
+            <button key={m.key} onClick={() => setProvider(m.key)}
+              className={`rounded-xl border p-3 text-left transition ${provider === m.key ? 'border-brand bg-surface-3' : 'border-border hover:border-border-2'}`}>
+              <div className="text-sm font-semibold">{m.label}{provider === m.key && <span className="ml-1 text-brand">✓</span>}</div>
+              <div className="text-[11px] text-muted">{m.note}</div>
+            </button>
+          ))}
+        </div>
+        <p className="mt-3 text-[11px] text-muted">Each model needs its API key set in the backend (DeepSeek / OpenAI). If a key is missing, the agent will tell you in Discord.</p>
+      </Card>
+
+      {/* Connect Discord */}
+      <Card>
+        <h3 className="mb-1 text-sm font-bold">Connect Discord</h3>
+        <p className="mb-4 text-sm text-muted">Talk to your FXcrypt agent from Discord — ask about balances, scan gems, and approve trades.</p>
+        <ol className="mb-4 list-decimal space-y-1 pl-5 text-sm text-muted">
+          <li>Generate a link code below.</li>
+          <li>In your Discord server, run <code className="rounded bg-surface-3 px-1.5 py-0.5 text-brand">/link CODE</code> within 10 minutes.</li>
+          <li>Then chat with <code className="rounded bg-surface-3 px-1.5 py-0.5 text-brand">/ask</code>.</li>
+        </ol>
+        <Button loading={busy} onClick={gen} className="w-full">Generate Link Code</Button>
+        {code && (
+          <div className="mt-4 rounded-xl bg-surface-3 p-4 text-center">
+            <div className="text-xs text-muted">Your link code (valid 10 min)</div>
+            <button onClick={() => navigator.clipboard?.writeText(code).then(() => notify('Copied!'))} className="mt-1 text-2xl font-bold tracking-widest text-success">{code}</button>
+          </div>
+        )}
+      </Card>
+    </div>
   );
 }

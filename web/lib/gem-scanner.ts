@@ -23,7 +23,7 @@ export interface Gem {
   safety: any; boosted: boolean; icon: string | null; dexUrl: string;
 }
 
-export type GemSort = 'score' | 'trending' | 'new' | 'gainers';
+export type GemSort = 'default' | 'score' | 'trending' | 'new' | 'gainers';
 export interface GemConfig {
   chains: string[]; minLiquidity: number; maxAgeHours: number; minScore: number;
   narrative?: string; sort?: GemSort; minMarketCap?: number; maxMarketCap?: number;
@@ -132,10 +132,16 @@ function normalizeGtPool(pool: any, included: any[], dsChainId: string, net: str
   };
 }
 
-async function fetchGeckoTerminal(chains: string[], onStep: (s: string) => void): Promise<any[]> {
+async function fetchGeckoTerminal(chains: string[], sort: GemSort, onStep: (s: string) => void): Promise<any[]> {
   const out: any[] = [];
-  // new_pools = freshly created · pools = top/established (incl. multi-year-old) · trending = momentum
-  const lists: [string, number][] = [['new_pools', 2], ['pools', 2], ['trending_pools', 1]];
+  // new_pools = freshly created · pools = top/established (incl. multi-year-old) · trending = momentum.
+  // Weight the page counts by the chosen Trend & Sort so discovery actually
+  // favors the dimension the user asked for (more pages = wider coverage).
+  let lists: [string, number][];
+  if (sort === 'new') lists = [['new_pools', 4], ['trending_pools', 1], ['pools', 1]];
+  else if (sort === 'trending') lists = [['trending_pools', 2], ['pools', 3], ['new_pools', 1]];
+  else if (sort === 'gainers') lists = [['trending_pools', 2], ['pools', 2], ['new_pools', 1]];
+  else lists = [['new_pools', 2], ['pools', 2], ['trending_pools', 1]]; // score = balanced
   for (const chain of chains) {
     const net = GT_NET[chain];
     if (!net) continue;
@@ -164,13 +170,29 @@ function sortGems(gems: Gem[], sort: GemSort) {
   else gems.sort((a, b) => b.gemScore - a.gemScore);
 }
 
+// Order scored candidates by the chosen Trend & Sort *before* the top-N cap,
+// so the cap keeps the tokens that rank highest on the selected dimension
+// (not always the highest score). Mirrors sortGems but works on raw pairs.
+type ScoredCandidate = { addr: string; pair: any; chain: string; score: number };
+function pairAgeHours(p: any) { return p.pairCreatedAt ? (Date.now() - p.pairCreatedAt) / 3.6e6 : 1e9; }
+function sortCandidates(arr: ScoredCandidate[], sort: GemSort) {
+  if (sort === 'trending') arr.sort((a, b) => (b.pair.volume?.h24 || 0) - (a.pair.volume?.h24 || 0));
+  else if (sort === 'new') arr.sort((a, b) => pairAgeHours(a.pair) - pairAgeHours(b.pair));
+  else if (sort === 'gainers') arr.sort((a, b) => (b.pair.priceChange?.h24 || 0) - (a.pair.priceChange?.h24 || 0));
+  else arr.sort((a, b) => b.score - a.score);
+}
+
 export async function scanGems(cfg: GemConfig, onStep: (s: string) => void): Promise<Gem[]> {
   const { chains, minLiquidity, maxAgeHours, minScore, narrative = 'all', sort = 'score', minMarketCap = 0, maxMarketCap = 0, minVolume = 0, maxVolume = 0 } = cfg;
   const allPairs: any[] = [];
   const boostedSet = new Set<string>();
   const iconMap = new Map<string, string>();
 
-  if (narrative && narrative !== 'all') {
+  // 'all' and 'default' are both narrative-agnostic (no name/symbol filtering);
+  // only a specific narrative key triggers the themed keyword search below.
+  const useNarrative = !!narrative && narrative !== 'all' && narrative !== 'default';
+
+  if (useNarrative) {
     // ── Narrative search: query DexScreener search for each theme term ──
     const nar = NAR_BY_KEY[narrative];
     const terms = nar?.searchTerms || [narrative];
@@ -216,8 +238,13 @@ export async function scanGems(cfg: GemConfig, onStep: (s: string) => void): Pro
       if (i + 30 < addresses.length) await new Promise((r) => setTimeout(r, 350));
     }
 
-    // Broaden the net with popular discovery terms so lowering filters surfaces more
-    const BROAD = ['pepe', 'doge', 'cat', 'ai', 'inu', 'meme', 'pump', 'moon', 'sol', 'base'];
+    // Broaden the net with discovery terms. 'default' is purely parameter-driven
+    // (generic terms only — no narrative bias); 'all' additionally sweeps the meme
+    // themes so it surfaces the most narrative tokens. GeckoTerminal's
+    // new/top/trending pools above already give narrative-agnostic coverage.
+    const GENERIC_TERMS = ['sol', 'base', 'eth', 'bnb', 'usdt', 'usdc', 'btc', 'token', 'protocol', 'finance', 'swap', 'chain', 'dao', 'defi', 'gaming', 'rwa'];
+    const MEME_TERMS = ['pepe', 'doge', 'cat', 'ai', 'inu', 'meme', 'pump', 'moon'];
+    const BROAD = narrative === 'all' ? [...MEME_TERMS, ...GENERIC_TERMS] : GENERIC_TERMS;
     for (const term of BROAD) {
       onStep(`Scanning "${term}" tokens…`);
       try {
@@ -229,7 +256,7 @@ export async function scanGems(cfg: GemConfig, onStep: (s: string) => void): Pro
   }
 
   // ── GeckoTerminal: paginated new + established pools (much larger pool) ──
-  try { allPairs.push(...await fetchGeckoTerminal(chains, onStep)); } catch {}
+  try { allPairs.push(...await fetchGeckoTerminal(chains, sort, onStep)); } catch {}
 
   // ── Best pair per token on the selected chains, with filters ──
   onStep(`Scoring ${allPairs.length} pairs…`);
@@ -237,7 +264,7 @@ export async function scanGems(cfg: GemConfig, onStep: (s: string) => void): Pro
   for (const pair of allPairs) {
     const pairChain = PAIR_CHAIN[pair.chainId];
     if (!pairChain || !chains.includes(pairChain)) continue;
-    if (narrative !== 'all' && !narrativeMatch(pair, narrative)) continue;
+    if (useNarrative && !narrativeMatch(pair, narrative)) continue;
     const addr = (pair.baseToken?.address || '').toLowerCase();
     const liq = pair.liquidity?.usd || 0;
     if (liq < minLiquidity) continue;
@@ -256,13 +283,15 @@ export async function scanGems(cfg: GemConfig, onStep: (s: string) => void): Pro
     if (!existing || liq > (existing.pair.liquidity?.usd || 0)) bestPairs.set(addr, { pair, chain: pairChain });
   }
 
-  // Pre-score everything, drop below threshold, then cap the highest-scoring
-  // candidates (so low-liquidity gems aren't crowded out by old blue-chips).
-  const candidates = [...bestPairs.entries()]
+  // Pre-score everything, drop below threshold, then cap candidates. The cap is
+  // ordered by the chosen Trend & Sort (not always score) so picking Newest /
+  // Trending / Top Gainers actually surfaces those tokens instead of just
+  // re-ordering the highest-scoring ones at the end.
+  const scored: ScoredCandidate[] = [...bestPairs.entries()]
     .map(([addr, v]) => ({ addr, pair: v.pair, chain: v.chain, score: scoreGemToken(v.pair) }))
-    .filter((c) => c.score >= minScore)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 60);
+    .filter((c) => c.score >= minScore);
+  sortCandidates(scored, sort);
+  const candidates = scored.slice(0, 60);
 
   const gems: Gem[] = [];
   let hp = 0;

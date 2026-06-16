@@ -14,7 +14,7 @@ import { TxModal, TxData } from '@/components/TxModal';
 import {
   CHAINS, chainMeta, initTonWeb, createWallet, importWallet, getBalanceNum, getTokenBalanceNum,
   encryptData, decryptData, getEvmTokenMeta, send, CHAIN_CFG, getTxs, tokenLogoUrl, fetchTokenPrices,
-  buildAuthCheck, verifyAuthCheck
+  buildAuthCheck, verifyAuthCheck, isValidAddress
 } from '@/lib/wallet-crypto';
 
 interface Asset {
@@ -79,7 +79,10 @@ export default function WalletPage() {
 
   // ── Lock / unlock ──
   const handleUnlock = async (pwd: string, create: boolean): Promise<boolean> => {
-    if (pwd.length < 6) { notify('Password must be at least 6 characters', 'error'); return false; }
+    if (!pwd) { notify('Enter your wallet password', 'error'); return false; }
+    // Enforce the stronger minimum only when setting a NEW password — existing
+    // users may have a shorter one and must still be able to unlock.
+    if (create && pwd.length < 8) { notify('Password must be at least 8 characters', 'error'); return false; }
     try {
       if (create) {
         const check = await buildAuthCheck(pwd);
@@ -99,21 +102,35 @@ export default function WalletPage() {
       return true;
     } catch (e: any) { notify(e.message || 'Unlock failed', 'error'); return false; }
   };
-  const lock = () => { setSessionPwd(null); setView('portfolio'); };
+  const lock = useCallback(() => { setSessionPwd(null); setView('portfolio'); }, []);
+
+  // Auto-lock after 5 minutes of inactivity so an unlocked, unattended session
+  // can't be used to reveal keys or send funds.
+  useEffect(() => {
+    if (!sessionPwd) return;
+    let timer: any;
+    const reset = () => { clearTimeout(timer); timer = setTimeout(() => { lock(); notify('Wallet locked due to inactivity', 'info'); }, 5 * 60 * 1000); };
+    const events = ['mousedown', 'keydown', 'touchstart', 'scroll'];
+    events.forEach((e) => window.addEventListener(e, reset, { passive: true }));
+    reset();
+    return () => { clearTimeout(timer); events.forEach((e) => window.removeEventListener(e, reset)); };
+  }, [sessionPwd, lock]);
 
   // ── Portfolio ──
   const refresh = useCallback(async () => {
     if (!configuredChains.length) { setAssets([]); return; }
     setLoadingAssets(true);
     const ids = Array.from(new Set(configuredChains.map((c) => chainMeta(c)!.coingeckoId))).join(',');
-    let cg: any = {};
-    try { cg = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`).then((r) => r.json()); } catch {}
+    // Kick off the price fetch and all on-chain balance reads concurrently —
+    // the network round-trips overlap instead of running price-then-balances.
+    const cgPromise: Promise<any> = fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`).then((r) => r.json()).catch(() => ({}));
 
     const list: Asset[] = [];
     await Promise.all(configuredChains.map(async (chain) => {
       const w = wallets[chain]; const meta = chainMeta(chain)!;
-      const cgEntry = cg[meta.coingeckoId] || {};
       const bal = await getBalanceNum(chain, w.address).catch(() => null);
+      const cg = await cgPromise;
+      const cgEntry = cg[meta.coingeckoId] || {};
       list.push({ id: `${chain}:native`, chain, type: 'native', symbol: meta.symbol, name: meta.label, walletAddress: w.address, decimals: chain === 'sol' || chain === 'ton' ? 9 : 18, balance: bal, priceUsd: cgEntry.usd ?? null, valueUsd: bal != null && cgEntry.usd ? bal * cgEntry.usd : 0, change24h: cgEntry.usd_24h_change || 0, logo: meta.logo });
 
       const tokens = w.tokens || [];
@@ -131,6 +148,14 @@ export default function WalletPage() {
     setLoadingAssets(false);
   }, [configuredChains, wallets]);
   useEffect(() => { if (sessionPwd) refresh(); }, [sessionPwd, refresh]);
+  // Keep balances live: poll every 60s and on tab re-focus while viewing the portfolio.
+  useEffect(() => {
+    if (!sessionPwd || view !== 'portfolio') return;
+    const id = setInterval(() => { if (document.visibilityState === 'visible') refresh(); }, 60000);
+    const onVis = () => { if (document.visibilityState === 'visible') refresh(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVis); };
+  }, [sessionPwd, view, refresh]);
 
   const total = assets.reduce((s, a) => s + a.valueUsd, 0);
   const totalChange = useMemo(() => {
@@ -383,6 +408,7 @@ function SendModal({ assets, preset, onClose, onSend, notify }: any) {
   if (!asset) return <Sheet title="Send" onClose={onClose}><p className="text-sm text-muted">No assets with a balance to send.</p></Sheet>;
   const submit = () => {
     if (!to.trim()) return notify('Enter a recipient address', 'error');
+    if (!isValidAddress(asset.chain, to)) return notify(`Invalid ${chainMeta(asset.chain)?.label || asset.chain} address`, 'error');
     const amt = parseFloat(amount);
     if (!amt || amt <= 0) return notify('Enter a valid amount', 'error');
     if (asset.balance != null && amt > asset.balance) return notify('Amount exceeds balance', 'error');
@@ -442,7 +468,7 @@ function RevealModal({ data, type, chain, sessionPwd, onClose, notify }: any) {
       {!plain ? <Button loading={busy} onClick={doReveal} className="w-full">Reveal</Button> : (
         <div className="space-y-3">
           <div className="break-all rounded-xl bg-surface-2 p-3 font-mono text-sm">{plain}</div>
-          <Button variant="ghost" className="w-full" onClick={() => navigator.clipboard?.writeText(plain).then(() => notify('Copied!', 'success'))}>Copy</Button>
+          <Button variant="ghost" className="w-full" onClick={() => navigator.clipboard?.writeText(plain).then(() => { notify('Copied — clears in 60s', 'success'); setTimeout(() => navigator.clipboard?.writeText('').catch(() => {}), 60000); })}>Copy</Button>
         </div>
       )}
     </Sheet>

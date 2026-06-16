@@ -9,6 +9,7 @@ import { scanGems, Gem, NARRATIVES, GemSort } from '@/lib/gem-scanner';
 import { callExecuteTrade } from '@/lib/functions';
 
 const SORTS: { key: GemSort; label: string }[] = [
+  { key: 'default', label: '⚙️ Default (use my filters)' },
   { key: 'score', label: '⭐ Best Score' }, { key: 'trending', label: '🔥 Trending (Volume)' },
   { key: 'new', label: '🆕 Newest' }, { key: 'gainers', label: '📈 Top Gainers' }
 ];
@@ -30,13 +31,15 @@ const parseMoney = (s: string) => {
   const n = parseFloat(m);
   return isNaN(n) ? 0 : n * mult;
 };
+const DEFAULT_NARRATIVE = { key: 'default', emoji: '⚙️', label: 'Default (use my filters)' };
 const ALL_NARRATIVE = { key: 'all', emoji: '🌐', label: 'All Narratives' };
+const NAR_OPTIONS = [DEFAULT_NARRATIVE, ALL_NARRATIVE, ...NARRATIVES];
 
 export function GemScanner({ uid, settings, reload, notify }: { uid?: string; settings: any; reload: () => void; notify: (m: string) => void }) {
   const [selected, setSelected] = useState<string[]>(['bsc', 'eth', 'sol', 'base']);
-  const [narrative, setNarrative] = useState('all');
+  const [narrative, setNarrative] = useState('default');
   const [narOpen, setNarOpen] = useState(false);
-  const [sort, setSort] = useState<GemSort>('score');
+  const [sort, setSort] = useState<GemSort>('default');
   const [minMcap, setMinMcap] = useState('');
   const [maxMcap, setMaxMcap] = useState('');
   const [minVol, setMinVol] = useState('');
@@ -152,6 +155,9 @@ export function GemScanner({ uid, settings, reload, notify }: { uid?: string; se
   const shown = gems ? (filter === 'all' ? gems : gems.filter((g) => g.chain === filter)) : [];
   const resultChains = gems ? ['all', ...Array.from(new Set(gems.map((g) => g.chain)))] : [];
   const boughtCount = Object.keys(bought).length;
+  // 'default' & 'all' are narrative-agnostic; only a specific theme filters by name/symbol
+  const isBroadNarrative = narrative === 'default' || narrative === 'all';
+  const curNar = NAR_OPTIONS.find((n) => n.key === narrative) || DEFAULT_NARRATIVE;
 
   return (
     <div className="space-y-4">
@@ -199,14 +205,14 @@ export function GemScanner({ uid, settings, reload, notify }: { uid?: string; se
         <label className="label-base">Narrative</label>
         <div className="relative mb-3">
           <button type="button" onClick={() => setNarOpen((o) => !o)} className="input-base flex items-center justify-between">
-            <span>{narrative === 'all' ? `${ALL_NARRATIVE.emoji} ${ALL_NARRATIVE.label}` : `${NARRATIVES.find((n) => n.key === narrative)?.emoji} ${NARRATIVES.find((n) => n.key === narrative)?.label}`}</span>
+            <span>{curNar.emoji} {curNar.label}</span>
             <span className={`text-muted transition-transform ${narOpen ? 'rotate-180' : ''}`}>▾</span>
           </button>
           {narOpen && (
             <>
               <div className="fixed inset-0 z-10" onClick={() => setNarOpen(false)} />
               <div className="absolute left-0 right-0 z-20 mt-1.5 max-h-72 overflow-y-auto rounded-xl border border-border bg-surface p-1 shadow-card animate-fade-in">
-                {[ALL_NARRATIVE, ...NARRATIVES].map((n) => (
+                {NAR_OPTIONS.map((n) => (
                   <button key={n.key} type="button" onClick={() => { setNarrative(n.key); setNarOpen(false); }} className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm transition hover:bg-surface-3 ${narrative === n.key ? 'bg-surface-3 text-foreground' : 'text-muted'}`}>
                     <span className="text-base">{n.emoji}</span><span className="font-medium">{n.label}</span>
                     {narrative === n.key && <span className="ml-auto text-brand">✓</span>}
@@ -216,7 +222,8 @@ export function GemScanner({ uid, settings, reload, notify }: { uid?: string; se
             </>
           )}
         </div>
-        {narrative !== 'all' && <p className="mb-3 -mt-1 text-[11px] text-muted">Searching tokens by name/symbol across the selected chains.</p>}
+        {narrative === 'default' && <p className="mb-3 -mt-1 text-[11px] text-muted">Scanning all gems by your filters (liquidity, market cap, volume, age, score) — no narrative bias.</p>}
+        {!isBroadNarrative && <p className="mb-3 -mt-1 text-[11px] text-muted">Searching tokens by name/symbol across the selected chains.</p>}
 
         {/* Trend / sort + market cap */}
         <label className="label-base">Trend &amp; Sort</label>
@@ -252,7 +259,7 @@ export function GemScanner({ uid, settings, reload, notify }: { uid?: string; se
           <div><label className="label-base">Min score</label><Input type="number" value={minScore} onChange={(e) => setMinScore(e.target.value)} /></div>
         </div>
         <Button loading={scanning} onClick={run} className="mt-4 w-full">
-          {scanning ? 'Scanning…' : narrative === 'all' ? '🔍 Scan for Gems' : `${NARRATIVES.find((n) => n.key === narrative)?.emoji} Scan ${NARRATIVES.find((n) => n.key === narrative)?.label} Gems`}
+          {scanning ? 'Scanning…' : isBroadNarrative ? '🔍 Scan for Gems' : `${curNar.emoji} Scan ${curNar.label} Gems`}
         </Button>
         {/* Stats */}
         {(found > 0 || boughtCount > 0) && (
