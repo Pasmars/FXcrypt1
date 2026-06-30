@@ -13,6 +13,13 @@ const base = (p: P) => ({
   ...p
 });
 
+export const IconPointer = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 8.5 8.5 0 0 1-3.8-.9L3 21l1.9-5.7a8.5 8.5 0 0 1-.9-3.8A8.38 8.38 0 0 1 12.5 3 8.38 8.38 0 0 1 21 11.5z" />
+    <path d="M12 7.5l1 2.5 2.5 1-2.5 1-1 2.5-1-2.5L8.5 11l2.5-1z" />
+  </svg>
+);
+
 export const IconCalc = (p: P) => (
   <svg {...base(p)}>
     <rect x="4" y="2" width="16" height="20" rx="2" />

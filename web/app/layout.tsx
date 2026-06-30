@@ -32,8 +32,14 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={inter.variable}>
+    <html lang="en" className={inter.variable} suppressHydrationWarning>
       <body className="font-sans">
+        {/* No-flash theme + accent: applied before first paint */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var t=localStorage.getItem('theme');document.documentElement.classList.add(t==='light'?'light':'dark');var a=localStorage.getItem('accent')||'gold';document.documentElement.setAttribute('data-accent',a);}catch(e){document.documentElement.classList.add('dark');document.documentElement.setAttribute('data-accent','gold');}})();`
+          }}
+        />
         <Providers>{children}</Providers>
         <Script id="sw-register" strategy="afterInteractive">
           {`if ('serviceWorker' in navigator) {

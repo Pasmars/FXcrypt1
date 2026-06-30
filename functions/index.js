@@ -16,6 +16,8 @@ const cexTrader      = require('./lib/cex-trader')
 const signalGen      = require('./lib/signal-generator')
 const agentLib       = require('./lib/agent')
 const discordLib     = require('./lib/discord')
+const payments       = require('./lib/payments')
+const crypto2        = require('crypto')
 
 const DISCORD_TOPIC = 'fxcrypt-discord-jobs'
 
@@ -37,6 +39,13 @@ const SECRET_OPENAI         = defineSecret('OPENAI_API_KEY')      // OpenAI / Ch
 const SECRET_DISCORD_PUBKEY = defineSecret('DISCORD_PUBLIC_KEY')  // app public key (verify signatures)
 const SECRET_DISCORD_APPID  = defineSecret('DISCORD_APP_ID')      // application id (for followups)
 const DISCORD_SECRETS = [...ALL_SECRETS, SECRET_DEEPSEEK, SECRET_OPENAI, SECRET_DISCORD_PUBKEY, SECRET_DISCORD_APPID]
+
+// Billing secrets (set with: firebase functions:secrets:set <NAME>)
+const SECRET_STRIPE     = defineSecret('STRIPE_SECRET_KEY')     // sk_live_… / sk_test_…
+const SECRET_STRIPE_WH  = defineSecret('STRIPE_WEBHOOK_SECRET') // whsec_…
+const BILLING_SECRETS   = [SECRET_STRIPE, SECRET_STRIPE_WH]
+// Crypto verification reuses the existing Moralis/Helius keys.
+const CRYPTO_PAY_SECRETS = [SECRET_MORALIS, SECRET_HELIUS]
 
 
 // Pre-bound function builder — europe-west1 avoids Binance geo-block (HTTP 451) on GCP us-central1
@@ -129,12 +138,12 @@ exports.getTokenHolders = fn.https.onCall(async (data, context) => {
     const chainHex = chain === 'bsc' ? '0x38' : '0x1'
     try {
       const res = await fetch(
-        `https://deep-index.moralis.io/api/v2.2/erc20/${addr}/stats?chain=${chainHex}`,
+        `https://deep-index.moralis.io/api/v2.2/erc20/${addr}/holders?chain=${chainHex}`,
         { headers: { 'X-API-Key': moralisKey } }
       )
       if (res.ok) {
         const json = await res.json()
-        const count = json.holders_count ?? json.owners_count
+        const count = json.totalHolders ?? json.holders_count ?? json.owners_count
         if (count != null) return { holders: parseInt(count, 10) }
       }
     } catch (_) {}
@@ -431,7 +440,9 @@ async function solHolderGraph(addr, topN, key) {
   return { token, holders, edges, transfers, meta: { source: 'helius', fetchedAt: Date.now() } }
 }
 
-exports.getHolderGraph = fn.https.onCall(async (data, context) => {
+exports.getHolderGraph = functions.region('europe-west1')
+  .runWith({ secrets: ALL_SECRETS, timeoutSeconds: 120, memory: '512MB' })
+  .https.onCall(async (data, context) => {
   if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
   const { chain, contractAddress } = data
   validateChain(chain)
@@ -440,7 +451,7 @@ exports.getHolderGraph = fn.https.onCall(async (data, context) => {
   if (typeof contractAddress !== 'string' || !contractAddress.trim())
     throw new functions.https.HttpsError('invalid-argument', 'contractAddress is required')
   const addr = contractAddress.trim()
-  const topN = Math.min(Math.max(parseInt(data.limit || 250, 10), 10), 250)
+  const topN = Math.min(Math.max(parseInt(data.limit || 500, 10), 10), 2000)
 
   if (chain === 'sol') {
     const key = SECRET_HELIUS.value()
@@ -897,15 +908,26 @@ exports.processArbitrageQueue = fn.pubsub
   })
 
 // ── Scan Gems (callable from web app) ─────────────────────────────────────
-exports.scanGems = fn.https.onCall(async (data, context) => {
+exports.scanGems = functions.region('europe-west1').runWith({ secrets: ALL_SECRETS, timeoutSeconds: 120, memory: '512MB' }).https.onCall(async (data, context) => {
   if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
 
   const chains       = Array.isArray(data?.chains) ? data.chains.filter(c => VALID_CHAINS.has(c)) : ['bsc', 'sol']
   const minLiquidity = Math.max(1000, parseInt(data?.minLiquidity) || 5000)
-  const maxAgeHours  = Math.max(1, Math.min(parseInt(data?.maxAgeHours) || 24, 168))
+  // Age window in hours. Ceiling = ~10 years so users can scan by hours → years.
+  const maxAgeHours  = Math.max(1, Math.min(parseInt(data?.maxAgeHours) || 24, 87600))
+  const minAgeHours  = Math.max(0, Math.min(parseInt(data?.minAgeHours) || 0, 87600))
   const minScore     = Math.max(0, Math.min(parseInt(data?.minScore) || 40, 100))
+  // Optional advanced filters (from the gem scanner settings sheet). Clamp/sanitize.
+  const minVolume    = Math.max(0, parseInt(data?.minVolume) || 0)
+  const maxVolume    = Math.max(0, parseInt(data?.maxVolume) || 0)
+  const minMarketCap = Math.max(0, parseInt(data?.minMarketCap) || 0)
+  const maxMarketCap = Math.max(0, parseInt(data?.maxMarketCap) || 0)
+  const sort         = ['score', 'trending', 'new', 'gainers'].includes(data?.sort) ? data.sort : 'score'
 
-  const gems = await gemscanner.discoverGems(chains, { minLiquidity, maxAgeHours, minScore, dextoolsKey: process.env.DEXTOOLS_API_KEY || null })
+  const gems = await gemscanner.discoverGems(chains, {
+    minLiquidity, maxAgeHours, minAgeHours, minScore, minVolume, maxVolume, minMarketCap, maxMarketCap, sort,
+    dextoolsKey: process.env.DEXTOOLS_API_KEY || null,
+  })
   return { gems, scannedAt: Date.now() }
 })
 
@@ -936,6 +958,7 @@ exports.processGemScanner = fn.pubsub
       const filters = {
         minLiquidity: settings.gemMinLiquidity || 5000,
         maxAgeHours:  settings.gemMaxAge       || 24,
+        minAgeHours:  settings.gemMinAge       || 0,
         minScore:     settings.gemMinScore     || 60,
         minVolume:    settings.gemMinVolume != null ? settings.gemMinVolume : 1000,
         maxVolume:    settings.gemMaxVolume    || 0,
@@ -1227,7 +1250,10 @@ exports.runAgentScan = functions
 
     const agentSettings = (userSnap.data().agentSettings || {})
     const exchanges     = agentSettings.exchanges  || ['binance', 'mexc', 'bybit', 'kucoin']
-    const marketTypes   = agentSettings.marketTypes || ['spot']
+    // Manual scan can request market types; otherwise scan BOTH spot & futures so
+    // the Signals screen's Spot/Futures filter always has both kinds to show.
+    const reqTypes      = Array.isArray(data?.marketTypes) ? data.marketTypes.filter((m) => m === 'spot' || m === 'futures') : []
+    const marketTypes   = reqTypes.length ? reqTypes : (agentSettings.marketTypes && agentSettings.marketTypes.length ? agentSettings.marketTypes : ['spot', 'futures'])
     const timeframe     = agentSettings.timeframe  || '4H'
     const minConfidence = agentSettings.minConfidence || 70
 
@@ -1773,3 +1799,302 @@ exports.processDiscordAgent = discordFn
   })
 
 
+
+// ── Pointer chat (web AI agent — DeepSeek/ChatGPT, same tools as Discord) ───
+exports.chatPointer = functions
+  .region('europe-west1')
+  .runWith({ secrets: [...ALL_SECRETS, SECRET_DEEPSEEK, SECRET_OPENAI], timeoutSeconds: 120, memory: '512MB' })
+  .https.onCall(async (data, context) => {
+    if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
+    const uid = context.auth.uid
+    const prompt = String(data?.prompt || '').trim()
+    if (!prompt) throw new functions.https.HttpsError('invalid-argument', 'prompt is required')
+
+    const history = Array.isArray(data?.history)
+      ? data.history.slice(-12).filter((h) => h && (h.role === 'user' || h.role === 'assistant') && typeof h.content === 'string').map((h) => ({ role: h.role, content: h.content }))
+      : []
+
+    // Provider/model is chosen centrally by the admin (config/billing.aiProvider).
+    // Users no longer switch models in-app; the client request can't override it.
+    let prov = 'deepseek'
+    try {
+      const cfgSnap = await db.doc('config/billing').get()
+      if (cfgSnap.exists && cfgSnap.data().aiProvider === 'openai') prov = 'openai'
+    } catch (_) { /* default deepseek */ }
+    const apiKey = prov === 'openai' ? SECRET_OPENAI.value() : SECRET_DEEPSEEK.value()
+    if (!apiKey) throw new functions.https.HttpsError('failed-precondition', `No API key configured for ${prov === 'openai' ? 'ChatGPT' : 'DeepSeek'}`)
+
+    const ctx = {
+      uid, db, admin, trader, gemscanner, encryption,
+      masterSecret: MASTER_SECRET(), heliusKey: SECRET_HELIUS.value() || null, moralisKey: SECRET_MORALIS.value() || null,
+    }
+    try {
+      const { text, proposal, history: newHistory } = await agentLib.runAgent({ prompt, history, ctx, provider: prov, apiKey, surface: 'pointer' })
+      return { text, proposal: proposal || null, history: newHistory, provider: prov }
+    } catch (e) {
+      throw new functions.https.HttpsError('internal', e.message || 'Pointer failed')
+    }
+  })
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  PREMIUM PAYMENTS (Stripe + on-chain crypto) and ADMIN CONTROL PANEL
+// ═══════════════════════════════════════════════════════════════════════════
+const billingFn   = functions.region('europe-west1').runWith({ secrets: BILLING_SECRETS, timeoutSeconds: 60 })
+const cryptoPayFn = functions.region('europe-west1').runWith({ secrets: CRYPTO_PAY_SECRETS, timeoutSeconds: 60 })
+const plainFn     = functions.region('europe-west1').runWith({ timeoutSeconds: 60 })
+const adminFn     = functions.region('europe-west1').runWith({ timeoutSeconds: 60, memory: '256MB' })
+
+// ── Stripe Checkout (subscription OR one-time, caller chooses) ──
+exports.createStripeCheckout = billingFn.https.onCall(async (data, context) => {
+  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
+  const uid = context.auth.uid
+  const email = context.auth.token.email || undefined
+  const plan = data?.plan === 'elite' ? 'elite' : 'pro'
+  const mode = data?.billing === 'subscription' ? 'subscription' : 'payment'
+  const key = SECRET_STRIPE.value()
+  if (!key || key === 'REPLACE_ME') throw new functions.https.HttpsError('failed-precondition', 'Card payments are not configured yet — please use crypto, or contact support.')
+  const stripe = require('stripe')(key)
+  const cfg = await payments.billingConfig(db)
+  let line_items
+  if (mode === 'subscription') {
+    const priceId = cfg.stripePriceIds[plan === 'elite' ? 'eliteMonthly' : 'proMonthly']
+    if (!priceId) throw new functions.https.HttpsError('failed-precondition', 'Subscription pricing not configured (set config/billing.stripePriceIds)')
+    line_items = [{ price: priceId, quantity: 1 }]
+  } else {
+    const usd = cfg.prices[plan]
+    line_items = [{ price_data: { currency: 'usd', product_data: { name: `FXcrypt ${plan.charAt(0).toUpperCase() + plan.slice(1)} — 30 days` }, unit_amount: Math.round(usd * 100) }, quantity: 1 }]
+  }
+  const base = cfg.frontendUrl.replace(/\/$/, '')
+  const session = await stripe.checkout.sessions.create({
+    mode, line_items,
+    customer_email: email,
+    client_reference_id: uid,
+    metadata: { uid, plan, billing: mode },
+    success_url: `${base}/?upgrade=success`,
+    cancel_url: `${base}/?upgrade=cancel`,
+    allow_promotion_codes: true,
+    ...(mode === 'subscription' ? { subscription_data: { metadata: { uid, plan } } } : {}),
+  })
+  return { url: session.url, sessionId: session.id }
+})
+
+// ── Stripe webhook (public; signature-verified) → grants/revokes plans ──
+exports.stripeWebhook = billingFn.https.onRequest(async (req, res) => {
+  const key = SECRET_STRIPE.value(), wh = SECRET_STRIPE_WH.value()
+  if (!key || !wh || key === 'REPLACE_ME' || wh === 'REPLACE_ME') return res.status(500).send('Stripe not configured')
+  const stripe = require('stripe')(key)
+  let event
+  try { event = stripe.webhooks.constructEvent(req.rawBody, req.headers['stripe-signature'], wh) }
+  catch (e) { console.error('stripe sig fail:', e.message); return res.status(400).send(`Webhook Error: ${e.message}`) }
+  try {
+    if (event.type === 'checkout.session.completed') {
+      const s = event.data.object
+      const uid = (s.metadata && s.metadata.uid) || s.client_reference_id
+      const plan = (s.metadata && s.metadata.plan) || 'pro'
+      if (uid) {
+        if (s.mode === 'subscription') await payments.grantPlan(db, uid, plan, { clearExpiry: true, subscription: { provider: 'stripe', status: 'active', type: 'subscription', stripeCustomerId: s.customer || null, stripeSubId: s.subscription || null } })
+        else await payments.grantPlan(db, uid, plan, { durationDays: 30, subscription: { provider: 'stripe', status: 'active', type: 'onetime', stripeCustomerId: s.customer || null } })
+        await db.doc(`users/${uid}/payments/stripe_${s.id}`).set({ provider: 'stripe', plan, mode: s.mode, amount: s.amount_total, currency: s.currency, status: 'paid', at: Date.now() }, { merge: true })
+      }
+    } else if (event.type === 'customer.subscription.deleted') {
+      const sub = event.data.object
+      const uid = sub.metadata && sub.metadata.uid
+      if (uid) await payments.grantPlan(db, uid, 'free', { subscription: { provider: 'stripe', status: 'canceled' } })
+    }
+    res.json({ received: true })
+  } catch (e) { console.error('stripeWebhook handler:', e); res.status(500).send('handler error') }
+})
+
+// ── Crypto: create a pay-to-address invoice ──
+exports.createCryptoInvoice = plainFn.https.onCall(async (data, context) => {
+  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
+  const uid = context.auth.uid
+  const plan = data?.plan === 'elite' ? 'elite' : 'pro'
+  const chain = String(data?.chain || 'eth')
+  const asset = String(data?.asset || 'usdt').toLowerCase()
+  if (!['eth', 'bsc', 'base', 'sol'].includes(chain)) throw new functions.https.HttpsError('invalid-argument', 'Unsupported chain')
+  const cfg = await payments.billingConfig(db)
+  const address = cfg.receiving[chain]
+  if (!address) throw new functions.https.HttpsError('failed-precondition', `Crypto receiving address for ${chain.toUpperCase()} not configured`)
+  let calc
+  try { calc = await payments.computeCryptoAmount(plan, chain, asset, cfg.prices) }
+  catch (e) { throw new functions.https.HttpsError('invalid-argument', e.message) }
+  const invoiceId = 'inv_' + crypto2.randomBytes(8).toString('hex')
+  const createdAt = Date.now()
+  const invoice = { invoiceId, provider: 'crypto', plan, chain, asset, address, amountUsd: calc.amountUsd, amountToken: calc.amountToken, tokenContract: calc.tokenContract || null, symbol: calc.symbol, decimals: calc.decimals, status: 'pending', createdAt, expiresAt: createdAt + 30 * 60000 }
+  await db.doc(`users/${uid}/payments/${invoiceId}`).set(invoice)
+  return invoice
+})
+
+// ── Crypto: verify an invoice on-chain and grant the plan ──
+exports.verifyCryptoPayment = cryptoPayFn.https.onCall(async (data, context) => {
+  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
+  const uid = context.auth.uid
+  const invoiceId = String(data?.invoiceId || '')
+  if (!invoiceId) throw new functions.https.HttpsError('invalid-argument', 'invoiceId required')
+  const ref = db.doc(`users/${uid}/payments/${invoiceId}`)
+  const snap = await ref.get()
+  if (!snap.exists) throw new functions.https.HttpsError('not-found', 'Invoice not found')
+  const inv = snap.data()
+  if (inv.status === 'paid') return { status: 'paid', plan: inv.plan }
+  const ctx = { moralisKey: SECRET_MORALIS.value() || null, heliusKey: SECRET_HELIUS.value() || null }
+  let result
+  try { result = await payments.verifyPayment(ctx, inv) }
+  catch (e) { throw new functions.https.HttpsError('internal', e.message || 'Verification failed') }
+  if (result.paid) {
+    await payments.grantPlan(db, uid, inv.plan, { durationDays: 30, subscription: { provider: 'crypto', status: 'active', type: 'onetime' } })
+    await ref.set({ status: 'paid', txHash: result.txHash || null, paidAt: Date.now() }, { merge: true })
+    return { status: 'paid', plan: inv.plan, txHash: result.txHash || null }
+  }
+  return { status: 'pending' }
+})
+
+// ── ADMIN: all gated by the config/billing admin allowlist ──
+async function requireAdmin(context) {
+  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
+  const cfg = await payments.billingConfig(db)
+  if (!payments.isAdminEmail(context, cfg)) throw new functions.https.HttpsError('permission-denied', 'Admin access required')
+  return cfg
+}
+
+exports.adminStats = adminFn.https.onCall(async (data, context) => {
+  await requireAdmin(context)
+  const col = db.collection('users')
+  const total = (await col.count().get()).data().count
+  const counts = { free: 0, pro: 0, elite: 0 }
+  for (const p of ['pro', 'elite']) counts[p] = (await col.where('plan', '==', p).count().get()).data().count
+  counts.free = Math.max(0, total - counts.pro - counts.elite)
+  return { totalUsers: total, byPlan: counts, premium: counts.pro + counts.elite, generatedAt: Date.now() }
+})
+
+exports.adminListUsers = adminFn.https.onCall(async (data, context) => {
+  await requireAdmin(context)
+  const res = await admin.auth().listUsers(200, data?.pageToken || undefined)
+  const docs = await Promise.all(res.users.map((u) => db.doc(`users/${u.uid}`).get().catch(() => null)))
+  const users = res.users.map((u, i) => {
+    const d = (docs[i] && docs[i].exists) ? docs[i].data() : {}
+    return {
+      uid: u.uid, email: u.email || '', displayName: u.displayName || '',
+      disabled: u.disabled, banned: !!d.banned,
+      createdAt: u.metadata.creationTime, lastSignIn: u.metadata.lastSignInTime,
+      plan: d.plan || 'free', planExpiry: d.planExpiry || null,
+      hasWallets: !!(d.wallets && Object.keys(d.wallets).length),
+      telegram: !!(d.botSettings && d.botSettings.telegramChatId),
+      discord: !!(d.botSettings && d.botSettings.discordUserId),
+    }
+  })
+  return { users, nextPageToken: res.pageToken || null }
+})
+
+exports.adminGetUser = adminFn.https.onCall(async (data, context) => {
+  await requireAdmin(context)
+  const uid = String(data?.uid || '')
+  if (!uid) throw new functions.https.HttpsError('invalid-argument', 'uid required')
+  let authUser = null
+  try { const u = await admin.auth().getUser(uid); authUser = { uid: u.uid, email: u.email, disabled: u.disabled, createdAt: u.metadata.creationTime, lastSignIn: u.metadata.lastSignInTime } } catch (e) {}
+  const snap = await db.doc(`users/${uid}`).get()
+  const d = snap.exists ? snap.data() : {}
+  // Redact every secret/encrypted blob — admins see addresses & status, never keys.
+  const safe = { ...d }
+  delete safe.walletAuth
+  if (safe.wallets) safe.wallets = Object.fromEntries(Object.entries(safe.wallets).map(([k, w]) => [k, { address: w.address }]))
+  if (safe.botSettings) {
+    const bs = { ...safe.botSettings }
+    if (bs.wallets) bs.wallets = Object.fromEntries(Object.entries(bs.wallets).map(([k, w]) => [k, { address: w.address }]))
+    for (const f of ['cexKeys', 'apiKeys', 'exchangeKeys']) delete bs[f]
+    safe.botSettings = bs
+  }
+  // recent payments
+  let pays = []
+  try { const ps = await db.collection(`users/${uid}/payments`).orderBy('createdAt', 'desc').limit(10).get(); pays = ps.docs.map((x) => x.data()) } catch (e) {}
+  return { auth: authUser, doc: safe, payments: pays }
+})
+
+exports.adminSetPlan = adminFn.https.onCall(async (data, context) => {
+  const cfg = await requireAdmin(context)
+  const uid = String(data?.uid || '')
+  const plan = ['free', 'pro', 'elite'].includes(data?.plan) ? data.plan : null
+  if (!uid || !plan) throw new functions.https.HttpsError('invalid-argument', 'uid and valid plan required')
+  const days = parseInt(data?.days) || 0
+  await payments.grantPlan(db, uid, plan, days ? { durationDays: days } : { clearExpiry: true })
+  await db.doc(`users/${uid}`).set({ adminNote: { action: 'setPlan', plan, days: days || null, by: context.auth.token.email, at: Date.now() } }, { merge: true })
+  return { ok: true, plan, days: days || null }
+})
+
+exports.adminBanUser = adminFn.https.onCall(async (data, context) => {
+  await requireAdmin(context)
+  const uid = String(data?.uid || '')
+  const banned = !!data?.banned
+  if (!uid) throw new functions.https.HttpsError('invalid-argument', 'uid required')
+  try { await admin.auth().updateUser(uid, { disabled: banned }) } catch (e) {}
+  await db.doc(`users/${uid}`).set({ banned, adminNote: { action: banned ? 'ban' : 'unban', by: context.auth.token.email, at: Date.now() } }, { merge: true })
+  return { ok: true, banned }
+})
+
+// Revenue & active subscriptions across all users.
+exports.adminRevenue = adminFn.https.onCall(async (data, context) => {
+  await requireAdmin(context)
+  // Bare collection-group read needs no custom index (fine at small scale).
+  const snap = await db.collectionGroup('payments').get()
+  let totalUsd = 0, last30Usd = 0, paidCount = 0
+  const byProvider = { stripe: 0, crypto: 0 }
+  const recent = []
+  const cutoff = Date.now() - 30 * 86400000
+  snap.forEach((doc) => {
+    const p = doc.data()
+    if (p.status !== 'paid') return
+    const usd = p.amountUsd != null ? p.amountUsd : (p.amount != null ? p.amount / 100 : 0)
+    const at = p.paidAt || p.at || p.createdAt || 0
+    totalUsd += usd; paidCount++
+    if (at >= cutoff) last30Usd += usd
+    byProvider[p.provider] = (byProvider[p.provider] || 0) + usd
+    recent.push({ provider: p.provider, plan: p.plan || '', usd, at, uid: doc.ref.parent.parent ? doc.ref.parent.parent.id : null })
+  })
+  recent.sort((a, b) => b.at - a.at)
+  let activeSubs = 0
+  try {
+    const us = await db.collection('users').where('subscription.status', '==', 'active').get()
+    us.forEach((d) => { if ((d.data().subscription || {}).type === 'subscription') activeSubs++ })
+  } catch (e) {}
+  return {
+    totalUsd: +totalUsd.toFixed(2), last30Usd: +last30Usd.toFixed(2), paidCount, activeSubs,
+    byProvider: { stripe: +byProvider.stripe.toFixed(2), crypto: +byProvider.crypto.toFixed(2) },
+    recent: recent.slice(0, 30), generatedAt: Date.now(),
+  }
+})
+
+// Billing config — admin reads/edits receiving addresses, plan prices, Stripe
+// price IDs and the frontend URL (Stripe API keys stay in Secret Manager).
+exports.adminGetConfig = adminFn.https.onCall(async (data, context) => {
+  await requireAdmin(context)
+  const snap = await db.doc('config/billing').get()
+  return { config: snap.exists ? snap.data() : {} }
+})
+exports.adminSetConfig = adminFn.https.onCall(async (data, context) => {
+  await requireAdmin(context)
+  const c = data?.config || {}
+  const clean = {
+    receivingAddresses: {
+      eth:  String(c.receivingAddresses?.eth  || '').trim() || null,
+      bsc:  String(c.receivingAddresses?.bsc  || '').trim() || null,
+      base: String(c.receivingAddresses?.base || '').trim() || null,
+      sol:  String(c.receivingAddresses?.sol  || '').trim() || null,
+    },
+    planPricesUsd: {
+      pro:   Math.max(1, parseInt(c.planPricesUsd?.pro)   || 29),
+      elite: Math.max(1, parseInt(c.planPricesUsd?.elite) || 99),
+    },
+    stripePriceIds: {
+      proMonthly:   String(c.stripePriceIds?.proMonthly   || '').trim() || null,
+      eliteMonthly: String(c.stripePriceIds?.eliteMonthly || '').trim() || null,
+    },
+    frontendUrl: String(c.frontendUrl || 'https://fxcrypt-app.web.app').trim(),
+    // AI model for the in-app Pointer — admin-controlled (users can't switch).
+    aiProvider: c.aiProvider === 'openai' ? 'openai' : 'deepseek',
+    adminEmails: Array.isArray(c.adminEmails) ? c.adminEmails.map((e) => String(e).toLowerCase().trim()).filter(Boolean) : [],
+    updatedBy: context.auth.token.email, updatedAt: Date.now(),
+  }
+  await db.doc('config/billing').set(clean, { merge: true })
+  return { ok: true, config: clean }
+})

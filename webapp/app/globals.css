@@ -1,0 +1,23 @@
+/* Base styles ported verbatim from the mobile app's index.html so the UI/UX is
+   pixel-identical. Theme CSS variables (--bg, --accent, …) are injected at
+   runtime by applyTheme() in the client bootstrap. */
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; padding: 0; height: 100%; background: #0B0E11;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", system-ui, sans-serif; }
+#__next, body > div:first-child { height: 100%; }
+::-webkit-scrollbar { width: 0; height: 0; }
+input::placeholder, textarea::placeholder { color: var(--faint); }
+button { font-family: inherit; }
+a { color: inherit; text-decoration: none; }
+
+@keyframes fxfade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fxpop { from { transform: scale(0.6); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+@keyframes fxslide { from { transform: translateY(10px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+@keyframes fxslideUp { from { transform: translateY(40px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+@keyframes fxpush { from { transform: translateX(34px); } to { transform: translateX(0); } }
+@keyframes fxspin { to { transform: rotate(360deg); } }
+@keyframes fxdot { 0%, 60%, 100% { transform: translateY(0); opacity: 0.4; } 30% { transform: translateY(-4px); opacity: 1; } }
+@keyframes fxsweep { from { transform: translateX(-100%); } to { transform: translateX(350%); } }
+
+/* Full-height app root */
+.fx-root { height: 100dvh; position: relative; overflow: hidden; background: var(--bg); color: var(--text); }

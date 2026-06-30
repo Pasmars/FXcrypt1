@@ -88,7 +88,7 @@ export function InstallAppButton({ context, onDone }: { context: 'mobile' | 'des
 
   // Reusable install pill (gradient CTA)
   const InstallPill = ({ label }: { label: string }) => (
-    <button onClick={promptInstall} className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-brand to-accent px-4 py-2.5 text-sm font-bold text-black shadow-glow transition active:scale-[0.98]">
+    <button onClick={promptInstall} className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-brand to-brand-deep px-4 py-2.5 text-sm font-bold text-on-accent shadow-glow transition active:scale-[0.98]">
       <DownloadIcon /> {label}
     </button>
   );
@@ -104,7 +104,7 @@ export function InstallAppButton({ context, onDone }: { context: 'mobile' | 'des
   if (platform === 'android') {
     return (
       <a href="/fxcrypt.apk" download="FXcrypt.apk" onClick={onDone}
-         className="flex items-center gap-3 rounded-2xl bg-gradient-to-br from-brand/15 via-surface-2 to-accent/10 p-3 ring-1 ring-brand/25 transition active:scale-[0.99]">
+         className="flex items-center gap-3 rounded-2xl bg-gradient-to-br from-brand/15 via-surface-2 to-brand/5 p-3 ring-1 ring-brand/25 transition active:scale-[0.99]">
         <div className="grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-2xl bg-base ring-1 ring-white/10">
           <img src="/icons/icon-192.png" alt="" className="h-full w-full object-cover" />
         </div>
@@ -112,7 +112,7 @@ export function InstallAppButton({ context, onDone }: { context: 'mobile' | 'des
           <div className="text-sm font-bold text-foreground">Download FXcrypt</div>
           <div className="text-[11px] text-muted">Android APK · 3.6 MB</div>
         </div>
-        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-gradient-to-br from-brand to-accent text-black shadow-glow">
+        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-gradient-to-br from-brand to-brand-deep text-on-accent shadow-glow">
           <DownloadIcon size={18} />
         </span>
       </a>

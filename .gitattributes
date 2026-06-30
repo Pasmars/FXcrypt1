@@ -1,0 +1,33 @@
+# Normalize line endings so diffs stay clean across Windows/macOS/Linux and CI.
+# The repo is already stored as LF in git; this makes that explicit and durable
+# even when a contributor clones without core.autocrlf set.
+
+# Default: treat as text, store as LF in the repo, check out as LF.
+* text=auto eol=lf
+
+# Windows-only scripts that genuinely require CRLF.
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+
+# Binary assets — never touch EOL or attempt text diffs.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.webp  binary
+*.svg   text eol=lf
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.otf   binary
+*.eot   binary
+*.pdf   binary
+*.docx  binary
+*.jar   binary
+*.keystore binary
+*.apk   binary
+*.aab   binary
+
+# Lockfiles: keep LF, mark as generated so reviews collapse them.
+package-lock.json linguist-generated=true

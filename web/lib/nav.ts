@@ -1,17 +1,20 @@
-import { IconCalc, IconPrices, IconTracker, IconBot, IconAgent, IconWallet } from '@/components/icons';
+import { IconName } from '@/components/Icon';
 
 export interface NavItem {
   href: string;
   label: string;
-  icon: typeof IconCalc;
+  icon: IconName;
   primary?: boolean; // shown in mobile bottom bar
+  center?: boolean; // center FAB in mobile bottom bar
 }
 
 export const NAV_ITEMS: NavItem[] = [
-  { href: '/', label: 'PnL Calc', icon: IconCalc, primary: true },
-  { href: '/prices', label: 'Prices', icon: IconPrices, primary: true },
-  { href: '/tracker', label: 'Tracker', icon: IconTracker, primary: true },
-  { href: '/bot', label: 'DEX Bot', icon: IconBot, primary: true },
-  { href: '/agent', label: 'AI Agent', icon: IconAgent },
-  { href: '/wallet', label: 'Wallet', icon: IconWallet }
+  { href: '/pointer', label: 'Pointer', icon: 'spark', primary: true },
+  { href: '/prices', label: 'Markets', icon: 'candles', primary: true },
+  { href: '/bot', label: 'Trade', icon: 'swap', primary: true, center: true },
+  { href: '/agent', label: 'Signals', icon: 'robot', primary: true },
+  { href: '/wallet', label: 'Wallet', icon: 'wallet', primary: true },
+  // secondary — sidebar / drawer only
+  { href: '/', label: 'PnL Calc', icon: 'calc' },
+  { href: '/tracker', label: 'Tracker', icon: 'trend' },
 ];

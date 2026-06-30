@@ -1,0 +1,361 @@
+// fx-wallet.js — self-custody wallet engine for the mobile app.
+//
+// Ports the legacy wallet.js backend into the SPA: client-side AES-GCM
+// encryption (keys never leave the device), Firestore persistence of the
+// encrypted blobs, a single session password, and real create/import/send/
+// reveal across EVM / Solana / TON. Settings the legacy app never had
+// (token visibility, address book, connected apps) get new Firestore-backed
+// persistence here.
+//
+// Data model — users/{uid}:
+//   wallets.{chain}   = { address, encPrivateKey, encMnemonic, tokens: [] }
+//   walletAuth.check  = AES-GCM blob of 'FXCRYPT_UNLOCK_OK'   (password proof)
+//   walletSettings    = { hiddenChains: [], hiddenTokens: [], hideSmall: bool }
+//   contacts          = [{ id, name, address, chain }]
+//   connectedApps     = [{ id, name, url, chain, perm }]
+//
+// Everything reactive emits 'fx:update' (the shell already re-renders on it).
+
+import { db, auth } from './firebase';
+import { onAuthStateChanged } from 'firebase/auth';
+import { doc, getDoc, setDoc, updateDoc, deleteField } from 'firebase/firestore';
+import {
+  encryptData, decryptData, buildAuthCheck, verifyAuthCheck,
+  createWallet, importWallet, getBalanceNum, getTokenBalanceNum,
+  getTxs, fetchTokenPrices, chainMeta, isValidAddress, send as sendImpl,
+  initTonWeb, CHAINS,
+} from './wallet-crypto';
+
+const CG = 'https://api.coingecko.com/api/v3';
+
+// ── In-memory session state (never persisted) ──
+let sessionPwd = null;             // master password held for the session
+let userDoc = {};                  // last-loaded users/{uid} snapshot
+let wallets = {};                  // chain -> { address, encPrivateKey, encMnemonic, tokens }
+let settings = { hiddenChains: [], hiddenTokens: [], hideSmall: false };
+let contacts = [];
+let connectedApps = [];
+let holdings = [];                 // computed portfolio rows
+let portfolioTotal = 0;
+let loaded = false;
+
+function emit() { try { window.dispatchEvent(new CustomEvent('fx:update')); } catch (e) {} }
+function uid() { return auth.currentUser && auth.currentUser.uid; }
+
+// ── External libs (ethers v5 UMD + TonWeb) loaded on demand ──
+let _libsPromise = null;
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    if ([...document.scripts].some((s) => s.src === src)) return resolve();
+    const el = document.createElement('script');
+    el.src = src; el.async = true;
+    el.onload = () => resolve();
+    el.onerror = () => reject(new Error('Failed to load ' + src));
+    document.head.appendChild(el);
+  });
+}
+// Solana web3 is dynamically imported inside wallet-crypto from esm.sh, so only
+// ethers + TonWeb need a global <script>. Idempotent.
+function ensureLibs() {
+  if (_libsPromise) return _libsPromise;
+  _libsPromise = (async () => {
+    const jobs = [];
+    if (!window.ethers) jobs.push(loadScript('https://cdnjs.cloudflare.com/ajax/libs/ethers/5.7.2/ethers.umd.min.js'));
+    if (!window.TonWeb) jobs.push(loadScript('https://unpkg.com/tonweb@0.0.66/dist/tonweb.js'));
+    await Promise.all(jobs);
+    try { if (window.TonWeb) initTonWeb(); } catch (e) {}
+  })();
+  return _libsPromise;
+}
+
+// ── Load / persist ──
+async function load() {
+  const id = uid();
+  if (!id) { loaded = false; return; }
+  try {
+    const snap = await getDoc(doc(db, 'users', id));
+    userDoc = snap.exists() ? snap.data() : {};
+  } catch (e) { userDoc = {}; }
+  wallets = userDoc.wallets || {};
+  const s = userDoc.walletSettings || {};
+  settings = { hiddenChains: s.hiddenChains || [], hiddenTokens: s.hiddenTokens || [], hideSmall: !!s.hideSmall };
+  contacts = Array.isArray(userDoc.contacts) ? userDoc.contacts : [];
+  connectedApps = Array.isArray(userDoc.connectedApps) ? userDoc.connectedApps : [];
+  loaded = true;
+  emit();
+  // refresh portfolio in the background (balances are slow)
+  refreshPortfolio();
+}
+
+// ── Lock state ──
+function hasAnyWallet() { return Object.keys(wallets).length > 0; }
+function isProtected() { return !!(userDoc.walletAuth && userDoc.walletAuth.check) || hasAnyWallet(); }
+function isLocked() { return isProtected() && !sessionPwd; }
+
+function lock() { sessionPwd = null; emit(); }
+
+// Verify a password against the stored auth-check (or, for legacy docs without
+// one, against the first wallet's encrypted key) and adopt it for the session.
+async function unlock(password) {
+  if (!password) throw new Error('Enter your wallet password');
+  const check = userDoc.walletAuth && userDoc.walletAuth.check;
+  if (check) {
+    if (!(await verifyAuthCheck(check, password))) throw new Error('Wrong password');
+  } else if (hasAnyWallet()) {
+    const first = wallets[Object.keys(wallets)[0]];
+    try { await decryptData(first.encPrivateKey, password); }
+    catch { throw new Error('Wrong password'); }
+    await setAuthCheck(password); // adopt going forward
+  }
+  sessionPwd = password;
+  emit();
+  return true;
+}
+
+// First-time password (no wallets yet): just establish the auth-check.
+async function setInitialPassword(password) {
+  if (!password || password.length < 6) throw new Error('Use at least 6 characters');
+  await setAuthCheck(password);
+  sessionPwd = password;
+  emit();
+  return true;
+}
+
+async function setAuthCheck(password) {
+  const id = uid(); if (!id) throw new Error('Sign in required');
+  const check = await buildAuthCheck(password);
+  await setDoc(doc(db, 'users', id), { walletAuth: { check } }, { merge: true });
+  userDoc.walletAuth = { check };
+}
+
+// ── Create / import / delete ──
+async function persistWallet(chain, wd, password) {
+  const id = uid(); if (!id) throw new Error('Sign in required');
+  const encPrivateKey = await encryptData(wd.privateKey, password);
+  const encMnemonic = wd.mnemonic ? await encryptData(wd.mnemonic, password) : null;
+  const entry = { address: wd.address, encPrivateKey, encMnemonic, tokens: (wallets[chain] && wallets[chain].tokens) || [] };
+  await setDoc(doc(db, 'users', id), { wallets: { [chain]: entry } }, { merge: true });
+  wallets = { ...wallets, [chain]: entry };
+  if (!sessionPwd) sessionPwd = password;
+  emit();
+}
+
+async function createAndSave(chain, password) {
+  await ensureLibs();
+  const pwd = password || sessionPwd;
+  if (!pwd) throw new Error('Unlock or set a password first');
+  if (!(userDoc.walletAuth && userDoc.walletAuth.check)) await setAuthCheck(pwd);
+  const wd = await createWallet(chain);
+  await persistWallet(chain, wd, pwd);
+  refreshPortfolio();
+  return { address: wd.address, mnemonic: wd.mnemonic, privateKey: wd.privateKey };
+}
+
+async function importAndSave(chain, input, password) {
+  await ensureLibs();
+  const pwd = password || sessionPwd;
+  if (!pwd) throw new Error('Unlock or set a password first');
+  if (!(userDoc.walletAuth && userDoc.walletAuth.check)) await setAuthCheck(pwd);
+  const wd = await importWallet(chain, input);
+  await persistWallet(chain, wd, pwd);
+  refreshPortfolio();
+  return { address: wd.address };
+}
+
+async function removeWallet(chain) {
+  const id = uid(); if (!id) throw new Error('Sign in required');
+  await updateDoc(doc(db, 'users', id), { [`wallets.${chain}`]: deleteField() });
+  const next = { ...wallets }; delete next[chain]; wallets = next;
+  emit(); refreshPortfolio();
+}
+
+// ── Reveal secrets (password-gated) ──
+async function reveal(chain, type, password) {
+  const pwd = password || sessionPwd;
+  if (!pwd) throw new Error('Unlock required');
+  const w = wallets[chain];
+  if (!w) throw new Error('No wallet on this chain');
+  const blob = type === 'mnemonic' ? w.encMnemonic : w.encPrivateKey;
+  if (!blob) throw new Error(type === 'mnemonic' ? 'No recovery phrase stored for this wallet' : 'No private key stored');
+  try { return await decryptData(blob, pwd); }
+  catch { throw new Error('Wrong password'); }
+}
+
+// ── Send (irreversible — validate, unlock, decrypt, broadcast) ──
+async function sendAsset({ chain, to, amount, token }) {
+  await ensureLibs();
+  if (!sessionPwd) throw new Error('Unlock your wallet to send');
+  const w = wallets[chain];
+  if (!w) throw new Error('No wallet on ' + chain.toUpperCase());
+  if (!isValidAddress(chain, to)) throw new Error('Invalid ' + chain.toUpperCase() + ' recipient address');
+  if (!(Number(amount) > 0)) throw new Error('Enter a valid amount');
+  const pk = await decryptData(w.encPrivateKey, sessionPwd).catch(() => { throw new Error('Could not unlock this wallet with your session password'); });
+
+  if (token && token.address) {
+    if (chain === 'sol' || chain === 'ton') throw new Error('Token sends are supported on EVM chains only for now');
+    return await sendImpl.evmToken(chain, token.address, to, amount, token.decimals ?? 18, pk);
+  }
+  if (chain === 'sol') return await sendImpl.sol(to, amount, pk);
+  if (chain === 'ton') return await sendImpl.ton(to, amount, pk);
+  return await sendImpl.evmNative(chain, to, amount, pk);
+}
+
+// ── Change password (re-encrypt every secret + the auth check) ──
+async function changePassword(oldPw, newPw) {
+  const id = uid(); if (!id) throw new Error('Sign in required');
+  if (!newPw || newPw.length < 6) throw new Error('New password must be at least 6 characters');
+  if (!(await unlockable(oldPw))) throw new Error('Current password is wrong');
+  const nextWallets = {};
+  for (const [chain, w] of Object.entries(wallets)) {
+    const pk = await decryptData(w.encPrivateKey, oldPw);
+    const mn = w.encMnemonic ? await decryptData(w.encMnemonic, oldPw) : null;
+    nextWallets[chain] = {
+      address: w.address,
+      encPrivateKey: await encryptData(pk, newPw),
+      encMnemonic: mn ? await encryptData(mn, newPw) : null,
+      tokens: w.tokens || [],
+    };
+  }
+  const check = await buildAuthCheck(newPw);
+  await setDoc(doc(db, 'users', id), { wallets: nextWallets, walletAuth: { check } }, { merge: true });
+  wallets = nextWallets; userDoc.walletAuth = { check }; sessionPwd = newPw;
+  emit();
+  return true;
+}
+async function unlockable(password) {
+  const check = userDoc.walletAuth && userDoc.walletAuth.check;
+  if (check) return verifyAuthCheck(check, password);
+  if (hasAnyWallet()) { try { await decryptData(wallets[Object.keys(wallets)[0]].encPrivateKey, password); return true; } catch { return false; } }
+  return false;
+}
+
+// ── Settings / contacts / connected apps persistence ──
+async function saveSettings(patch) {
+  const id = uid(); if (!id) return;
+  settings = { ...settings, ...patch };
+  await setDoc(doc(db, 'users', id), { walletSettings: settings }, { merge: true }).catch(() => {});
+  emit();
+}
+function toggleHidden(listKey, value) {
+  const list = new Set(settings[listKey] || []);
+  if (list.has(value)) list.delete(value); else list.add(value);
+  return saveSettings({ [listKey]: [...list] });
+}
+async function addContact({ name, address, chain }) {
+  const id = uid(); if (!id) return;
+  if (!name || !address) throw new Error('Enter a label and address');
+  if (chain && !isValidAddress(chain, address)) throw new Error('Address is not valid for ' + chain.toUpperCase());
+  const c = { id: 'p' + Date.now(), name, address, chain: chain || 'eth' };
+  contacts = [...contacts, c];
+  await setDoc(doc(db, 'users', id), { contacts }, { merge: true });
+  emit();
+}
+async function removeContact(cid) {
+  const id = uid(); if (!id) return;
+  contacts = contacts.filter((c) => c.id !== cid);
+  await setDoc(doc(db, 'users', id), { contacts }, { merge: true });
+  emit();
+}
+async function removeConnectedApp(aid) {
+  const id = uid(); if (!id) return;
+  connectedApps = aid == null ? [] : connectedApps.filter((a) => a.id !== aid);
+  await setDoc(doc(db, 'users', id), { connectedApps }, { merge: true });
+  emit();
+}
+
+// ── Portfolio: native + token balances across all wallets, priced via CG ──
+async function refreshPortfolio() {
+  const chains = Object.keys(wallets);
+  if (!chains.length) { holdings = []; portfolioTotal = 0; emit(); return; }
+  try {
+    // Native prices in one call
+    const cgIds = [...new Set(chains.map((c) => (chainMeta(c) || {}).coingeckoId).filter(Boolean))];
+    let px = {};
+    if (cgIds.length) { try { px = await (await fetch(`${CG}/simple/price?ids=${cgIds.join(',')}&vs_currencies=usd&include_24hr_change=true`)).json(); } catch (e) { px = {}; } }
+
+    const rows = [];
+    await Promise.all(chains.map(async (chain) => {
+      const w = wallets[chain]; const meta = chainMeta(chain) || {};
+      if (settings.hiddenChains.includes(chain)) return;
+      const bal = await getBalanceNum(chain, w.address).catch(() => 0);
+      const q = px[meta.coingeckoId] || {};
+      const price = q.usd != null ? q.usd : 0;
+      if (bal > 0) rows.push({
+        sym: meta.symbol, name: meta.label, chain, logo: meta.color, img: meta.logo,
+        amount: bal < 1 ? bal.toFixed(5) : bal.toFixed(4),
+        price, value: bal * price, ch24: q.usd_24h_change != null ? +q.usd_24h_change.toFixed(2) : 0,
+        native: true,
+      });
+      // Saved custom tokens (EVM only)
+      for (const tk of (w.tokens || [])) {
+        try {
+          const tb = await getTokenBalanceNum(chain, w.address, tk.address, tk.decimals ?? 18);
+          if (tb <= 0) continue;
+          const prices = await fetchTokenPrices(meta.cgPlatform, [tk.address.toLowerCase()]);
+          const p = prices[tk.address.toLowerCase()] || {};
+          rows.push({ sym: tk.symbol, name: tk.symbol, chain, logo: meta.color, address: tk.address, decimals: tk.decimals ?? 18, amount: tb < 1 ? tb.toFixed(5) : tb.toFixed(4), price: p.usd || 0, value: tb * (p.usd || 0), ch24: p.change != null ? +p.change.toFixed(2) : 0 });
+        } catch (e) {}
+      }
+    }));
+    holdings = rows.sort((a, b) => b.value - a.value);
+    portfolioTotal = rows.reduce((a, r) => a + r.value, 0);
+    emit();
+  } catch (e) { /* keep last */ }
+}
+
+// Tx history for the active address on a chain
+function txHistory(chain) {
+  const w = wallets[chain];
+  if (!w) return Promise.resolve([]);
+  return getTxs(chain, w.address).catch(() => []);
+}
+
+// ── Public snapshot for the UI ──
+function walletList() {
+  return Object.entries(wallets).map(([chain, w]) => {
+    const meta = chainMeta(chain) || {};
+    return { chain, address: w.address, label: meta.label, symbol: meta.symbol, color: meta.color, hasMnemonic: !!w.encMnemonic };
+  });
+}
+function addresses() { const out = {}; for (const [c, w] of Object.entries(wallets)) out[c] = w.address; return out; }
+function visibleHoldings() {
+  return holdings.filter((h) => {
+    if (settings.hiddenChains.includes(h.chain)) return false;
+    if (settings.hiddenTokens.includes(h.sym)) return false;
+    if (settings.hideSmall && h.value < 1) return false;
+    return true;
+  });
+}
+
+window.FXWallet = {
+  load, ready: () => loaded,
+  // state
+  state: () => ({
+    loaded, locked: isLocked(), protected: isProtected(), hasWallets: hasAnyWallet(),
+    wallets: walletList(), addresses: addresses(),
+    holdings: visibleHoldings(), allHoldings: holdings, total: portfolioTotal,
+    settings, contacts, connectedApps,
+  }),
+  chains: CHAINS,
+  isLocked, isProtected,
+  isValidAddress: (chain, addr) => isValidAddress(chain, addr),
+  // session
+  unlock, setInitialPassword, lock, changePassword,
+  // wallets
+  createAndSave, importAndSave, removeWallet, reveal,
+  // money
+  send: sendAsset, refreshPortfolio, txHistory,
+  // settings
+  saveSettings, toggleHidden,
+  addContact, removeContact, removeConnectedApp,
+  ensureLibs,
+};
+
+// Load wallet data on sign-in; wipe the in-memory session on sign-out so the
+// next account never inherits a previous user's decrypted password/wallets.
+onAuthStateChanged(auth, (u) => {
+  if (u) { load(); }
+  else { sessionPwd = null; userDoc = {}; wallets = {}; contacts = []; connectedApps = []; holdings = []; portfolioTotal = 0; loaded = false; emit(); }
+});
+
+export {};

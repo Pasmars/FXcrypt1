@@ -1,0 +1,4 @@
+# Firebase App Hosting config for the FXcrypt user app (Next.js).
+runConfig:
+  minInstances: 0
+  maxInstances: 2

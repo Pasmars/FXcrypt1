@@ -112,9 +112,11 @@ const client = new Client({
   partials: [Partials.Channel], // required to receive DMs
 })
 
+const yn = (v) => (v ? '✓' : '✗')
 client.once(Events.ClientReady, (c) => {
   console.log(`✅ FXcrypt agent online as ${c.user.tag}`)
   console.log(`   Triggers: DMs, @mentions${CHANNEL_ID ? `, channel ${CHANNEL_ID}` : ' (no dedicated channel set)'}`)
+  console.log(`   Keys: DeepSeek ${yn(process.env.DEEPSEEK_API_KEY)} · OpenAI ${yn(process.env.OPENAI_API_KEY)} · Helius ${yn(HELIUS)} · Moralis ${yn(MORALIS)} · BOT_SECRET ${yn(MASTER_SECRET)}`)
 })
 
 client.on(Events.MessageCreate, async (msg) => {

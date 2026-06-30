@@ -52,11 +52,13 @@ function validateSolKey(pk) {
 
 // Public RPCs with multiple fallbacks — tried in order until one responds
 const BSC_RPCS = [
-  'https://bsc-dataseed.binance.org',
-  'https://bsc-dataseed1.defibit.io',
-  'https://bsc-dataseed2.defibit.io',
-  'https://bsc-dataseed1.ninicoin.io',
+  'https://bsc-rpc.publicnode.com',     // fast + reliable (binance.org dataseeds geo-time-out for some ISPs)
+  'https://bsc.meowrpc.com',
   'https://bsc.publicnode.com',
+  'https://bsc-dataseed1.ninicoin.io',
+  'https://bsc.drpc.org',
+  'https://bsc-dataseed1.defibit.io',
+  'https://bsc-dataseed.binance.org',   // kept last (works from some networks/cloud)
 ]
 const ETH_RPCS = [
   'https://ethereum.publicnode.com',
@@ -380,19 +382,21 @@ async function signAndSubmitSolTx(privateKeyBase58, serializedTxBase64, rpcUrl, 
 
 // ── Balance queries ────────────────────────────────────────────────────────
 async function getEVMBalance(address, chain, rpcUrl) {
-  // For ETH with no custom RPC, try each public endpoint in order
-  const rpcs = (!rpcUrl && chain === 'eth') ? ETH_RPCS : [rpcUrl || null]
-  let lastErr
-  for (const rpc of rpcs) {
-    try {
-      const provider = evmProvider(chain, rpc || undefined)
-      const raw      = await withTimeout(provider.getBalance(address))
-      return { native: parseFloat(ethers.formatEther(raw)).toFixed(6) }
-    } catch (err) {
-      lastErr = err
-    }
+  // Try the custom RPC first (if given), then fall back across all of the
+  // chain's public endpoints — applies to BSC/Base/ETH alike so one flaky
+  // endpoint doesn't fail the whole balance lookup.
+  const { rpcs: defaults } = chainConfig(chain)
+  const list = rpcUrl ? [rpcUrl, ...defaults] : defaults
+  // Race every endpoint — the first to respond wins; we only fail if ALL fail.
+  // Sequential fallback could stall ~5s on each dead/geo-blocked node (e.g.
+  // binance.org dataseeds time out for some ISPs), so racing is both faster and
+  // far more resilient.
+  try {
+    const raw = await Promise.any(list.map((rpc) => withTimeout(evmProvider(chain, rpc).getBalance(address), 6000)))
+    return { native: parseFloat(ethers.formatEther(raw)).toFixed(6) }
+  } catch (_) {
+    throw new Error(`Cannot fetch ${chain.toUpperCase()} balance — all ${list.length} RPC endpoints failed/timed out`)
   }
-  throw lastErr
 }
 
 async function getSOLBalance(address, rpcUrl) {

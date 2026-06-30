@@ -87,8 +87,8 @@ async function checkHoneypotIs(address, chainId = 56) {
     const sim = data.simulationResult || {}
     return {
       isHoneypot:   hp.isHoneypot === true,
-      buyTax:       sim.buyTax  != null ? parseFloat(sim.buyTax)  : null,
-      sellTax:      sim.sellTax != null ? parseFloat(sim.sellTax) : null,
+      buyTax:       (sim.buyTax  != null && isFinite(parseFloat(sim.buyTax)))  ? parseFloat(sim.buyTax)  : null,
+      sellTax:      (sim.sellTax != null && isFinite(parseFloat(sim.sellTax))) ? parseFloat(sim.sellTax) : null,
       isOpenSource: data.contractCode?.openSource === true,
     }
   } catch {
@@ -113,7 +113,9 @@ async function checkRugCheck(mintAddress) {
 function evalGoPlusEVM(r) {
   if (!r) return { hardFail: false, riskScore: 0, flags: [], available: false }
 
-  const n = (v) => parseFloat(v ?? '0')
+  // NaN-safe: GoPlus often returns '' for missing fields, and parseFloat('') is
+  // NaN — which later breaks JSON encoding of the gem result. Coerce to 0.
+  const n = (v) => { const x = parseFloat(v); return isFinite(x) ? x : 0 }
   const flags    = []
   let hardFail   = false
   let riskScore  = 0

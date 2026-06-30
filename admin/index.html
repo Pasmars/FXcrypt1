@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex, nofollow" />
+<title>FXcrypt · Admin</title>
+<style>
+  :root{--bg:#0B0E11;--surface:#12161C;--surface2:#1A1F27;--line:#232932;--text:#E7ECF2;--muted:#8A94A3;--faint:#5A6472;--accent:#3B82F6;--up:#22C55E;--down:#EF4444;--gold:#F5A623}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;font-size:14px}
+  a{color:var(--accent)}
+  button{font-family:inherit;cursor:pointer}
+  .btn{background:var(--accent);color:#fff;border:none;border-radius:9px;padding:9px 14px;font-weight:700;font-size:13px}
+  .btn.ghost{background:var(--surface2);color:var(--text)}
+  .btn.danger{background:rgba(239,68,68,.15);color:var(--down)}
+  .btn.sm{padding:6px 10px;font-size:12px;border-radius:8px}
+  .wrap{max-width:1180px;margin:0 auto;padding:18px}
+  .center{min-height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;text-align:center;padding:24px}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px}
+  .topbar{display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:5}
+  .logo{font-weight:800;font-size:17px}.logo span{color:var(--accent)}
+  .grow{flex:1}
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
+  .stat{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px}
+  .stat .n{font-size:24px;font-weight:800;letter-spacing:-.5px}
+  .stat .l{font-size:12px;color:var(--muted);margin-top:2px}
+  .controls{display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+  input,select{background:var(--surface2);border:1px solid var(--line);color:var(--text);border-radius:9px;padding:9px 12px;font-size:13px;font-family:inherit;outline:none}
+  input:focus{border-color:var(--accent)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{text-align:left;color:var(--muted);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.4px;padding:10px 12px;border-bottom:1px solid var(--line)}
+  td{padding:11px 12px;border-bottom:1px solid var(--line);vertical-align:middle}
+  tr:hover td{background:var(--surface)}
+  .badge{display:inline-block;padding:3px 9px;border-radius:7px;font-size:11.5px;font-weight:700}
+  .b-free{background:var(--surface2);color:var(--muted)}.b-pro{background:rgba(59,130,246,.18);color:var(--accent)}.b-elite{background:rgba(245,166,35,.18);color:var(--gold)}
+  .b-banned{background:rgba(239,68,68,.18);color:var(--down)}
+  .mono{font-family:ui-monospace,monospace;font-size:12px;color:var(--muted)}
+  .muted{color:var(--muted)}.gold{color:var(--gold)}
+  .row-actions{display:flex;gap:6px;justify-content:flex-end}
+  .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:20px;z-index:50}
+  .modal{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:20px;max-width:560px;width:100%;max-height:86vh;overflow:auto}
+  pre{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:12px;overflow:auto;font-size:12px;color:var(--text2,#cdd5df)}
+  .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--surface2);border:1px solid var(--line);border-radius:11px;padding:12px 18px;font-weight:600;z-index:99;box-shadow:0 8px 30px rgba(0,0,0,.4)}
+  .err{color:var(--down)}
+</style>
+</head>
+<body>
+<div id="app"><div class="center"><div class="muted">Loading…</div></div></div>
+
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-functions-compat.js"></script>
+<script>
+const firebaseConfig = {
+  apiKey: 'AIzaSyCpdVnFtB1dnlZmvfJ9srIBvgFl1ZqNLmQ',
+  authDomain: 'pnl-calculator.firebaseapp.com',
+  projectId: 'pnl-calculator',
+  storageBucket: 'pnl-calculator.firebasestorage.app',
+  messagingSenderId: '935070103115',
+  appId: '1:935070103115:web:963a10b745483e2255bfce'
+};
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const fns = firebase.app().functions('europe-west1');
+const call = (name, data) => fns.httpsCallable(name)(data || {}).then(r => r.data);
+
+const app = document.getElementById('app');
+let USERS = [], nextPageToken = null, currentUser = null;
+
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function toast(msg,isErr){const t=document.createElement('div');t.className='toast'+(isErr?' err':'');t.textContent=msg;document.body.appendChild(t);setTimeout(()=>t.remove(),2600)}
+function fmtDate(s){if(!s)return '—';const d=new Date(s);return isNaN(d)?'—':d.toLocaleDateString()+' '+d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}
+function planBadge(p,expiry){const cls=p==='elite'?'b-elite':p==='pro'?'b-pro':'b-free';let ex='';if(expiry){const left=Math.ceil((expiry-Date.now())/86400000);ex= left>0?` · ${left}d`:' · expired'}return `<span class="badge ${cls}">${esc(p)}${ex}</span>`}
+
+// ── Screens ──
+function renderLogin(msg){
+  app.innerHTML = `<div class="center">
+    <div class="logo" style="font-size:26px">FX<span>crypt</span> Admin</div>
+    <div class="muted" style="max-width:360px">Restricted control panel. Sign in with an authorized admin account.</div>
+    ${msg?`<div class="err">${esc(msg)}</div>`:''}
+    <button class="btn" id="signin">Sign in with Google</button>
+  </div>`;
+  document.getElementById('signin').onclick = ()=>auth.signInWithPopup(new firebase.auth.GoogleAuthProvider()).catch(e=>toast(e.message,true));
+}
+
+async function renderDashboard(){
+  app.innerHTML = `
+    <div class="topbar">
+      <div class="logo">FX<span>crypt</span> · Admin</div>
+      <div class="grow"></div>
+      <div class="muted" style="font-size:13px">${esc(currentUser.email)}</div>
+      <button class="btn ghost sm" id="settings">Billing settings</button>
+      <button class="btn ghost sm" id="signout">Sign out</button>
+    </div>
+    <div class="wrap">
+      <div class="stats" id="stats"><div class="stat"><div class="n">…</div><div class="l">Loading stats</div></div></div>
+      <div id="revenue"></div>
+      <div class="controls">
+        <input id="search" placeholder="Search email or UID…" style="flex:1;min-width:200px"/>
+        <button class="btn ghost sm" id="refresh">Refresh</button>
+      </div>
+      <div class="card" style="padding:0;overflow:hidden">
+        <table>
+          <thead><tr><th>User</th><th>Plan</th><th>Joined</th><th>Last seen</th><th>Flags</th><th></th></tr></thead>
+          <tbody id="rows"><tr><td colspan="6" class="muted" style="padding:24px;text-align:center">Loading users…</td></tr></tbody>
+        </table>
+      </div>
+      <div style="text-align:center;margin-top:14px"><button class="btn ghost sm" id="more" style="display:none">Load more</button></div>
+    </div>`;
+  document.getElementById('signout').onclick = ()=>auth.signOut();
+  document.getElementById('settings').onclick = showConfig;
+  document.getElementById('refresh').onclick = ()=>{USERS=[];nextPageToken=null;loadUsers(true);loadStats()};
+  document.getElementById('search').oninput = renderRows;
+  document.getElementById('more').onclick = ()=>loadUsers(false);
+  loadStats();
+  loadRevenue();
+  loadUsers(true);
+}
+
+async function loadRevenue(){
+  const el = document.getElementById('revenue');
+  try{
+    const r = await call('adminRevenue');
+    const money = n => '$'+Number(n||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+    const rows = (r.recent||[]).slice(0,12).map(p=>`<tr><td>${esc(p.provider)}</td><td>${planBadge(p.plan)}</td><td style="font-weight:700">${money(p.usd)}</td><td class="muted">${fmtDate(p.at)}</td><td class="mono">${esc((p.uid||'').slice(0,10))}</td></tr>`).join('');
+    el.innerHTML = `
+      <div style="font-weight:800;font-size:15px;margin:6px 2px 10px">Revenue</div>
+      <div class="stats">
+        <div class="stat"><div class="n up" style="color:var(--up)">${money(r.totalUsd)}</div><div class="l">Total revenue</div></div>
+        <div class="stat"><div class="n">${money(r.last30Usd)}</div><div class="l">Last 30 days</div></div>
+        <div class="stat"><div class="n" style="color:var(--accent)">${r.activeSubs}</div><div class="l">Active subscriptions</div></div>
+        <div class="stat"><div class="n">${r.paidCount}</div><div class="l">Paid orders</div></div>
+        <div class="stat"><div class="n muted" style="font-size:18px">${money(r.byProvider.stripe)} · ${money(r.byProvider.crypto)}</div><div class="l">Stripe · Crypto</div></div>
+      </div>
+      ${rows?`<div class="card" style="padding:0;overflow:hidden;margin-bottom:16px"><table><thead><tr><th>Method</th><th>Plan</th><th>Amount</th><th>When</th><th>User</th></tr></thead><tbody>${rows}</tbody></table></div>`:''}`;
+  }catch(e){ el.innerHTML = `<div class="muted" style="margin:6px 2px 14px;font-size:12.5px">Revenue: ${esc(e.message)}</div>`; }
+}
+
+async function loadStats(){
+  try{
+    const s = await call('adminStats');
+    document.getElementById('stats').innerHTML = `
+      <div class="stat"><div class="n">${s.totalUsers}</div><div class="l">Total users</div></div>
+      <div class="stat"><div class="n">${s.premium}</div><div class="l">Premium</div></div>
+      <div class="stat"><div class="n" style="color:var(--accent)">${s.byPlan.pro}</div><div class="l">Pro</div></div>
+      <div class="stat"><div class="n gold">${s.byPlan.elite}</div><div class="l">Elite</div></div>
+      <div class="stat"><div class="n muted">${s.byPlan.free}</div><div class="l">Free</div></div>`;
+  }catch(e){ document.getElementById('stats').innerHTML = `<div class="stat"><div class="n err">!</div><div class="l">${esc(e.message)}</div></div>`; }
+}
+
+async function loadUsers(reset){
+  if(reset){USERS=[];nextPageToken=null;}
+  try{
+    const res = await call('adminListUsers', { pageToken: nextPageToken });
+    USERS = USERS.concat(res.users||[]);
+    nextPageToken = res.nextPageToken;
+    renderRows();
+    document.getElementById('more').style.display = nextPageToken ? '' : 'none';
+  }catch(e){ document.getElementById('rows').innerHTML = `<tr><td colspan="6" class="err" style="padding:24px;text-align:center">${esc(e.message)}</td></tr>`; }
+}
+
+function renderRows(){
+  const q = (document.getElementById('search').value||'').toLowerCase().trim();
+  const list = q ? USERS.filter(u=>(u.email||'').toLowerCase().includes(q)||u.uid.toLowerCase().includes(q)) : USERS;
+  const tb = document.getElementById('rows');
+  if(!list.length){ tb.innerHTML = `<tr><td colspan="6" class="muted" style="padding:24px;text-align:center">No users</td></tr>`; return; }
+  tb.innerHTML = list.map(u=>`
+    <tr>
+      <td><div style="font-weight:600">${esc(u.email||'—')}</div><div class="mono">${esc(u.uid)}</div></td>
+      <td>${planBadge(u.plan,u.planExpiry)}</td>
+      <td class="muted">${fmtDate(u.createdAt)}</td>
+      <td class="muted">${fmtDate(u.lastSignIn)}</td>
+      <td>${u.banned?'<span class="badge b-banned">banned</span> ':''}${u.hasWallets?'<span class="badge b-free">wallet</span> ':''}${u.telegram?'<span class="badge b-free">TG</span> ':''}${u.discord?'<span class="badge b-free">DC</span>':''}</td>
+      <td><div class="row-actions">
+        <button class="btn ghost sm" data-act="view" data-uid="${u.uid}">View</button>
+        <button class="btn ghost sm" data-act="plan" data-uid="${u.uid}">Plan</button>
+        <button class="btn ${u.banned?'ghost':'danger'} sm" data-act="ban" data-uid="${u.uid}" data-banned="${u.banned?1:0}">${u.banned?'Unban':'Ban'}</button>
+      </div></td>
+    </tr>`).join('');
+  tb.querySelectorAll('button[data-act]').forEach(b=>b.onclick=()=>onAction(b.dataset.act,b.dataset.uid,b.dataset));
+}
+
+async function onAction(act,uid,ds){
+  const u = USERS.find(x=>x.uid===uid);
+  if(act==='ban'){
+    const banned = ds.banned==='1';
+    if(!confirm(`${banned?'Unban':'Ban'} ${u.email||uid}?`))return;
+    try{ await call('adminBanUser',{uid,banned:!banned}); u.banned=!banned; if(!banned){u.disabled=true}else{u.disabled=false} renderRows(); toast(banned?'User unbanned':'User banned'); }
+    catch(e){toast(e.message,true)}
+  } else if(act==='plan'){
+    const plan = prompt(`Set plan for ${u.email||uid}\nEnter: free, pro, or elite`, u.plan||'free');
+    if(!plan||!['free','pro','elite'].includes(plan.trim()))return;
+    let days = 0;
+    if(plan.trim()!=='free'){ const d = prompt('Days of access (blank = permanent / until subscription ends):',''); days = parseInt(d)||0; }
+    try{ await call('adminSetPlan',{uid,plan:plan.trim(),days}); u.plan=plan.trim(); u.planExpiry= days?Date.now()+days*86400000:null; renderRows(); loadStats(); toast('Plan updated'); }
+    catch(e){toast(e.message,true)}
+  } else if(act==='view'){
+    try{ const d = await call('adminGetUser',{uid}); showUser(u,d); }catch(e){toast(e.message,true)}
+  }
+}
+
+function showUser(u,d){
+  const pays = (d.payments||[]).map(p=>`<div class="muted" style="font-size:12px">${esc(p.provider)} · ${esc(p.plan||'')} · ${esc(p.status||'')} · ${p.amountUsd?('$'+p.amountUsd):(p.amount?('$'+(p.amount/100)):'')} · ${fmtDate(p.paidAt||p.at||p.createdAt)}</div>`).join('')||'<div class="muted" style="font-size:12px">No payments</div>';
+  const bg = document.createElement('div'); bg.className='modal-bg';
+  bg.innerHTML = `<div class="modal">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+      <div style="flex:1"><div style="font-weight:800;font-size:16px">${esc(u.email||u.uid)}</div><div class="mono">${esc(u.uid)}</div></div>
+      <button class="btn ghost sm" id="close">Close</button>
+    </div>
+    <div style="margin-bottom:10px">${planBadge(u.plan,u.planExpiry)} ${u.banned?'<span class="badge b-banned">banned</span>':''}</div>
+    <div style="font-weight:700;margin:12px 0 6px">Payments</div>${pays}
+    <div style="font-weight:700;margin:14px 0 6px">Profile (secrets redacted)</div>
+    <pre>${esc(JSON.stringify(d.doc||{},null,2))}</pre>
+  </div>`;
+  bg.onclick = e=>{ if(e.target===bg||e.target.id==='close') bg.remove(); };
+  document.body.appendChild(bg);
+}
+
+async function showConfig(){
+  let cfg = {};
+  try{ const r = await call('adminGetConfig'); cfg = r.config||{}; }catch(e){ toast(e.message,true); return; }
+  const ra = cfg.receivingAddresses||{}, pp = cfg.planPricesUsd||{}, sp = cfg.stripePriceIds||{};
+  const bg = document.createElement('div'); bg.className='modal-bg';
+  const fld = (id,label,val,ph)=>`<label style="display:block;margin-bottom:10px"><div class="muted" style="font-size:12px;margin-bottom:4px">${label}</div><input id="${id}" value="${esc(val||'')}" placeholder="${ph||''}" style="width:100%"/></label>`;
+  bg.innerHTML = `<div class="modal">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px"><div style="flex:1;font-weight:800;font-size:16px">Billing settings</div><button class="btn ghost sm" id="cclose">Close</button></div>
+    <div style="font-weight:700;margin-bottom:8px">Crypto receiving addresses</div>
+    ${fld('r_eth','Ethereum (ETH/USDT/USDC)',ra.eth,'0x…')}
+    ${fld('r_bsc','BNB Chain (BNB/USDT/USDC)',ra.bsc,'0x…')}
+    ${fld('r_base','Base (ETH/USDC)',ra.base,'0x…')}
+    ${fld('r_sol','Solana (SOL)',ra.sol,'…')}
+    <div style="font-weight:700;margin:14px 0 8px">Plan prices (USD)</div>
+    <div style="display:flex;gap:10px">${fld('p_pro','Pro / month',pp.pro!=null?pp.pro:29)}${fld('p_elite','Elite / month',pp.elite!=null?pp.elite:99)}</div>
+    <div style="font-weight:700;margin:14px 0 8px">Stripe subscription price IDs</div>
+    ${fld('s_pro','Pro monthly price ID',sp.proMonthly,'price_…')}
+    ${fld('s_elite','Elite monthly price ID',sp.eliteMonthly,'price_…')}
+    ${fld('furl','Frontend URL (Checkout return)',cfg.frontendUrl||'https://fxcrypt-app.web.app')}
+    <div style="font-weight:700;margin:14px 0 8px">Pointer AI model</div>
+    <select id="aimodel" style="width:100%">
+      <option value="deepseek"${(cfg.aiProvider||'deepseek')==='deepseek'?' selected':''}>DeepSeek</option>
+      <option value="openai"${cfg.aiProvider==='openai'?' selected':''}>ChatGPT (OpenAI)</option>
+    </select>
+    <div class="muted" style="font-size:12px;margin:6px 0 0">Applies to every user's in-app Pointer. The matching API key must be set in Secret Manager.</div>
+    <div class="muted" style="font-size:12px;margin:10px 0">Note: Stripe API keys & webhook secret are set via <span class="mono">firebase functions:secrets:set</span>, not here.</div>
+    <button class="btn" id="csave" style="width:100%">Save settings</button>
+  </div>`;
+  bg.onclick = e=>{ if(e.target===bg||e.target.id==='cclose') bg.remove(); };
+  document.body.appendChild(bg);
+  const v = id=>document.getElementById(id).value.trim();
+  document.getElementById('csave').onclick = async ()=>{
+    try{
+      await call('adminSetConfig',{ config:{
+        receivingAddresses:{eth:v('r_eth'),bsc:v('r_bsc'),base:v('r_base'),sol:v('r_sol')},
+        planPricesUsd:{pro:parseInt(v('p_pro'))||29,elite:parseInt(v('p_elite'))||99},
+        stripePriceIds:{proMonthly:v('s_pro'),eliteMonthly:v('s_elite')},
+        frontendUrl:v('furl'), aiProvider:document.getElementById('aimodel').value, adminEmails:(cfg.adminEmails||[]),
+      }});
+      bg.remove(); toast('Settings saved');
+    }catch(e){ toast(e.message,true); }
+  };
+}
+
+// ── Auth gate ──
+auth.onAuthStateChanged(async (user)=>{
+  if(!user){ currentUser=null; renderLogin(); return; }
+  currentUser = user;
+  app.innerHTML = `<div class="center"><div class="muted">Verifying admin access…</div></div>`;
+  try{
+    await call('adminStats'); // throws permission-denied for non-admins
+    renderDashboard();
+  }catch(e){
+    if((e.code||'').includes('permission-denied')||/admin/i.test(e.message)){
+      renderLogin(`${user.email} is not an authorized admin.`);
+      auth.signOut();
+    } else {
+      renderLogin('Error: '+e.message);
+    }
+  }
+});
+</script>
+</body>
+</html>

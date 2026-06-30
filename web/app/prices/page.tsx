@@ -57,7 +57,7 @@ function Sparkline({ prices, positive }: { prices: number[]; positive: boolean }
       return `${x.toFixed(1)},${y.toFixed(1)}`;
     })
     .join(' ');
-  const color = positive ? '#0ECB81' : '#F6465D';
+  const color = positive ? 'rgb(var(--c-success))' : 'rgb(var(--c-danger))';
   const fillPts = `${PAD},${H} ${pts} ${(W - PAD).toFixed(1)},${H}`;
   return (
     <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="h-16 w-full">

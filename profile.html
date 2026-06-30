@@ -39,6 +39,7 @@
       <li><a href="bot.html">DEX Bot</a></li>
       <li><a href="agent.html">AI Agent</a></li>
       <li><a href="wallet.html">Wallet</a></li>
+      <li><a href="premium.html">⭐ Premium</a></li>
       <li><button id="sideLogoutBtn" class="side-logout-btn">Logout</button></li>
     </ul>
   </div>
@@ -49,6 +50,15 @@
       <h2 id="userFullName"></h2>
       <p id="userEmailDisplay"></p>
     </div>
+
+    <a href="premium.html" id="membershipCard" style="display:flex;align-items:center;gap:12px;text-decoration:none;color:inherit;background:linear-gradient(135deg,#1A1F27,#11203a);border:1px solid #232932;border-radius:14px;padding:14px 16px;margin-bottom:16px">
+      <div style="width:42px;height:42px;border-radius:12px;background:#3B82F6;display:flex;align-items:center;justify-content:center;font-size:20px">⭐</div>
+      <div style="flex:1">
+        <div style="font-weight:800;font-size:15px"><span id="planName">Free</span> plan</div>
+        <div style="font-size:12.5px;color:#8A94A3" id="planSub">Upgrade for lower fees & automation</div>
+      </div>
+      <span id="planCta" style="background:#3B82F6;color:#fff;border-radius:8px;padding:7px 13px;font-weight:700;font-size:12.5px">Upgrade</span>
+    </a>
 
     <div class="profile-details" id="profileDetailsView">
       <div class="detail-row">
@@ -139,6 +149,7 @@
       let firstName = "N/A";
       let lastName  = "N/A";
       let phone     = "N/A";
+      let plan      = "free";
 
       try {
         const docRef  = doc(db, "users", user.uid);
@@ -148,6 +159,8 @@
           firstName = data.firstName || "N/A";
           lastName  = data.lastName  || "N/A";
           phone     = data.phone     || "N/A";
+          const expired = data.planExpiry && data.planExpiry < Date.now();
+          plan = (!data.plan || expired) ? "free" : data.plan;
         } else if (user.displayName) {
           const parts = user.displayName.split(" ");
           firstName = parts[0] || "N/A";
@@ -173,6 +186,14 @@
       document.getElementById("detailLastName").textContent  = lastName;
       document.getElementById("detailPhone").textContent     = phone;
       document.getElementById("detailJoinDate").textContent  = joinDate;
+
+      // Membership card
+      const planLabel = { free: "Free", pro: "Pro", elite: "Elite" }[plan] || "Free";
+      document.getElementById("planName").textContent = planLabel;
+      if (plan !== "free") {
+        document.getElementById("planSub").textContent = "Active · manage your membership";
+        document.getElementById("planCta").textContent = "Manage";
+      }
 
       // Logout
       document.getElementById("logoutBtn").addEventListener("click", () => {

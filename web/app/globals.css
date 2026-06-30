@@ -2,8 +2,78 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
+:root,
+.dark {
   --font-inter: 'Inter', system-ui, sans-serif;
+  /* ── Dark neutrals (fx design tokens) ── */
+  --c-base: 11 14 17;          /* --bg      */
+  --c-base-2: 18 22 28;        /* --bg2     */
+  --c-surface: 24 26 32;       /* --surface */
+  --c-surface-2: 30 35 41;     /* --surface2 */
+  --c-surface-3: 43 49 57;     /* legacy alias (kept for existing classes) */
+  --c-elevated: 34 39 46;      /* --elevated */
+  --c-border: 43 49 57;        /* --line    */
+  --c-border-2: 54 60 69;      /* --line2   */
+  --c-foreground: 234 236 239; /* --text    */
+  --c-text-2: 183 189 198;     /* --text2   */
+  --c-muted: 132 142 156;      /* --muted   */
+  --c-faint: 94 102 115;       /* --faint   */
+  --c-chip: 37 42 49;          /* --chip    */
+  /* market direction */
+  --c-success: 46 189 133;     /* --up      */
+  --c-danger: 246 70 93;       /* --down    */
+  /* glass/overlay */
+  --c-overlay: 0 0 0;          /* used at .6 alpha */
+  --c-bar: 11 14 17;           /* nav bar tint, used at ~.82 */
+  --c-shimmer: 255 255 255;    /* skeleton, used at low alpha */
+  /* legacy accent (green) kept so old classes don't break */
+  --c-accent: 46 189 133;
+  --c-accent-dark: 14 158 104;
+}
+
+.light {
+  /* Light neutrals — brand/up/down stay vivid */
+  --c-base: 255 255 255;
+  --c-base-2: 248 250 253;
+  --c-surface: 255 255 255;
+  --c-surface-2: 245 247 250;
+  --c-surface-3: 231 235 240;
+  --c-elevated: 255 255 255;
+  --c-border: 234 236 239;
+  --c-border-2: 221 225 230;
+  --c-foreground: 30 35 41;
+  --c-text-2: 71 77 87;
+  --c-muted: 112 122 138;
+  --c-faint: 146 154 165;
+  --c-chip: 240 242 245;
+  --c-success: 2 163 108;
+  --c-danger: 232 50 75;
+  --c-overlay: 20 24 30;       /* used at .4 alpha */
+  --c-bar: 255 255 255;
+  --c-shimmer: 0 0 0;
+}
+
+/* ── Accent palettes — set via data-accent on <html>, independent of dark/light ── */
+:root,
+[data-accent='gold'] {
+  --c-brand: 252 213 53;
+  --c-brand-dark: 240 185 11;
+  --c-on-accent: 11 14 17;
+}
+[data-accent='cyan'] {
+  --c-brand: 0 194 255;
+  --c-brand-dark: 0 151 199;
+  --c-on-accent: 4 18 26;
+}
+[data-accent='green'] {
+  --c-brand: 22 199 132;
+  --c-brand-dark: 14 158 104;
+  --c-on-accent: 4 19 13;
+}
+[data-accent='violet'] {
+  --c-brand: 123 97 255;
+  --c-brand-dark: 91 66 216;
+  --c-on-accent: 12 8 32;
 }
 
 html,
@@ -14,22 +84,26 @@ body {
 body {
   @apply bg-base text-foreground antialiased;
   background-image:
-    radial-gradient(1200px 600px at 100% -10%, rgba(252, 213, 53, 0.06), transparent 60%),
-    radial-gradient(1000px 500px at -10% 110%, rgba(0, 200, 83, 0.05), transparent 60%);
+    radial-gradient(1200px 600px at 100% -10%, rgb(var(--c-brand) / 0.06), transparent 60%),
+    radial-gradient(1000px 500px at -10% 110%, rgb(var(--c-brand) / 0.04), transparent 60%);
   background-attachment: fixed;
+}
+
+::selection {
+  background: rgb(var(--c-brand) / 0.28);
 }
 
 /* Thin, themed scrollbars */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #2b3139 transparent;
+  scrollbar-color: rgb(var(--c-border-2)) transparent;
 }
 *::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 *::-webkit-scrollbar-thumb {
-  background: #2b3139;
+  background: rgb(var(--c-border-2));
   border-radius: 8px;
 }
 
@@ -44,30 +118,47 @@ body {
 /* Reusable component classes layered on Tailwind */
 @layer components {
   .card {
-    @apply rounded-2xl border border-border bg-surface-2/80 backdrop-blur-sm shadow-card;
+    @apply rounded-2xl bg-surface shadow-ring;
+  }
+  /* translucent glass surface (nav bars / sheets) */
+  .glass {
+    background: rgb(var(--c-bar) / 0.82);
+    @apply backdrop-blur-xl backdrop-saturate-150;
   }
   .input-base {
-    @apply w-full rounded-xl border border-border-2 bg-surface-3 px-4 py-3 text-sm text-foreground
-           placeholder:text-muted outline-none transition
-           focus:border-brand focus:ring-2 focus:ring-brand/20;
+    @apply w-full rounded-xl bg-surface-2 px-4 py-3 text-sm text-foreground shadow-ring
+           placeholder:text-faint outline-none transition
+           focus:shadow-[inset_0_0_0_1.5px_rgb(var(--c-brand))];
   }
   .label-base {
-    @apply mb-1.5 block text-xs font-medium uppercase tracking-wide text-muted;
+    @apply mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted;
   }
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold
-           transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-bold
+           transition active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-40;
   }
   .btn-primary {
-    @apply btn bg-brand text-[#181A20] hover:brightness-95 shadow-glow;
+    @apply btn bg-brand text-on-accent hover:brightness-95 shadow-glow;
   }
   .btn-accent {
-    @apply btn bg-accent text-black hover:bg-accent-dark;
+    @apply btn bg-brand-deep text-white hover:brightness-95;
   }
   .btn-ghost {
-    @apply btn bg-surface-3 text-foreground hover:bg-border-2;
+    @apply btn bg-transparent text-text-2 shadow-ring hover:bg-surface-2;
+  }
+  .btn-soft {
+    @apply btn bg-chip font-semibold text-foreground hover:brightness-95;
   }
 }
+
+/* ── fx design animations ── */
+@keyframes fxfade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fxpop { from { transform: scale(0.6); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+@keyframes fxslide { from { transform: translateY(10px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+@keyframes fxslideUp { from { transform: translateY(40px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+@keyframes fxspin { to { transform: rotate(360deg); } }
+@keyframes fxdot { 0%, 60%, 100% { transform: translateY(0); opacity: 0.4; } 30% { transform: translateY(-4px); opacity: 1; } }
+@keyframes fxsweep { from { transform: translateX(-100%); } to { transform: translateX(350%); } }
 
 /* ════════════════════════════════════════════════════════════════════════════
    TRACKER + BUBBLE MAP (imperative engine styles)

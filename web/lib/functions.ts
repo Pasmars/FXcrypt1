@@ -18,6 +18,7 @@ export const callSaveBotWallet = httpsCallable(fns, 'saveWallet');
 export const callRemoveBotWallet = httpsCallable(fns, 'removeWallet');
 export const callGenerateTelegramCode = httpsCallable(fns, 'generateTelegramCode');
 export const callGenerateDiscordCode = httpsCallable(fns, 'generateDiscordCode');
+export const callChatPointer = httpsCallable(fns, 'chatPointer', { timeout: 120000 });
 
 // Agent
 export const callRunAgentScan = httpsCallable(fns, 'runAgentScan', { timeout: 300000 });

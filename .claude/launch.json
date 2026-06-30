@@ -2,6 +2,18 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "mobile",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "./mobile", "run", "dev"],
+      "port": 5180
+    },
+    {
+      "name": "webapp",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "./webapp", "run", "dev", "--", "-p", "3100"],
+      "port": 3100
+    },
+    {
       "name": "fxcrypt-web",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["--prefix", "web", "run", "dev"],
@@ -12,6 +24,12 @@
       "runtimeExecutable": "npx",
       "runtimeArgs": ["serve", "-l", "3333", "."],
       "port": 3333
+    },
+    {
+      "name": "webapp-static",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["serve", "-l", "3340", "webapp/out"],
+      "port": 3340
     }
   ]
 }

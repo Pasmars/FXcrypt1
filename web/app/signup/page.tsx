@@ -31,7 +31,7 @@ export default function SignupPage() {
         email: email.trim(),
         createdAt: new Date().toISOString()
       });
-      router.replace('/');
+      router.replace('/pointer');
     } catch (err: any) {
       const text =
         err.code === 'auth/email-already-in-use'
@@ -88,7 +88,7 @@ export default function SignupPage() {
 
           <p className="mt-6 text-center text-sm text-muted">
             Already have an account?{' '}
-            <Link href="/login" className="font-semibold text-success hover:underline">
+            <Link href="/login" className="font-bold text-brand hover:underline">
               Log In
             </Link>
           </p>

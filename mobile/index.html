@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover, user-scalable=no" />
+  <title>FXcrypt — AI Trading App</title>
+  <meta name="description" content="Track & trade on-chain: PnL, token & wallet tracking, holder bubble maps and automated DEX trades." />
+  <link rel="manifest" href="/manifest.json" />
+  <meta name="theme-color" content="#0B0E11" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="FXcrypt" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+  <style>
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; padding: 0; height: 100%; background: #0B0E11;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", system-ui, sans-serif; }
+    #root { height: 100%; }
+    ::-webkit-scrollbar { width: 0; height: 0; }
+    input::placeholder { color: var(--faint); }
+    button { font-family: inherit; }
+    @keyframes fxfade { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes fxpop { from { transform: scale(0.6); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+    @keyframes fxslide { from { transform: translateY(10px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    @keyframes fxslideUp { from { transform: translateY(40px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    @keyframes fxpush { from { transform: translateX(34px); } to { transform: translateX(0); } }
+    @keyframes fxspin { to { transform: rotate(360deg); } }
+    @keyframes fxdot { 0%, 60%, 100% { transform: translateY(0); opacity: 0.4; } 30% { transform: translateY(-4px); opacity: 1; } }
+    @keyframes fxsweep { from { transform: translateX(-100%); } to { transform: translateX(350%); } }
+  </style>
+  <!-- No-flash: apply persisted dark/accent before first paint (mirrors legacy app). -->
+  <script>
+    (function () {
+      try {
+        var s = JSON.parse(localStorage.getItem('fx_settings') || '{}');
+        document.documentElement.style.background = s.dark === false ? '#FFFFFF' : '#0B0E11';
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="/src/main.tsx"></script>
+</body>
+</html>

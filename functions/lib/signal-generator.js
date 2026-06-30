@@ -72,6 +72,9 @@ function generateSignal(analysis, allExchanges) {
   const { entry, entryHigh, entryLow } = calcEntryZone(analysis)
   const sl = calcStopLoss(analysis, entry)
   const { tp1, tp2, tp3 } = calcTakeProfits(entry, sl, analysis.bias)
+  // Bad/missing price data can yield NaN levels — those break the signal card
+  // and the callable's JSON encoding. Drop such setups entirely.
+  if (![entry, sl, tp1, tp2, tp3].every((x) => typeof x === 'number' && isFinite(x))) return null
   const risk = Math.abs(entry - sl)
   const rr = risk > 0 ? parseFloat(((Math.abs(tp3 - entry)) / risk).toFixed(1)) : 0
 

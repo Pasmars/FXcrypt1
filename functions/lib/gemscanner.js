@@ -56,6 +56,25 @@ async function searchNarrativePairs(narrative, chainId) {
   return out
 }
 
+// Narrative-agnostic broadening for the "All" filter. The trending/boosted feeds
+// and GeckoTerminal pools already skip narrative bias, but a generic search sweep
+// surfaces active tokens *outside* any theme (utility, infra, brand-new pairs the
+// feeds miss) so "All" genuinely scans across the whole chain. Returns pairs for
+// every chain in one pass (DexScreener search is chain-agnostic); callers filter
+// by chainId. Kept short so it adds ~2s, not minutes.
+const GENERIC_DISCOVERY_TERMS = ['token', 'protocol', 'finance', 'swap', 'chain', 'dao', 'meme', 'ai', 'rwa', 'gaming']
+async function searchGenericPairs() {
+  const out = []
+  for (const term of GENERIC_DISCOVERY_TERMS) {
+    try {
+      const { data } = await axios.get(DEXSCREENER_SEARCH + encodeURIComponent(term), { timeout: HTTP_TIMEOUT })
+      if (Array.isArray(data?.pairs)) out.push(...data.pairs)
+    } catch { /* continue */ }
+    await new Promise(r => setTimeout(r, 150))
+  }
+  return out
+}
+
 // ── Token scoring algorithm (0-100) ───────────────────────────────────────
 function scoreToken(pair) {
   let score = 0
@@ -260,11 +279,12 @@ function normalizeGtPool(pool, included, dsChainId, net) {
     url: `https://www.geckoterminal.com/${net}/pools/${a.address}`,
   }
 }
-async function fetchGeckoTerminalPairs(chain, sort = 'score') {
+async function fetchGeckoTerminalPairs(chain, sort = 'score', opts = {}) {
   const net = GT_NET[chain]
   if (!net) return []
   const dsId = CHAIN_MAP[chain]
   const out = []
+  const { broad = false, deepHistory = false } = opts
   // Weight pool-list page counts by the chosen Trend & Sort so discovery
   // actually favors the requested dimension (more pages = wider coverage).
   let lists
@@ -272,6 +292,17 @@ async function fetchGeckoTerminalPairs(chain, sort = 'score') {
   else if (sort === 'trending') lists = [['trending_pools', 2], ['pools', 3], ['new_pools', 1]]
   else if (sort === 'gainers')  lists = [['trending_pools', 2], ['pools', 2], ['new_pools', 1]]
   else                          lists = [['new_pools', 2], ['pools', 2], ['trending_pools', 1]] // score = balanced
+  // The narrative-agnostic "All" scan sweeps the broad market: GeckoTerminal's
+  // pool listings are theme-neutral, so adding pages surfaces tokens outside any
+  // narrative. `broad` widens every list; `deepHistory` (set when the user asks
+  // for older tokens via min-age) pulls extra established top-liquidity `pools`
+  // pages, which is where long-lived, non-trending tokens live.
+  if (broad || deepHistory) {
+    const bump = new Map(lists)
+    if (broad) for (const k of ['new_pools', 'trending_pools', 'pools']) bump.set(k, (bump.get(k) || 0) + 1)
+    if (deepHistory) bump.set('pools', (bump.get('pools') || 0) + 3)
+    lists = [...bump.entries()]
+  }
   for (const [path, pages] of lists) {
     for (let p = 1; p <= pages; p++) {
       try {
@@ -335,6 +366,7 @@ async function discoverGems(chains, filters = {}) {
   const {
     minLiquidity = 5000,
     maxAgeHours  = 24,
+    minAgeHours  = 0,
     minScore     = 40,
     minVolume    = 1000,
     maxVolume    = 0,
@@ -348,6 +380,9 @@ async function discoverGems(chains, filters = {}) {
 
   // 'all' and 'default' are both narrative-agnostic; only a specific theme filters by name/symbol
   const useNarrative = narrative && narrative !== 'all' && narrative !== 'default'
+  // For the narrative-agnostic "All" scan, sweep generic terms once (chain-agnostic)
+  // so tokens outside the listed narratives are included too.
+  const genericPairs = useNarrative ? [] : await searchGenericPairs()
   const allGems = []
 
   for (const chain of chains) {
@@ -357,11 +392,17 @@ async function discoverGems(chains, filters = {}) {
     // Step 1: Discover trending/new token addresses
     const latestTokens = await fetchLatestTokens(chainId)
 
-    // Step 2: Get pair data for those tokens (+ narrative search + GeckoTerminal + DexTools)
+    // Step 2: Get pair data for those tokens (+ narrative/generic search + GeckoTerminal + DexTools)
     const addresses = latestTokens.map(t => t.address)
     let pairs       = addresses.length ? await fetchPairData(addresses, chainId) : []
     if (useNarrative) pairs = pairs.concat(await searchNarrativePairs(narrative, chainId))
-    pairs = pairs.concat(await fetchGeckoTerminalPairs(chain, sort))
+    else              pairs = pairs.concat(genericPairs.filter(p => p.chainId === chainId))
+    // For "All", scan the broad market via GeckoTerminal's theme-neutral pool
+    // lists; deepen into established pools when the user wants older tokens.
+    pairs = pairs.concat(await fetchGeckoTerminalPairs(chain, sort, {
+      broad: !useNarrative,
+      deepHistory: !useNarrative && minAgeHours >= 168,
+    }))
     if (dextoolsKey) pairs = pairs.concat(await fetchDexToolsPairs(chain, dextoolsKey))
     if (!pairs.length) continue
 
@@ -385,6 +426,7 @@ async function discoverGems(chains, filters = {}) {
       if (pair.pairCreatedAt) {
         const ageH = (Date.now() - pair.pairCreatedAt) / (1000 * 60 * 60)
         if (ageH > maxAgeHours) continue
+        if (minAgeHours && ageH < minAgeHours) continue
       }
 
       // 24h volume range (supports low-volume gem hunting)
@@ -492,7 +534,17 @@ async function discoverGems(chains, filters = {}) {
   else if (sort === 'new')      allGems.sort((a, b) => (a.ageHours ?? 1e9) - (b.ageHours ?? 1e9))
   else if (sort === 'gainers')  allGems.sort((a, b) => b.priceChange24h - a.priceChange24h)
   else                          allGems.sort((a, b) => b.gemScore - a.gemScore)
-  return allGems.slice(0, maxResults)
+  // Firebase callables can't JSON-encode NaN/Infinity (any one breaks the whole
+  // response with a 500). Scrub every numeric before returning.
+  return allGems.slice(0, maxResults).map(jsonSafe)
+}
+
+// Recursively replace NaN/Infinity with null so the result is JSON-serializable.
+function jsonSafe(v) {
+  if (typeof v === 'number') return isFinite(v) ? v : null
+  if (Array.isArray(v)) return v.map(jsonSafe)
+  if (v && typeof v === 'object') { const o = {}; for (const k in v) o[k] = jsonSafe(v[k]); return o }
+  return v
 }
 
 // ── DEX label helper ──────────────────────────────────────────────────────

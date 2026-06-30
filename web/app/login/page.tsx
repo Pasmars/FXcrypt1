@@ -18,7 +18,7 @@ export default function LoginPage() {
 
   useEffect(() => {
     auth.authStateReady().then(() => {
-      if (auth.currentUser) router.replace('/');
+      if (auth.currentUser) router.replace('/pointer');
     });
   }, [router]);
 
@@ -38,7 +38,7 @@ export default function LoginPage() {
     setMsg(null);
     try {
       await signInWithEmailAndPassword(auth, email.trim(), password);
-      router.replace('/');
+      router.replace('/pointer');
     } catch (err: any) {
       setMsg({ text: mapError(err.code, err.message), error: true });
       setLoading(false);
@@ -129,7 +129,7 @@ export default function LoginPage() {
 
           <p className="mt-6 text-center text-sm text-muted">
             Don&apos;t have an account?{' '}
-            <Link href="/signup" className="font-semibold text-success hover:underline">
+            <Link href="/signup" className="font-bold text-brand hover:underline">
               Sign Up
             </Link>
           </p>

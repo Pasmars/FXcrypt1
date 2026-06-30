@@ -1,33 +1,57 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    // Entitlement & admin fields are SERVER-ONLY. Clients may read/edit their own
+    // profile but can never set or change these — only Cloud Functions (admin SDK,
+    // which bypasses rules) write them. This is what stops a user self-granting Pro.
+    function protectedKeys() {
+      return ['plan', 'planExpiry', 'subscription', 'banned', 'adminNote'];
+    }
+
     match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow delete: if false;
+      allow create: if request.auth != null && request.auth.uid == userId
+        && !request.resource.data.keys().hasAny(protectedKeys());
+      allow update: if request.auth != null && request.auth.uid == userId
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(protectedKeys());
+
+      // Payment invoices & receipts — written only by Cloud Functions.
+      match /payments/{docId} {
+        allow read: if request.auth != null && request.auth.uid == userId;
+        allow write: if false;
+      }
 
       match /snipeTargets/{docId} {
         allow read, write: if request.auth != null && request.auth.uid == userId;
       }
-
       match /trades/{docId} {
         allow read, write: if request.auth != null && request.auth.uid == userId;
       }
-
       match /trackedTokens/{docId} {
         allow read, write: if request.auth != null && request.auth.uid == userId;
       }
-
+      match /watchlist/{docId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
       match /trackedWallets/{docId} {
         allow read, write: if request.auth != null && request.auth.uid == userId;
       }
-
       match /signals/{docId} {
         allow read, write: if request.auth != null && request.auth.uid == userId;
       }
-
       match /cexTrades/{docId} {
         allow read, write: if request.auth != null && request.auth.uid == userId;
       }
+      match /pointerChats/{docId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+    }
 
+    // Billing config (prices, receiving addresses, admin allowlist) — server-only.
+    match /config/{docId} {
+      allow read, write: if false;
     }
   }
 }

@@ -195,8 +195,8 @@ export default function PnlCalculatorPage() {
               </div>
 
               {/* Currency converter */}
-              <div className="rounded-xl border border-border border-l-2 border-l-accent bg-surface-2 p-4">
-                <h3 className="mb-3 text-xs font-bold uppercase tracking-wider text-accent">Currency Converter</h3>
+              <div className="rounded-xl border border-border border-l-2 border-l-brand bg-surface-2 p-4">
+                <h3 className="mb-3 text-xs font-bold uppercase tracking-wider text-brand">Currency Converter</h3>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <Label htmlFor="from">From</Label>
