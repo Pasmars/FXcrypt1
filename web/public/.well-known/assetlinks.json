@@ -1,8 +1,0 @@
-[{
-  "relation": ["delegate_permission/common.handle_all_urls"],
-  "target": {
-    "namespace": "android_app",
-    "package_name": "app.web.fxcrypt",
-    "sha256_cert_fingerprints": ["50:35:72:68:17:A1:35:9F:C8:D7:BA:A8:2A:02:72:47:4E:A9:84:96:AA:7E:D2:C0:C0:4D:D1:38:C3:29:50:EF"]
-  }
-}]

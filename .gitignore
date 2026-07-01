@@ -7,6 +7,16 @@ functions/node_modules/
 deploy_output.txt
 login_output.txt
 
+# Firebase deploy cache (regenerated on deploy)
+.firebase/
+
+# Build outputs (regenerated on build)
+mobile/dist/
+webapp/out/
+web/out/
+web/.next/
+**/*.tsbuildinfo
+
 # OS
 .DS_Store
 Thumbs.db

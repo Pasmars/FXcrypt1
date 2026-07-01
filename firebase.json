@@ -7,10 +7,12 @@
       "firebase.json",
       "**/.*",
       "**/node_modules/**",
-      "web/**",
       "admin/**",
       "mobile/**",
-      "functions/**"
+      "webapp/**",
+      "functions/**",
+      "android/**",
+      "docs/**"
     ],
     "headers": [
       {
