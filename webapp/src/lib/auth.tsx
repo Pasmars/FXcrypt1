@@ -3,7 +3,7 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { onAuthStateChanged, signOut as fbSignOut, User } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
-import { auth, db } from './firebase';
+import { auth, db } from '@shared/lib/firebase';
 
 export interface Profile {
   firstName?: string;
