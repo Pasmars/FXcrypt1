@@ -36,6 +36,7 @@ export const callVerifyCryptoPayment = httpsCallable(fns, 'verifyCryptoPayment')
 export const callGetPointerUsage = httpsCallable(fns, 'getPointerUsage');
 export const callCreateCreditCheckout = httpsCallable(fns, 'createCreditCheckout');
 export const callGetSignalStats = httpsCallable(fns, 'getSignalStats');
+export const callGetGemStats = httpsCallable(fns, 'getGemStats');
 export const callGetReferralInfo = httpsCallable(fns, 'getReferralInfo');
 export const callGetCopyFeed = httpsCallable(fns, 'getCopyFeed');
 export const callGetCopyLeaderboard = httpsCallable(fns, 'getCopyLeaderboard');

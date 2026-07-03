@@ -23,6 +23,7 @@ import {
   callGetPointerUsage,
   callCreateCreditCheckout,
   callGetSignalStats,
+  callGetGemStats,
   callSavePriceAlert,
   callGetReferralInfo,
   callGetCopyFeed,
@@ -607,6 +608,18 @@ window.FXAPI = {
     return async () => {
       if (cache && Date.now() - at < 300000) return cache;
       try { cache = (await callGetSignalStats({})).data; at = Date.now(); return cache; }
+      catch (e) { return cache; }
+    };
+  })(),
+
+  // ── Gem hindsight stats ──
+  // Median/best 24h & 7d performance of gems the scanner surfaced (30d window,
+  // server-computed). Cached 5 min; the Gem Scanner reads it.
+  getGemStats: (() => {
+    let cache = null, at = 0;
+    return async () => {
+      if (cache && Date.now() - at < 300000) return cache;
+      try { cache = (await callGetGemStats({})).data; at = Date.now(); return cache; }
       catch (e) { return cache; }
     };
   })(),

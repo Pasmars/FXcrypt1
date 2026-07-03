@@ -20,6 +20,7 @@ const payments       = require('./lib/payments')
 const metering       = require('./lib/metering')
 const positions      = require('./lib/positions')
 const signalTracker  = require('./lib/signal-tracker')
+const gemTracker     = require('./lib/gem-tracker')
 const notify         = require('./lib/notify')
 const copytrader     = require('./lib/copytrader')
 const crypto2        = require('crypto')
@@ -975,6 +976,8 @@ exports.scanGems = functions.region('europe-west1').runWith({ secrets: ALL_SECRE
       dextoolsKey: process.env.DEXTOOLS_API_KEY || null,
     })
     await metering.track(db, uid, { gemScans: 1 })
+    // Record surfaced gems for hindsight stats (first-seen price; deduped).
+    await gemTracker.recordSightings(db, gems).catch(() => {})
     return { gems, scannedAt: Date.now(), usage: { used: scanUsage.used, remaining: scanUsage.remaining, quota: scanUsage.quota } }
   } catch (e) {
     await metering.refund(db, uid, { kind: 'gemScan', ...scanUsage })
@@ -1045,6 +1048,9 @@ exports.processGemScanner = gemScanFn.pubsub
       try {
         const gems = await gemscanner.discoverGems(chains, filters)
         if (!gems.length) return
+
+        // Record surfaced gems for hindsight stats (deduped; first price wins).
+        await gemTracker.recordSightings(db, gems).catch(() => {})
 
         const bot = tg.createBot(tgToken)
 
@@ -1630,6 +1636,24 @@ exports.processSignalOutcomes = functions.region('europe-west1')
 exports.getSignalStats = functions.region('europe-west1').runWith({ timeoutSeconds: 60 }).https.onCall(async (data, context) => {
   if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
   return signalTracker.readStats(db)
+})
+
+// ── Gem Hindsight Tracker (runs hourly) ────────────────────────────────────
+// Re-prices surfaced gems at their +24h / +7d marks so the scanner can show
+// honest median/best performance of the gems it found.
+exports.processGemOutcomes = functions.region('europe-west1')
+  .runWith({ timeoutSeconds: 300, memory: '512MB' })
+  .pubsub.schedule('every 60 minutes')
+  .onRun(async () => {
+    const res = await gemTracker.resolveGemOutcomes(db)
+    if (res.resolved) console.log(`gem outcomes: resolved ${res.resolved} of ${res.checked}`)
+    return null
+  })
+
+// Hindsight stats for the Gem Scanner screen (median/best 24h & 7d).
+exports.getGemStats = functions.region('europe-west1').runWith({ timeoutSeconds: 60 }).https.onCall(async (data, context) => {
+  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
+  return gemTracker.readStats(db)
 })
 
 // ── Snipe Queue Processor (runs every 1 minute) ───────────────────────────

@@ -348,6 +348,8 @@ function GemScanner({ go, onTrade, locked, onUpsell }) {
   // Persisted scan filter settings (botSettings.gem*) + the settings sheet.
   const [cfg, setCfg] = tS(GEM_SETTINGS_DEFAULT);
   const [setOpen, setSetOpen] = tS(false);
+  // Hindsight stats: how gems the scanner surfaced actually performed.
+  const [stats, setStats] = tS(null);
   tE(() => {
     let alive = true;
     window.FXAPI.getBotPrefs().then(p => {
@@ -357,6 +359,7 @@ function GemScanner({ go, onTrade, locked, onUpsell }) {
       setAutoBuy(!!p.gemAutoBuy);
     }).catch(() => {});
     window.FXAPI.getGemSettings().then(s => { if (alive && s) setCfg(s); }).catch(() => {});
+    if (window.FXAPI.getGemStats) window.FXAPI.getGemStats().then(s => { if (alive && s) setStats(s); }).catch(() => {});
     return () => { alive = false; };
   }, []);
   const toggleTgAlerts = async () => {
@@ -471,6 +474,41 @@ function GemScanner({ go, onTrade, locked, onUpsell }) {
           </div>
         )}
       </div>
+      {/* Hindsight stats — how gems the scanner surfaced actually performed.
+          Only shown once there's a meaningful sample (≥10 resolved). */}
+      {stats && stats.d1 && stats.d1.count >= 10 && (
+        <div style={{ padding: '0 16px 14px' }}>
+          <div style={{ background: 'var(--surface)', borderRadius: 14, padding: '13px 15px', boxShadow: 'inset 0 0 0 1px var(--line)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 11 }}>
+              <Icon name="trophy" size={15} color="var(--accent)" />
+              <span style={{ fontSize: 13, fontWeight: 800, flex: 1 }}>How past gems performed</span>
+              <Pill tone="muted">{stats.d1.count} tracked</Pill>
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {[['24h', stats.d1], ['7d', stats.d7]].map(([label, s]) => (
+                <div key={label} style={{ flex: 1, background: 'var(--surface2)', borderRadius: 11, padding: '10px 11px' }}>
+                  <div style={{ fontSize: 10.5, color: 'var(--muted)', fontWeight: 700, marginBottom: 5 }}>{label} after found</div>
+                  {s ? <>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, marginBottom: 3 }}>
+                      <span style={{ color: 'var(--muted)' }}>Median</span>
+                      <span style={{ fontWeight: 800, color: s.median >= 0 ? 'var(--up)' : 'var(--down)' }}>{s.median >= 0 ? '+' : ''}{s.median}%</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, marginBottom: 3 }}>
+                      <span style={{ color: 'var(--muted)' }}>Best</span>
+                      <span style={{ fontWeight: 800, color: 'var(--up)' }}>+{s.best}%</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5 }}>
+                      <span style={{ color: 'var(--muted)' }}>Up</span>
+                      <span style={{ fontWeight: 800 }}>{s.winRate}%</span>
+                    </div>
+                  </> : <div style={{ fontSize: 11.5, color: 'var(--faint)', paddingTop: 4 }}>building…</div>}
+                </div>
+              ))}
+            </div>
+            <div style={{ fontSize: 10.5, color: 'var(--faint)', marginTop: 9, lineHeight: 1.4 }}>Median/best price change of gems this scanner surfaced, measured from when they were found. Last 30 days — not a prediction of future results.</div>
+          </div>
+        </div>
+      )}
       <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
         {list.length === 0 && !scan.on && (
           <div style={{ textAlign: 'center', padding: '36px 20px', color: 'var(--muted)' }}>
