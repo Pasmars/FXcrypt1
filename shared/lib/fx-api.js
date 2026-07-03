@@ -17,11 +17,10 @@ import {
   callApproveTrade,
   callSkipSignal,
   callRunAgentScan,
-  callCreateStripeCheckout,
+  callGetPlans,
   callCreateCryptoInvoice,
   callVerifyCryptoPayment,
   callGetPointerUsage,
-  callCreateCreditCheckout,
   callGetSignalStats,
   callGetGemStats,
   callSavePriceAlert,
@@ -629,14 +628,9 @@ window.FXAPI = {
   getPointerUsage: async () => {
     try { return (await callGetPointerUsage({})).data; } catch (e) { return null; }
   },
-  // Start a Stripe checkout for the credit pack and redirect there. Passes the
-  // current origin so Stripe returns the buyer to THIS app (mobile PWA vs
-  // webapp), not the configured default domain.
-  buyPointerCredits: async () => {
-    const res = (await callCreateCreditCheckout({ returnUrl: window.location.origin })).data;
-    if (res && res.url) window.location.assign(res.url);
-    return res;
-  },
+  // (Stripe credit-pack checkout removed with the rest of card payments —
+  // out-of-requests users upgrade their plan via crypto on the paywall, and
+  // admins can still grant credits from the dashboard.)
   // Handle the ?credits=success|cancel return from Stripe: strip the param and
   // report what happened so the shell can toast + refresh the usage pill.
   // Returns 'success' | 'cancel' | null.
@@ -651,14 +645,20 @@ window.FXAPI = {
     } catch (e) { return null; }
   },
 
-  // ── Premium billing ──
+  // ── Premium billing (crypto-only) ──
   // Fire-and-forget conversion-funnel event ('paywallView' | 'checkoutStart').
   trackFunnel: (event) => { try { callTrackFunnel({ event }).catch(() => {}); } catch (e) {} },
-  // Stripe Checkout → { url }. billing: 'subscription' | 'onetime' | 'annual'.
-  createStripeCheckout: async (plan, billing) => {
-    window.FXAPI.trackFunnel('checkoutStart');
-    return (await callCreateStripeCheckout({ plan, billing })).data;
-  },
+  // Admin-set plan prices (config/billing.planPricesUsd) — the same numbers the
+  // crypto invoice charges, so the price cards can never drift from checkout.
+  // Cached 5 min.
+  getPlans: (() => {
+    let cache = null, at = 0;
+    return async () => {
+      if (cache && Date.now() - at < 300000) return cache;
+      try { cache = (await callGetPlans({})).data; at = Date.now(); return cache; }
+      catch (e) { return cache; }
+    };
+  })(),
   // Crypto pay-to-address invoice → { invoiceId, address, amountToken, symbol, ... }
   createCryptoInvoice: async ({ plan, chain, asset }) => {
     window.FXAPI.trackFunnel('checkoutStart');

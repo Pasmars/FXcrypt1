@@ -308,20 +308,17 @@ function ExecSignal({ signal: s, go, onDone }) {
   const sel = exchange || (connected[0] && connected[0].id) || '';
   const selName = EX_NAME[sel] || sel;
 
-  // Live signals (from the user's agent feed) execute for real via approveTrade
-  // on the user-selected exchange; the design sample signals stay simulated.
+  // Signals execute for REAL via approveTrade on the user-selected exchange —
+  // there is no simulated fallback: anything non-executable errors honestly.
   const open = () => {
     setErr('');
-    if (s.id && s.live && window.FXAPI) {
-      if (!sel) { setErr('Connect an exchange first to trade this signal.'); return; }
-      txRef.current = window.FXAPI.approveTrade({ signalId: s.id, riskPercent: riskPct, targetExchange: sel });
-    } else {
-      txRef.current = null;
-    }
+    if (!s.id || !s.live) { setErr('This signal can no longer be executed — run a fresh scan for live setups.'); return; }
+    if (!window.FXAPI) { setErr('Trading engine not loaded — refresh and try again.'); return; }
+    if (!sel) { setErr('Connect an exchange first to trade this signal.'); return; }
+    txRef.current = window.FXAPI.approveTrade({ signalId: s.id, riskPercent: riskPct, targetExchange: sel });
     setStage('processing');
   };
   const finish = async () => {
-    if (!txRef.current) { setStage('success'); return; }
     try { await txRef.current; setStage('success'); }
     catch (e) { setErr((e && e.message) || 'Could not open the position. Connect an exchange first.'); setStage('form'); }
     finally { txRef.current = null; }

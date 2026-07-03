@@ -1,6 +1,91 @@
 // trade.jsx — DEX Bot manual trade + Gem Scanner
 const { useState: tS, useEffect: tE } = React;
 
+// ─── Token picker: search any tradable token by name, ticker or contract ───
+// DexScreener's search endpoint handles all three query kinds; results are
+// filtered to the chains the DEX bot can actually execute on.
+const PICK_CHAIN_MAP = { bsc: 'bsc', ethereum: 'eth', solana: 'sol', base: 'base' };
+function TokenPickerSheet({ open, onClose, onPick }) {
+  const [q, setQ] = tS('');
+  const [rows, setRows] = tS(null); // null = idle, [] = no results
+  const [busy, setBusy] = tS(false);
+  tE(() => { if (open) { setQ(''); setRows(null); setBusy(false); } }, [open]);
+  // Debounced live search.
+  tE(() => {
+    if (!open) return;
+    const query = q.trim();
+    if (query.length < 2) { setRows(null); setBusy(false); return; }
+    setBusy(true);
+    const t = setTimeout(async () => {
+      try {
+        const r = await fetch('https://api.dexscreener.com/latest/dex/search?q=' + encodeURIComponent(query));
+        const data = await r.json();
+        const seen = new Set();
+        const out = [];
+        for (const p of (data && data.pairs) || []) {
+          const chain = PICK_CHAIN_MAP[p.chainId];
+          const addr = p.baseToken && p.baseToken.address;
+          if (!chain || !addr) continue;
+          const key = chain + ':' + addr.toLowerCase();
+          if (seen.has(key)) continue;
+          seen.add(key);
+          out.push({
+            sym: p.baseToken.symbol || '?', name: p.baseToken.name || p.baseToken.symbol || 'Unknown',
+            chain, tokenAddress: addr,
+            price: parseFloat(p.priceUsd) || 0,
+            ch24: (p.priceChange && p.priceChange.h24) || 0,
+            liqUsd: (p.liquidity && p.liquidity.usd) || 0,
+            img: (p.info && p.info.imageUrl) || null,
+            dexUrl: p.url || null,
+          });
+        }
+        out.sort((a, b) => b.liqUsd - a.liqUsd);
+        setRows(out.slice(0, 12));
+      } catch (e) { setRows([]); }
+      finally { setBusy(false); }
+    }, 350);
+    return () => clearTimeout(t);
+  }, [q, open]);
+  const liqStr = (n) => n >= 1e6 ? '$' + (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? '$' + Math.round(n / 1e3) + 'K' : '$' + Math.round(n);
+  return (
+    <Sheet open={open} onClose={onClose} title="Select token">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, background: 'var(--surface)', borderRadius: 13, padding: '12px 14px', boxShadow: 'inset 0 0 0 1.5px var(--accent)', marginBottom: 12 }}>
+        <Icon name="search" size={17} color="var(--muted)" />
+        <input value={q} autoFocus onChange={(e) => setQ(e.target.value)} placeholder="Name, ticker or contract address"
+          style={{ flex: 1, border: 'none', background: 'transparent', outline: 'none', color: 'var(--text)', fontSize: 14.5, fontFamily: 'inherit', minWidth: 0 }} />
+        {busy && <span style={{ width: 15, height: 15, border: '2.5px solid var(--line2)', borderTopColor: 'var(--accent)', borderRadius: '50%', animation: 'fxspin .7s linear infinite', flexShrink: 0 }} />}
+      </div>
+      <div style={{ maxHeight: 380, overflowY: 'auto', margin: '0 -4px' }}>
+        {rows == null && !busy && (
+          <div style={{ textAlign: 'center', color: 'var(--muted)', padding: '26px 16px', fontSize: 13, lineHeight: 1.5 }}>
+            Search live markets on BSC, Ethereum, Base &amp; Solana.<br />Paste a contract address for an exact match.
+          </div>
+        )}
+        {rows != null && rows.length === 0 && !busy && (
+          <div style={{ textAlign: 'center', color: 'var(--muted)', padding: '26px 16px', fontSize: 13 }}>No tradable tokens found for “{q.trim()}”.</div>
+        )}
+        {(rows || []).map((t) => (
+          <button key={t.chain + t.tokenAddress} onClick={() => onPick(t)}
+            style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 11, padding: '10px 8px', background: 'none', border: 'none', borderBottom: '1px solid var(--line)', cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit' }}>
+            <Logo color={'#' + (t.sym.charCodeAt(0) * 4321 % 0xffffff).toString(16).padStart(6, '0')} sym={t.sym} chain={t.chain} img={t.img} address={t.tokenAddress} size={36} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontWeight: 800, fontSize: 14, color: 'var(--text)' }}>{t.sym}</span>
+                <Pill tone="muted">{t.chain.toUpperCase()}</Pill>
+              </div>
+              <div style={{ fontSize: 11.5, color: 'var(--muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.name} · liq {liqStr(t.liqUsd)}</div>
+            </div>
+            <div style={{ textAlign: 'right', flexShrink: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--text)', fontVariantNumeric: 'tabular-nums' }}>{fmtUsd(t.price)}</div>
+              <Change v={t.ch24} size={11} />
+            </div>
+          </button>
+        ))}
+      </div>
+    </Sheet>
+  );
+}
+
 // ─── Manual trade (DEX Bot) ───
 function TradeFlow({ token, side = 'buy', go, onDone }) {
   const FX = window.FX;
@@ -14,27 +99,28 @@ function TradeFlow({ token, side = 'buy', go, onDone }) {
   const [tradeErr, setTradeErr] = tS('');
   const [txHash, setTxHash] = tS('');
   const [wasPaper, setWasPaper] = tS(false); // last fill was simulated (paper mode)
+  const [pickOpen, setPickOpen] = tS(false); // token picker (name/ticker/contract)
   const txRef = React.useRef(null);
   const chain = (tok && FX.chains.find(c => c.id === tok.chain)) || FX.chains[0];
 
-  // Kick off the real DEX trade for on-chain tokens (those with a contract
-  // address). Majors without an address stay on the simulated flow.
+  // Every trade is REAL (or paper-mode simulated server-side) — it must have a
+  // contract address the DEX router can swap. No fake client-side fills.
   const startTrade = () => {
     setTradeErr('');
-    if (tok.tokenAddress && window.FXAPI) {
-      txRef.current = window.FXAPI.executeTrade({
-        chain: tok.chain, tokenAddress: tok.tokenAddress, action: s,
-        amount: s === 'buy' ? String(amt) : undefined,
-        percent: s === 'sell' ? parseFloat(amt) : undefined,
-        slippage: slip,
-      });
-    } else {
-      txRef.current = null;
+    if (!tok.tokenAddress) {
+      setTradeErr('This asset has no DEX contract to trade. Tap the token above and pick one — search by name, ticker or contract address.');
+      return;
     }
+    if (!window.FXAPI) { setTradeErr('Trading engine not loaded — refresh and try again.'); return; }
+    txRef.current = window.FXAPI.executeTrade({
+      chain: tok.chain, tokenAddress: tok.tokenAddress, action: s,
+      amount: s === 'buy' ? String(amt) : undefined,
+      percent: s === 'sell' ? parseFloat(amt) : undefined,
+      slippage: slip,
+    });
     setStage('processing');
   };
   const finishTrade = async () => {
-    if (!txRef.current) { setStage('success'); return; }
     try { const res = await txRef.current; setTxHash((res && (res.txHash || res.signature || res.hash)) || ''); setWasPaper(!!(res && res.simulated)); setStage('success'); }
     catch (e) { setTradeErr((e && e.message) || 'Trade failed — check your DEX bot wallet.'); setStage('form'); }
     finally { txRef.current = null; }
@@ -89,11 +175,22 @@ function TradeFlow({ token, side = 'buy', go, onDone }) {
           {s === 'buy' ? 'Bought' : 'Sold'} <b style={{ color: 'var(--text)' }}>{recv.toLocaleString('en-US', { maximumFractionDigits: 4 })} {tok.sym}</b><br />for {amt} {payUnit} on {chain.dex}
         </div>
         <div style={{ width: '100%', marginTop: 22, background: 'var(--surface)', borderRadius: 14, padding: 16, boxShadow: 'inset 0 0 0 1px var(--line)' }}>
-          {[['Price', fmtUsd(tok.price)], ['Network fee', '0.004 ' + chain.sym], ['Platform fee', feeLabel + ' · $' + (usd * feePct).toFixed(2)], ...(txHash ? [['Tx', txHash.slice(0, 6) + '…' + txHash.slice(-4)]] : [])].map(([k, v]) => (
+          {[['Price', fmtUsd(tok.price)], ['Network fee (est.)', '~0.004 ' + chain.sym], ['Platform fee', feeLabel + ' · $' + (usd * feePct).toFixed(2)]].map(([k, v]) => (
             <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: 13.5 }}>
               <span style={{ color: 'var(--muted)' }}>{k}</span><span style={{ fontWeight: 600 }}>{v}</span>
             </div>
           ))}
+          {txHash && (() => {
+            const url = ({ bsc: 'https://bscscan.com/tx/', eth: 'https://etherscan.io/tx/', base: 'https://basescan.org/tx/', sol: 'https://solscan.io/tx/' })[tok.chain];
+            return (
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: 13.5 }}>
+                <span style={{ color: 'var(--muted)' }}>Tx</span>
+                {url
+                  ? <a href={url + txHash} target="_blank" rel="noreferrer" style={{ fontWeight: 700, color: 'var(--accent)' }}>{txHash.slice(0, 6) + '…' + txHash.slice(-4)} ↗</a>
+                  : <span style={{ fontWeight: 600 }}>{txHash.slice(0, 6) + '…' + txHash.slice(-4)}</span>}
+              </div>
+            );
+          })()}
         </div>
         <div style={{ display: 'flex', gap: 10, width: '100%', marginTop: 20 }}>
           <Btn kind="soft" full onClick={() => setStage('form')}>Trade again</Btn>
@@ -107,18 +204,22 @@ function TradeFlow({ token, side = 'buy', go, onDone }) {
     <div style={{ padding: '4px 16px 20px' }}>
       <Segmented options={[{ value: 'buy', label: 'Buy' }, { value: 'sell', label: 'Sell' }]} value={s} onChange={setSide} style={{ marginBottom: 16 }} />
       {tradeErr && <div style={{ marginBottom: 12, fontSize: 13, color: 'var(--down)', background: 'var(--down-bg)', borderRadius: 11, padding: '11px 13px', fontWeight: 600 }}>{tradeErr}</div>}
-      {/* token selector */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, background: 'var(--surface)', borderRadius: 14, padding: 13, boxShadow: 'inset 0 0 0 1px var(--line)', marginBottom: 10 }}>
+      {/* token selector — tap to search any tradable token by name/ticker/contract */}
+      <button onClick={() => setPickOpen(true)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, background: 'var(--surface)', borderRadius: 14, padding: 13, boxShadow: tok.tokenAddress ? 'inset 0 0 0 1px var(--line)' : 'inset 0 0 0 1.5px var(--accent)', marginBottom: 10, border: 'none', cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit', color: 'var(--text)' }}>
         <Logo color={tok.logo} sym={tok.sym} chain={tok.chain} img={tok.img} address={tok.address || tok.tokenAddress} size={40} />
-        <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: 800, fontSize: 15.5 }}>{tok.sym}</div>
-          <div style={{ fontSize: 12, color: 'var(--muted)' }}>{chain.name} · {chain.dex}</div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontWeight: 800, fontSize: 15.5 }}>{tok.sym}</span>
+            <Icon name="chevD" size={15} color="var(--muted)" />
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--muted)' }}>{tok.tokenAddress ? `${chain.name} · ${chain.dex}` : 'Tap to pick a tradable token'}</div>
         </div>
         <div style={{ textAlign: 'right' }}>
           <div style={{ fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{fmtUsd(tok.price)}</div>
           <Change v={tok.ch24} size={12} />
         </div>
-      </div>
+      </button>
+      <TokenPickerSheet open={pickOpen} onClose={() => setPickOpen(false)} onPick={(t) => { setTok(t); setPickOpen(false); setTradeErr(''); }} />
       {/* amount */}
       <div style={{ background: 'var(--surface)', borderRadius: 14, padding: 16, boxShadow: 'inset 0 0 0 1px var(--line)' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
@@ -153,8 +254,10 @@ function TradeFlow({ token, side = 'buy', go, onDone }) {
       {/* controls */}
       <div style={{ background: 'var(--surface)', borderRadius: 14, padding: '6px 16px', boxShadow: 'inset 0 0 0 1px var(--line)', marginBottom: 14 }}>
         <Row k="Slippage tolerance" v={<div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>{[5, 12, 20].map(x => <button key={x} onClick={() => setSlip(x)} style={{ border: 'none', cursor: 'pointer', borderRadius: 7, padding: '4px 9px', fontSize: 12.5, fontWeight: 700, fontFamily: 'inherit', background: slip === x ? 'var(--accent)' : 'var(--chip)', color: slip === x ? 'var(--on-accent)' : 'var(--muted)' }}>{x}%</button>)}{![5, 12, 20].includes(slip) && <span style={{ borderRadius: 7, padding: '4px 9px', fontSize: 12.5, fontWeight: 700, background: 'var(--accent)', color: 'var(--on-accent)' }}>{slip}%</span>}<button onClick={() => { setSlipInput(String(slip)); setSlipEdit(true); }} aria-label="Custom slippage" style={{ border: 'none', cursor: 'pointer', borderRadius: 7, width: 28, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--chip)', color: 'var(--accent)' }}><Icon name="sliders" size={15} /></button></div>} />
-        <Row k="Max gas" v={'0.004 ' + chain.sym} icon="gas" />
-        <Row k="Safety check" v={<Pill tone="up"><Icon name="shield" size={12} /> Passed</Pill>} last />
+        <Row k="Max gas (est.)" v={'~0.004 ' + chain.sym} icon="gas" />
+        <Row k={tok.liqUsd ? 'Pool liquidity' : 'Execution guard'} v={tok.liqUsd
+          ? <Pill tone={tok.liqUsd >= 10000 ? 'up' : 'down'}><Icon name="shield" size={12} /> ${tok.liqUsd >= 1e6 ? (tok.liqUsd / 1e6).toFixed(1) + 'M' : Math.round(tok.liqUsd / 1e3) + 'K'}</Pill>
+          : <span style={{ fontSize: 12, color: 'var(--muted)', fontWeight: 600 }}>Quote + slippage enforced on-chain</span>} last />
       </div>
       <Btn kind={s === 'buy' ? 'up' : 'down'} size="lg" full icon="zap" onClick={() => setStage('confirm')}>
         {s === 'buy' ? 'Buy' : 'Sell'} {tok.sym}
@@ -194,7 +297,7 @@ function TradeFlow({ token, side = 'buy', go, onDone }) {
             <Row k="Network fee" v={'0.004 ' + chain.sym} />
             <Row k={'Platform fee (' + feeLabel + ')'} v={'$' + (usd * feePct).toFixed(2)} last />
           </div>
-          <Btn kind="up" size="lg" full icon="fingerprint" onClick={startTrade}>Slide to confirm · Face ID</Btn>
+          <Btn kind="up" size="lg" full icon="zap" onClick={startTrade}>Confirm {s === 'buy' ? 'buy' : 'sell'}</Btn>
           <div style={{ height: 8 }} />
         </div>
       </Sheet>
@@ -216,8 +319,8 @@ function TradeProcessing({ s, tok, amt, payUnit, recv, chain, onComplete }) {
   const { useState: uSt, useEffect: uEf } = React;
   const isBuy = s === 'buy';
   const steps = [
-    { icon: 'fingerprint', label: 'Authorizing', sub: 'Face ID verified' },
-    { icon: 'shield', label: 'Safety re-check', sub: 'Honeypot & liquidity' },
+    { icon: 'lock', label: 'Preparing order', sub: 'Amount, balance & slippage' },
+    { icon: 'shield', label: 'Signing server-side', sub: 'Key never leaves the vault' },
     { icon: 'swap', label: 'Routing best price', sub: 'via ' + chain.dex },
     { icon: 'zap', label: 'Submitting to ' + chain.name, sub: 'Broadcasting transaction' },
     { icon: 'checkCircle', label: 'Confirming on-chain', sub: 'Awaiting block' },

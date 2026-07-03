@@ -12,18 +12,22 @@ const assetLabel = (chain, a) => (a === 'native' ? (PAY_CHAINS.find(c => c.id ==
 function Paywall({ go, onDone }) {
   const FX = window.FX;
   const [sel, setSel] = pwS('pro');
-  const [annual, setAnnual] = pwS(true);
   const [stage, setStage] = pwS('plans'); // plans | method | crypto
   // Live, server-verified signal win rate — the strongest upgrade argument we
   // have, so surface it under the hero when there's real data behind it.
   const [stats, setStats] = pwS(null);
+  // Admin-set plan prices (config/billing.planPricesUsd) — the same numbers the
+  // crypto invoice charges, so the cards can never drift from checkout.
+  const [prices, setPrices] = pwS(null);
   pwE(() => {
     let alive = true;
     if (window.FXAPI && window.FXAPI.getSignalStats) window.FXAPI.getSignalStats().then((s) => { if (alive && s) setStats(s); }).catch(() => {});
+    if (window.FXAPI && window.FXAPI.getPlans) window.FXAPI.getPlans().then((p) => { if (alive && p && p.prices) setPrices(p.prices); }).catch(() => {});
     if (window.FXAPI && window.FXAPI.trackFunnel) window.FXAPI.trackFunnel('paywallView'); // conversion funnel
     return () => { alive = false; };
   }, []);
   const d90 = stats && stats.d90;
+  const tierPrice = (t) => (prices && prices[t.id] != null) ? ('$' + prices[t.id]) : t.price;
 
   const planName = (FX.tiers.find(t => t.id === sel) || {}).name || 'Pro';
   const signedIn = !!(window.FXAuth && window.FXAuth.currentUser());
@@ -38,7 +42,7 @@ function Paywall({ go, onDone }) {
         <div style={{ padding: '6px 20px 16px', textAlign: 'center' }}>
           <div style={{ width: 60, height: 60, borderRadius: 18, background: 'var(--accent)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 10px 30px var(--glow)', marginBottom: 12 }}><Icon name="crown" size={32} color="var(--on-accent)" /></div>
           <div style={{ fontSize: 25, fontWeight: 800, letterSpacing: -0.5 }}>Unlock FXcrypt Pro</div>
-          <div style={{ fontSize: 14.5, color: 'var(--muted)', marginTop: 5, lineHeight: 1.45 }}>Lower fees, full automation, unlimited AI. Pay by card or crypto.</div>
+          <div style={{ fontSize: 14.5, color: 'var(--muted)', marginTop: 5, lineHeight: 1.45 }}>Lower fees, full automation, unlimited AI. Pay with crypto.</div>
           {d90 && d90.winRate != null && d90.total >= 10 && (
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 11, background: 'var(--up-bg)', color: 'var(--up)', borderRadius: 10, padding: '7px 12px', fontSize: 12.5, fontWeight: 700 }}>
               <Icon name="trophy" size={14} /> Signals hit take-profit {d90.winRate}% of the time — last 90 days, verified on-exchange
@@ -60,7 +64,7 @@ function Paywall({ go, onDone }) {
                     </div>
                   </div>
                   <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontSize: 19, fontWeight: 800 }}>{t.price}<span style={{ fontSize: 12.5, color: 'var(--muted)', fontWeight: 600 }}>{t.id === 'free' ? '' : '/mo'}</span></div>
+                    <div style={{ fontSize: 19, fontWeight: 800 }}>{tierPrice(t)}<span style={{ fontSize: 12.5, color: 'var(--muted)', fontWeight: 600 }}>{t.id === 'free' ? '' : '/mo'}</span></div>
                   </div>
                 </div>
                 {on && t.id !== 'free' && <div style={{ marginTop: 13, paddingTop: 13, borderTop: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -76,57 +80,17 @@ function Paywall({ go, onDone }) {
           })}
         </div>
         <div style={{ padding: '18px 16px 8px', position: 'sticky', bottom: 0 }}>
-          <Btn size="lg" full icon={sel === 'free' ? undefined : 'crown'} onClick={() => sel === 'free' ? onDone() : setStage('method')}>
+          <Btn size="lg" full icon={sel === 'free' ? undefined : 'crown'} onClick={() => sel === 'free' ? onDone() : setStage('crypto')}>
             {sel === 'free' ? 'Continue with Free' : `Upgrade to ${planName}`}
           </Btn>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16, justifyContent: 'center', marginTop: 12, fontSize: 11.5, color: 'var(--faint)' }}>
-            <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Icon name="lock" size={12} /> Card or crypto</span>
-            <span>·</span><span>Cancel anytime</span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Icon name="lock" size={12} /> USDT · USDC · native crypto</span>
+            <span>·</span><span>30 days per payment</span>
           </div>
         </div>
       </>}
 
-      {stage === 'method' && <CheckoutMethod plan={sel} planName={planName} signedIn={signedIn} onBack={() => setStage('plans')} onCrypto={() => setStage('crypto')} onDone={onDone} go={go} />}
-      {stage === 'crypto' && <CryptoCheckout plan={sel} planName={planName} signedIn={signedIn} onBack={() => setStage('method')} onDone={onDone} />}
-    </div>
-  );
-}
-
-function CheckoutMethod({ plan, planName, signedIn, onBack, onCrypto, onDone, go }) {
-  const [busy, setBusy] = pwS('');
-  const [err, setErr] = pwS('');
-  const stripe = async (billing) => {
-    if (!signedIn) { setErr('Please sign in first to upgrade.'); return; }
-    setErr(''); setBusy(billing);
-    try {
-      const { url } = await window.FXAPI.createStripeCheckout(plan, billing);
-      if (url) window.location.href = url; else throw new Error('Could not start checkout');
-    } catch (e) { setErr(e.message || 'Checkout failed'); setBusy(''); }
-  };
-  return (
-    <div style={{ padding: '4px 16px 16px', flex: 1 }}>
-      <button onClick={onBack} style={{ background: 'none', border: 'none', color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontFamily: 'inherit', fontSize: 14, padding: '4px 0 14px' }}><Icon name="chevL" size={18} /> Back</button>
-      <div style={{ fontSize: 21, fontWeight: 800 }}>Pay for {planName}</div>
-      <div style={{ fontSize: 13.5, color: 'var(--muted)', margin: '5px 0 18px' }}>Choose how you’d like to pay.</div>
-      {!signedIn && <div style={{ background: 'var(--down-bg)', borderRadius: 12, padding: 12, marginBottom: 14, fontSize: 13, color: 'var(--down)', fontWeight: 600 }}>Sign in to your account first to upgrade.</div>}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
-        {[
-          ['crown', 'Card · Annual (2 months free)', '12 months for the price of 10 · auto-renews yearly', () => stripe('annual'), 'annual'],
-          ['card', 'Card · Monthly subscription', 'Auto-renews monthly · cancel anytime', () => stripe('subscription'), 'subscription'],
-          ['dollar', 'Card · One-time (30 days)', 'Single payment, 30 days of access', () => stripe('onetime'), 'onetime'],
-          ['wallet', 'Pay with crypto', 'USDT / USDC / native on ETH, BSC, Base, SOL', onCrypto, 'crypto'],
-        ].map(([ic, title, sub, fn, key]) => (
-          <button key={key} onClick={fn} disabled={!!busy} style={{ display: 'flex', alignItems: 'center', gap: 13, background: 'var(--surface)', borderRadius: 14, padding: 15, border: 'none', boxShadow: 'inset 0 0 0 1px var(--line)', cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit', opacity: busy && busy !== key ? 0.5 : 1 }}>
-            <div style={{ width: 42, height: 42, borderRadius: 13, background: 'var(--surface2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent)', flexShrink: 0 }}><Icon name={ic} size={20} /></div>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 14.5, fontWeight: 700, color: 'var(--text)' }}>{title}</div>
-              <div style={{ fontSize: 12.5, color: 'var(--muted)' }}>{sub}</div>
-            </div>
-            {busy === key ? <span style={{ width: 18, height: 18, border: '2.5px solid var(--line2)', borderTopColor: 'var(--accent)', borderRadius: '50%', animation: 'fxspin .7s linear infinite' }} /> : <Icon name="chevR" size={17} color="var(--faint)" />}
-          </button>
-        ))}
-      </div>
-      {err && <div style={{ marginTop: 14, fontSize: 13, color: 'var(--down)', background: 'var(--down-bg)', borderRadius: 11, padding: '10px 12px', fontWeight: 600 }}>{err}</div>}
+      {stage === 'crypto' && <CryptoCheckout plan={sel} planName={planName} signedIn={signedIn} onBack={() => setStage('plans')} onDone={onDone} />}
     </div>
   );
 }

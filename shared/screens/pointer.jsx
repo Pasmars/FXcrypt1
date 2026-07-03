@@ -328,8 +328,8 @@ function PointerChat({ go, seed, style, onProposalTrade }) {
           const rem = usage.remaining != null ? usage.remaining : 0;
           const low = rem <= 3;
           return (
-            <button aria-label="Pointer requests remaining" title={`${rem} Pointer requests left${usage.credits ? ' · ' + usage.credits + ' credits' : ''} · tap to add credits`}
-              onClick={() => { if (window.FXAPI && window.FXAPI.buyPointerCredits) window.FXAPI.buyPointerCredits().catch(() => {}); }}
+            <button aria-label="Pointer requests remaining" title={`${rem} Pointer requests left${usage.credits ? ' · ' + usage.credits + ' credits' : ''} · tap to upgrade`}
+              onClick={() => go && go('paywall')}
               style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11.5, fontWeight: 800, padding: '6px 9px', borderRadius: 9, border: 'none', cursor: 'pointer', flexShrink: 0, fontFamily: 'inherit', background: low ? 'var(--down-bg)' : 'var(--surface2)', color: low ? 'var(--down)' : 'var(--muted)' }}>
               <Icon name="zap" size={12} /> {rem}
             </button>
@@ -454,25 +454,20 @@ function mdRender(text) {
   return out;
 }
 
-// Out-of-requests paywall card shown when the Pointer quota is exhausted.
-function QuotaCard({ info }) {
-  const [busy, setBusy] = uS(false);
-  const pack = info.pack || { usd: 10, credits: 50 };
+// Out-of-requests card shown when the Pointer quota is exhausted. Card
+// payments were removed, so the CTA is a plan upgrade (crypto checkout).
+function QuotaCard({ info, go }) {
   const reset = info.resetsAt ? new Date(info.resetsAt) : null;
   const resetStr = reset ? reset.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : null;
-  const buy = async () => {
-    if (busy) return; setBusy(true);
-    try { await window.FXAPI.buyPointerCredits(); } catch (e) { setBusy(false); }
-  };
   return (
     <div style={{ display: 'flex', gap: 9, alignSelf: 'flex-start', maxWidth: '92%' }}>
       <div style={{ width: 28, height: 28, borderRadius: 9, background: 'var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="zap" size={15} color="var(--on-accent)" /></div>
       <div style={{ background: 'var(--surface)', borderRadius: '16px 16px 16px 4px', boxShadow: 'inset 0 0 0 1.5px var(--accent)', padding: 14 }}>
         <div style={{ fontSize: 14.5, fontWeight: 800, marginBottom: 4 }}>You're out of Pointer requests</div>
         <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.5, marginBottom: 12 }}>
-          You've used all {info.quota != null ? info.quota : ''} requests in your plan for this period{resetStr ? <> — they reset on <b style={{ color: 'var(--text)' }}>{resetStr}</b></> : ''}. Add credits to keep going now.
+          You've used all {info.quota != null ? info.quota : ''} requests in your plan for this period{resetStr ? <> — they reset on <b style={{ color: 'var(--text)' }}>{resetStr}</b></> : ''}. Upgrade your plan for a bigger monthly allowance.
         </div>
-        <Btn full icon={busy ? undefined : 'zap'} onClick={buy} disabled={busy}>{busy ? 'Opening checkout…' : `Buy ${pack.credits} credits · $${pack.usd}`}</Btn>
+        <Btn full icon="crown" onClick={() => go && go('paywall')}>Upgrade plan</Btn>
       </div>
     </div>
   );
@@ -481,7 +476,7 @@ function QuotaCard({ info }) {
 function Msg({ m, style, go, onTrade }) {
   if (!m) return null;
   if (m.role === 'proposal') return <TradeProposal proposal={m.proposal} go={go} onTrade={onTrade} style={style} />;
-  if (m.role === 'quota') return <QuotaCard info={m.info || {}} />;
+  if (m.role === 'quota') return <QuotaCard info={m.info || {}} go={go} />;
   const ai = m.role === 'ai';
   if (m.role === 'user') {
     return <div style={{ alignSelf: 'flex-end', maxWidth: '82%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>

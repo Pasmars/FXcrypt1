@@ -29,12 +29,11 @@ export const callRemoveCexApiKey = httpsCallable(fns, 'removeCexApiKey');
 export const callApproveTrade = httpsCallable(fns, 'approveTrade');
 export const callSkipSignal = httpsCallable(fns, 'skipSignal');
 
-// Premium billing
-export const callCreateStripeCheckout = httpsCallable(fns, 'createStripeCheckout');
+// Premium billing (crypto-only — Stripe/card checkout was removed from the app)
+export const callGetPlans = httpsCallable(fns, 'getPlans');
 export const callCreateCryptoInvoice = httpsCallable(fns, 'createCryptoInvoice');
 export const callVerifyCryptoPayment = httpsCallable(fns, 'verifyCryptoPayment');
 export const callGetPointerUsage = httpsCallable(fns, 'getPointerUsage');
-export const callCreateCreditCheckout = httpsCallable(fns, 'createCreditCheckout');
 export const callGetSignalStats = httpsCallable(fns, 'getSignalStats');
 export const callGetGemStats = httpsCallable(fns, 'getGemStats');
 export const callGetReferralInfo = httpsCallable(fns, 'getReferralInfo');

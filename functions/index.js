@@ -2545,6 +2545,15 @@ exports.getPointerUsage = plainFn.https.onCall(async (data, context) => {
   }
 })
 
+// ── Public plan pricing (admin-set) ─────────────────────────────────────────
+// The paywall's price cards must always match what the admin configured in
+// config/billing.planPricesUsd (which is what crypto invoices actually charge).
+// Prices aren't sensitive, so no auth — the paywall can render before sign-in.
+exports.getPlans = functions.region('europe-west1').runWith({ timeoutSeconds: 10 }).https.onCall(async () => {
+  const cfg = await payments.billingConfig(db)
+  return { prices: { free: 0, pro: cfg.prices.pro, elite: cfg.prices.elite }, creditPack: cfg.creditPack }
+})
+
 // ── Paywall conversion funnel (roadmap 4.3) ────────────────────────────────
 // Global daily counters in funnel/{YYYY-MM-DD}: paywallView / checkoutStart
 // (client-reported via this callable) and checkoutComplete (webhook-stamped —

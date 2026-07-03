@@ -160,7 +160,7 @@ function Automation({ go, plan, onUpsell }) {
       </div>
 
       <Sheet open={create} onClose={() => setCreate(false)} title="New automation">
-        <CreateRule onClose={() => setCreate(false)} onCreate={(rule) => { setRules(rs => [rule, ...rs]); setCreate(false); }} />
+        <CreateRule onClose={() => setCreate(false)} go={go} />
       </Sheet>
     </div>
   );
@@ -186,94 +186,37 @@ function TokensLoading() {
   );
 }
 
-function CreateRule({ onClose, onCreate }) {
+// Automation chooser — every type routes to the REAL implementation (no
+// locally-fabricated rules that never execute). Types without a live backend
+// are honestly marked as coming soon.
+function CreateRule({ onClose, go }) {
   const FX = window.FX;
-  const [stage, setStage] = auS('pick'); // pick | config
-  const [kind, setKind] = auS(null);
-  const [tok, setTok] = auS(FX.tokens[0] || null);
-  const [amt, setAmt] = auS('100');
-  const [freq, setFreq] = auS('Weekly');
-  const [notify, setNotify] = auS(true);
-
-  if (stage === 'pick') {
-    return (
-      <div style={{ paddingBottom: 10, display: 'flex', flexDirection: 'column', gap: 9 }}>
-        {FX.autoTypes.map(t => (
-          <button key={t.kind} onClick={() => { setKind(t); setStage('config'); }} style={{ display: 'flex', alignItems: 'center', gap: 13, background: 'var(--surface)', borderRadius: 14, padding: 14, border: 'none', boxShadow: 'inset 0 0 0 1px var(--line)', cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit' }}>
-            <div style={{ width: 42, height: 42, borderRadius: 13, background: t.color + '22', display: 'flex', alignItems: 'center', justifyContent: 'center', color: t.color, flexShrink: 0 }}><Icon name={t.icon} size={21} /></div>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 14.5, fontWeight: 700, color: 'var(--text)' }}>{t.name}</div>
-              <div style={{ fontSize: 12.5, color: 'var(--muted)' }}>{t.desc}</div>
-            </div>
-            <Icon name="chevR" size={18} color="var(--faint)" />
-          </button>
-        ))}
-      </div>
-    );
-  }
-
-  // config
-  if (!tok) return <TokensLoading />;
-  const m = KIND_META[kind.kind];
+  // kind → { route, note } — where the real feature lives.
+  const LIVE = {
+    sltp:  { route: 'portfolio', note: 'Set on any open position — the exit monitor sells automatically' },
+    trail: { route: 'portfolio', note: 'Set on any open position — trails the peak and sells on the pullback' },
+    copy:  { route: 'copytrade', note: 'Follow smart-money wallets and auto-copy their buys' },
+  };
   return (
-    <div style={{ paddingBottom: 12 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 16 }}>
-        <div style={{ width: 40, height: 40, borderRadius: 12, background: m.color + '22', display: 'flex', alignItems: 'center', justifyContent: 'center', color: m.color }}><Icon name={m.icon} size={20} /></div>
-        <div style={{ flex: 1 }}><div style={{ fontWeight: 800, fontSize: 15.5 }}>{kind.name}</div><div style={{ fontSize: 12.5, color: 'var(--muted)' }}>{kind.desc}</div></div>
-        <button onClick={() => setStage('pick')} style={{ background: 'var(--chip)', border: 'none', borderRadius: 9, padding: '7px 11px', fontSize: 12.5, fontWeight: 700, color: 'var(--muted)', cursor: 'pointer', fontFamily: 'inherit' }}>Change</button>
-      </div>
-
-      {/* token select */}
-      <Label>Token</Label>
-      <div style={{ display: 'flex', gap: 8, overflowX: 'auto', scrollbarWidth: 'none', marginBottom: 14, paddingBottom: 2 }}>
-        {FX.tokens.slice(0, 6).map(t => (
-          <button key={t.id} onClick={() => setTok(t)} style={{ display: 'flex', alignItems: 'center', gap: 7, flexShrink: 0, padding: '8px 12px 8px 8px', borderRadius: 11, border: 'none', cursor: 'pointer', fontFamily: 'inherit', background: tok.id === t.id ? 'var(--glow)' : 'var(--surface)', boxShadow: tok.id === t.id ? 'inset 0 0 0 1.5px var(--accent)' : 'inset 0 0 0 1px var(--line)' }}>
-            <Logo color={t.logo} sym={t.sym} size={24} /><span style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--text)' }}>{t.sym}</span>
+    <div style={{ paddingBottom: 10, display: 'flex', flexDirection: 'column', gap: 9 }}>
+      {FX.autoTypes.map((t) => {
+        const live = LIVE[t.kind];
+        return (
+          <button key={t.kind} disabled={!live}
+            onClick={() => { if (live) { onClose(); go(live.route); } }}
+            style={{ display: 'flex', alignItems: 'center', gap: 13, background: 'var(--surface)', borderRadius: 14, padding: 14, border: 'none', boxShadow: 'inset 0 0 0 1px var(--line)', cursor: live ? 'pointer' : 'default', textAlign: 'left', fontFamily: 'inherit', opacity: live ? 1 : 0.55 }}>
+            <div style={{ width: 42, height: 42, borderRadius: 13, background: t.color + '22', display: 'flex', alignItems: 'center', justifyContent: 'center', color: t.color, flexShrink: 0 }}><Icon name={t.icon} size={21} /></div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 14.5, fontWeight: 700, color: 'var(--text)' }}>{t.name}</span>
+                {!live && <Pill tone="muted">soon</Pill>}
+              </div>
+              <div style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 1 }}>{live ? live.note : t.desc}</div>
+            </div>
+            {live && <Icon name="chevR" size={18} color="var(--faint)" />}
           </button>
-        ))}
-      </div>
-
-      {(kind.kind === 'dca' || kind.kind === 'limit' || kind.kind === 'copy') && <>
-        <Label>{kind.kind === 'copy' ? 'Per-trade size (USDT)' : 'Amount (USDT)'}</Label>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surface)', borderRadius: 13, padding: '12px 15px', boxShadow: 'inset 0 0 0 1px var(--line)', marginBottom: 14 }}>
-          <span style={{ fontSize: 22, fontWeight: 800 }}>$</span>
-          <input value={amt} onChange={e => setAmt(e.target.value.replace(/[^0-9.]/g, ''))} inputMode="decimal" style={{ flex: 1, border: 'none', background: 'transparent', outline: 'none', color: 'var(--text)', fontSize: 22, fontWeight: 800, fontFamily: 'inherit', minWidth: 0 }} />
-        </div>
-      </>}
-
-      {kind.kind === 'dca' && <>
-        <Label>Frequency</Label>
-        <Segmented options={['Daily', 'Weekly', 'Monthly']} value={freq} onChange={setFreq} style={{ marginBottom: 14 }} />
-      </>}
-
-      {kind.kind === 'sltp' && <>
-        <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
-          <div style={{ flex: 1 }}><Label>Stop-loss</Label><InputBox prefix="-" suffix="%" val="8" /></div>
-          <div style={{ flex: 1 }}><Label>Take-profit</Label><InputBox prefix="+" suffix="%" val="25" /></div>
-        </div>
-      </>}
-
-      {kind.kind === 'limit' && <>
-        <Label>Trigger price</Label>
-        <InputBox prefix="$" val={tok.price.toString()} style={{ marginBottom: 14 }} />
-      </>}
-
-      {(kind.kind === 'trail' || kind.kind === 'rebal') && <>
-        <Label>{kind.kind === 'trail' ? 'Trail distance' : 'Rebalance band'}</Label>
-        <InputBox prefix="" suffix="%" val={kind.kind === 'trail' ? '8' : '5'} style={{ marginBottom: 14 }} />
-      </>}
-
-      {/* notify row */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--surface)', borderRadius: 13, padding: '13px 15px', boxShadow: 'inset 0 0 0 1px var(--line)', marginBottom: 18 }}>
-        <span style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 13.5, fontWeight: 600 }}><Icon name="bell" size={17} color="var(--accent)" /> Notify on every execution</span>
-        <Toggle on={notify} onClick={() => setNotify(n => !n)} />
-      </div>
-
-      <Btn size="lg" full icon="zap" onClick={() => onCreate({
-        id: 'a' + Date.now(), kind: kind.kind, name: kind.name.replace(/ \/.*/, '') + (tok.sym ? ' · ' + tok.sym : ''), sym: tok.sym, logo: tok.logo, chain: tok.chain, on: true,
-        detail: kind.kind === 'dca' ? `Buy $${amt} ${freq.toLowerCase()}` : kind.kind === 'limit' ? `Buy at $${tok.price}` : kind.desc,
-        meta: 'Created just now', stat: 'Armed', up: true,
-      })}>Activate rule</Btn>
+        );
+      })}
     </div>
   );
 }
