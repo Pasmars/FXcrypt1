@@ -319,7 +319,9 @@ const GEM_NARRATIVES = ['All', 'AI', 'Meme', 'DeFi', 'DePIN', 'RWA', 'GameFi', '
 const GEM_CHAIN_OPTS = [['All', 'All chains'], ['sol', 'Solana'], ['eth', 'Ethereum'], ['base', 'Base'], ['bsc', 'BSC']];
 const GEM_SORT_OPTS = [{ value: 'score', label: 'Top score' }, { value: 'trending', label: 'Trending' }, { value: 'new', label: 'Newest' }, { value: 'gainers', label: 'Top gainers' }];
 const GEM_AGE_UNITS = [{ value: 'hours', label: 'Hours' }, { value: 'days', label: 'Days' }, { value: 'weeks', label: 'Weeks' }, { value: 'months', label: 'Months' }, { value: 'years', label: 'Years' }];
-const GEM_SETTINGS_DEFAULT = { minLiquidity: 5000, minVolume: 1000, minMarketCap: 0, minScore: 60, sort: 'score', minAgeAmount: 0, minAgeUnit: 'hours', minAgeHours: 0, maxAgeAmount: 1, maxAgeUnit: 'days', maxAgeHours: 24, buyAmountBsc: 0.005, buyAmountEth: 0.01, buyAmountSol: 0.05, buySlippage: 10, exitTp: 100, exitSl: 30, exitTrail: 0, exitMaxHold: 0 };
+// Chains the Telegram auto-alert scheduler can scan + send (order = chip order).
+const GEM_TG_CHAINS = [['bsc', 'BSC'], ['eth', 'Ethereum'], ['base', 'Base'], ['sol', 'Solana']];
+const GEM_SETTINGS_DEFAULT = { minLiquidity: 5000, minVolume: 1000, minMarketCap: 0, minScore: 60, sort: 'score', minAgeAmount: 0, minAgeUnit: 'hours', minAgeHours: 0, maxAgeAmount: 1, maxAgeUnit: 'days', maxAgeHours: 24, buyAmountBsc: 0.005, buyAmountEth: 0.01, buyAmountSol: 0.05, buySlippage: 10, exitTp: 100, exitSl: 30, exitTrail: 0, exitMaxHold: 0, telegramChains: ['bsc', 'eth', 'sol', 'base'] };
 const GEM_SCAN_STEPS = [
   { icon: 'scan', label: 'Pulling fresh pairs', sub: 'DexScreener · GeckoTerminal' },
   { icon: 'layers', label: 'Scanning the broad market', sub: 'New, trending & established pools' },
@@ -455,6 +457,12 @@ function GemScanner({ go, onTrade, locked, onUpsell }) {
             <Icon name="telegram" size={13} color="#229ED9" style={{ flexShrink: 0 }} />
             <span>Connect Telegram in Profile to receive gem alerts.</span>
           </div>
+        )}
+        {tgAlerts && tgLinked && (
+          <button onClick={() => setSetOpen(true)} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--muted)', padding: '0 2px', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
+            <Icon name="telegram" size={13} color="#229ED9" style={{ flexShrink: 0 }} />
+            <span>Alerting on {(cfg.telegramChains && cfg.telegramChains.length ? cfg.telegramChains : ['bsc', 'eth', 'sol', 'base']).map((c) => c.toUpperCase()).join(' · ')} — tap to change chains.</span>
+          </button>
         )}
         {autoBuy && (
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, fontSize: 11, color: 'var(--muted)', lineHeight: 1.45, padding: '0 2px' }}>
@@ -620,6 +628,14 @@ function GemSettingsSheet({ open, onClose, cfg, onSaved }) {
       </div>
     </label>
   );
+  // Chains the Telegram auto-alert scheduler scans + sends. At least one must
+  // stay selected (an empty list would silently stop all Telegram alerts).
+  const tgChains = Array.isArray(v.telegramChains) && v.telegramChains.length ? v.telegramChains : ['bsc', 'eth', 'sol', 'base'];
+  const toggleChain = (id) => setV((s) => {
+    const cur = Array.isArray(s.telegramChains) && s.telegramChains.length ? s.telegramChains : ['bsc', 'eth', 'sol', 'base'];
+    const next = cur.includes(id) ? cur.filter((c) => c !== id) : [...cur, id];
+    return { ...s, telegramChains: next.length ? next : cur }; // never allow zero
+  });
   const save = async () => {
     setBusy(true); setErr('');
     try { const saved = await window.FXAPI.saveGemSettings(v); onSaved(saved); }
@@ -630,6 +646,28 @@ function GemSettingsSheet({ open, onClose, cfg, onSaved }) {
     <Sheet open={open} onClose={onClose} title="Scan settings">
       <div style={{ fontSize: 12.5, color: 'var(--muted)', lineHeight: 1.5, marginBottom: 16 }}>
         These tune both the manual scan and the automatic Telegram gem alerts.
+      </div>
+
+      {/* Telegram alert chains — which chains processGemScanner scans + sends. */}
+      <div style={{ marginBottom: 18, paddingBottom: 16, borderBottom: '1px solid var(--line)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13.5, fontWeight: 800, marginBottom: 4 }}>
+          <Icon name="telegram" size={15} color="#229ED9" /> Telegram alert chains
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5, marginBottom: 11 }}>
+          The auto-alert bot scans these chains every 5 min and sends fresh gems to your Telegram. Tap to toggle — at least one stays on.
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {GEM_TG_CHAINS.map(([id, label]) => {
+            const on = tgChains.includes(id);
+            return (
+              <button key={id} onClick={() => toggleChain(id)} aria-pressed={on}
+                style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '9px 13px', borderRadius: 11, border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: 700, transition: 'all .15s',
+                  background: on ? 'var(--accent)' : 'var(--surface)', color: on ? 'var(--on-accent)' : 'var(--muted)', boxShadow: on ? 'none' : 'inset 0 0 0 1px var(--line)' }}>
+                {on && <Icon name="check" size={13} stroke={3} />}{label}
+              </button>
+            );
+          })}
+        </div>
       </div>
       {field('minLiquidity', 'Min liquidity', 'USD', 1000, 1000000000)}
       {field('minVolume', 'Min 24h volume', 'USD', 0, 1000000000)}

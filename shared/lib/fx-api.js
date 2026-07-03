@@ -70,7 +70,21 @@ function gemSettingsDefault() {
     buyAmountBsc: 0.005, buyAmountEth: 0.01, buyAmountSol: 0.05, buySlippage: 10,
     // Exit defaults armed on every auto-bought position (0 = rule off).
     exitTp: 100, exitSl: 30, exitTrail: 0, exitMaxHold: 0,
+    // Chains the Telegram auto-alert scheduler (processGemScanner) scans + sends.
+    telegramChains: [...TG_GEM_CHAINS],
   };
+}
+
+// Chains the Telegram gem-alert scheduler can cover. Matches the scanner's
+// supported chains (no TON — the gem scanner doesn't index it).
+const TG_GEM_CHAINS = ['bsc', 'eth', 'sol', 'base'];
+// Sanitize a chain list → an ordered, deduped subset of the supported chains;
+// falls back to all when nothing valid is selected (an empty list would silently
+// disable the scheduler, which is never what a user means by "save").
+function cleanTgChains(list) {
+  const set = new Set((Array.isArray(list) ? list : []).map((c) => String(c).toLowerCase()));
+  const picked = TG_GEM_CHAINS.filter((c) => set.has(c));
+  return picked.length ? picked : [...TG_GEM_CHAINS];
 }
 
 function big(n) {
@@ -312,6 +326,7 @@ window.FXAPI = {
         exitSl:      bs.gemExitSl      != null ? bs.gemExitSl      : 30,
         exitTrail:   bs.gemExitTrail   != null ? bs.gemExitTrail   : 0,
         exitMaxHold: bs.gemExitMaxHold != null ? bs.gemExitMaxHold : 0,
+        telegramChains: cleanTgChains(bs.gemChains),
       };
     } catch (e) { return gemSettingsDefault(); }
   },
@@ -348,6 +363,8 @@ window.FXAPI = {
       gemExitSl:      f(s.exitSl, 0, 99, 30),
       gemExitTrail:   f(s.exitTrail, 0, 99, 0),
       gemExitMaxHold: f(s.exitMaxHold, 0, 8760, 0),
+      // Chains the Telegram auto-alert scheduler scans + sends (read by processGemScanner).
+      gemChains: cleanTgChains(s.telegramChains),
     };
     await setDoc(doc(db, 'users', u.uid), { botSettings }, { merge: true });
     return {
@@ -359,6 +376,7 @@ window.FXAPI = {
       buyAmountSol: botSettings.gemBuyAmountSol, buySlippage: botSettings.gemBuySlippage,
       exitTp: botSettings.gemExitTp, exitSl: botSettings.gemExitSl,
       exitTrail: botSettings.gemExitTrail, exitMaxHold: botSettings.gemExitMaxHold,
+      telegramChains: botSettings.gemChains,
     };
   },
   // Patch the CEX signal agent settings (whitelisted fields only).
