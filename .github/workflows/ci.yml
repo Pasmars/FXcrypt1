@@ -1,0 +1,49 @@
+# CI guard — fails the push before a broken build can reach a deploy.
+# Mirrors the three local checks: mobile vite build, webapp static export,
+# and a syntax pass over every Cloud Function entrypoint.
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  functions:
+    name: Functions syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: node --check all function sources
+        run: |
+          set -e
+          for f in functions/index.js functions/lib/*.js; do
+            node --check "$f"
+          done
+
+  mobile:
+    name: Mobile build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: mobile/package-lock.json }
+      - run: npm ci
+        working-directory: mobile
+      - run: npm run build
+        working-directory: mobile
+
+  webapp:
+    name: Webapp static export
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: webapp/package-lock.json }
+      - run: npm ci
+        working-directory: webapp
+      - run: npm run build
+        working-directory: webapp
+        env:
+          STATIC_EXPORT: "1"

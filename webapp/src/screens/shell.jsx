@@ -26,7 +26,6 @@ function App() {
   });
   const [stack, setStack] = shS([]); // overlay routes
   const [phase, setPhase] = shS('onboard');
-  const [model, setModel] = shS('DeepSeek');
   const [wizard, setWizard] = shS(false);
   const [chatSeed, setChatSeed] = shS(null);
 
@@ -49,10 +48,56 @@ function App() {
     return () => window.removeEventListener('fx:update', onUpdate);
   }, []);
 
+  // Stripe credit-pack return (?credits=success|cancel) → toast the outcome.
+  // The usage pill re-fetches on chat mount, so the fresh balance shows there.
+  shE(() => {
+    const r = window.FXAPI && window.FXAPI.consumeCreditsReturn && window.FXAPI.consumeCreditsReturn();
+    if (r && window.FXToast) window.FXToast.show(r === 'success' ? '✅ Credits added to your account' : 'Checkout canceled — you were not charged');
+  }, []);
+
+  // Push-notification deep link (?goto=portfolio|signals|…) → open that screen
+  // once the app phase is live, then strip the param.
+  shE(() => {
+    if (phase !== 'app') return;
+    try {
+      const url = new URL(window.location.href);
+      const target = url.searchParams.get('goto');
+      if (!target) return;
+      // Optional chat-session id (Pointer watch-task analyses deep-link here).
+      const session = url.searchParams.get('session');
+      if (session) window.__fxOpenSession = session;
+      url.searchParams.delete('goto'); url.searchParams.delete('session');
+      window.history.replaceState({}, '', url.pathname + (url.searchParams.toString() ? '?' + url.searchParams.toString() : ''));
+      go(target);
+    } catch (e) { /* bad URL — ignore */ }
+  }, [phase]);
+
   // Pull the user's live data (profile, signals, exchange balances) once in the app.
   shE(() => {
     if (phase === 'app' && window.FXLive) window.FXLive.bootstrapUser();
   }, [phase]);
+
+  // ─── Hardware / browser back button (Android TWA + PWA) ───
+  // Navigation lives in React state (overlay stack + active tab), not the URL, so
+  // without this the device back button finds no history to pop and the TWA just
+  // closes. We keep a single "trap" history entry; on each back press we undo one
+  // step of in-app navigation and re-seed the trap. When nothing is left to undo
+  // we let the back propagate so the app closes (TWA) or leaves the site (PWA).
+  const navRef = shR({ phase, tab, stackLen: stack.length, wizard });
+  shE(() => { navRef.current = { phase, tab, stackLen: stack.length, wizard }; });
+  shE(() => {
+    window.history.pushState({ fxTrap: true }, '');
+    const onPop = () => {
+      const st = navRef.current;
+      if (st.wizard) { setWizard(false); window.history.pushState({ fxTrap: true }, ''); return; }
+      if (st.stackLen > 0) { setStack(s => s.slice(0, -1)); window.history.pushState({ fxTrap: true }, ''); return; }
+      if (st.phase === 'app' && st.tab !== 'pointer') { setTab('pointer'); window.history.pushState({ fxTrap: true }, ''); return; }
+      window.removeEventListener('popstate', onPop); // nothing to undo → let it close
+      window.history.back();
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
 
   const go = (key, props = {}) => {
     if (key === -1) { setStack(s => s.slice(0, -1)); return; }
@@ -78,14 +123,14 @@ function App() {
     if (tab === 'pointer') return (
       <div>
         <TopBar left={<Mark size={32} />} title="FXcrypt"
-          sub={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--up)' }} /> Pointer online · {model}</span>}
+          sub={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--up)' }} /> Pointer online</span>}
           right={<>
             <button onClick={() => go('paywall')} style={{ display: 'flex', alignItems: 'center', gap: 4, background: plan === 'free' ? 'var(--surface2)' : 'var(--glow)', color: plan === 'free' ? 'var(--muted)' : 'var(--accent)', border: 'none', borderRadius: 9, padding: '7px 11px', fontWeight: 800, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
               {plan !== 'free' && <Icon name="crown" size={13} />}{planLabel}
             </button>
-            <button onClick={() => go('profile')} style={{ width: 40, height: 40, borderRadius: '50%', background: 'linear-gradient(135deg,var(--accent),var(--accent-deep))', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--on-accent)', fontWeight: 800, fontSize: 15 }}>{(window.FX.user && window.FX.user.initials) || 'A'}</button>
+            <button aria-label="Profile" onClick={() => go('profile')} style={{ width: 40, height: 40, borderRadius: '50%', background: 'linear-gradient(135deg,var(--accent),var(--accent-deep))', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--on-accent)', fontWeight: 800, fontSize: 15 }}>{(window.FX.user && window.FX.user.initials) || 'A'}</button>
           </>} />
-        <PointerHome go={go} layout={t.homeLayout} model={model} setModel={setModel} openChat={openChat} user={(window.FX.user && window.FX.user.name && window.FX.user.name.split(' ')[0]) || 'there'} />
+        <PointerHome go={go} layout={t.homeLayout} openChat={openChat} user={(window.FX.user && window.FX.user.name && window.FX.user.name.split(' ')[0]) || 'there'} />
       </div>
     );
     if (tab === 'markets') return <Markets go={go} />;
@@ -98,10 +143,10 @@ function App() {
   function Overlay({ route }) {
     const { key, props } = route;
     const head = (title, right) => (
-      <TopBar left={<button onClick={back} style={{ width: 40, height: 40, borderRadius: 12, background: 'var(--surface2)', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text)' }}><Icon name="chevL" size={21} /></button>} title={title} right={right} />
+      <TopBar left={<button aria-label="Back" onClick={back} style={{ width: 40, height: 40, borderRadius: 12, background: 'var(--surface2)', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text)' }}><Icon name="chevL" size={21} /></button>} title={title} right={right} />
     );
     let inner, header = null, custom = false;
-    if (key === 'chat') { header = head('Pointer', <button onClick={() => setModel(model === 'DeepSeek' ? 'ChatGPT' : 'DeepSeek')} style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'var(--surface2)', border: 'none', borderRadius: 10, padding: '8px 11px', cursor: 'pointer', color: 'var(--text2)', fontSize: 12.5, fontWeight: 700, fontFamily: 'inherit' }}><Icon name="spark" size={14} color="var(--accent)" />{model}<Icon name="chevD" size={13} /></button>); inner = <PointerChat go={go} model={model} setModel={setModel} seed={chatSeed} style={t.pointerStyle} onProposalTrade={() => {}} />; }
+    if (key === 'chat') { header = head('Pointer'); inner = <PointerChat go={go} seed={chatSeed} style={t.pointerStyle} onProposalTrade={() => {}} />; }
     else if (key === 'token') { header = head(props.token.sym); inner = <TokenDetail token={props.token} go={go} onTrade={openTrade} />; }
     else if (key === 'bubble') { header = head('Bubble Map'); inner = <BubbleMap token={props.token} go={go} />; }
     else if (key === 'trade') { header = head('Manual Trade', <Pill tone="muted">{plan === 'free' ? '1.0%' : plan === 'pro' ? '0.5%' : '0.2%'} fee</Pill>); inner = <TradeFlow token={props.token} side={props.side} go={go} onDone={back} />; }
@@ -118,6 +163,8 @@ function App() {
     else if (key === 'sessions') { header = head('Sessions'); inner = <ProfileSessions go={go} />; }
     else if (key === 'connect') { header = head(props.kind === 'telegram' ? 'Telegram' : 'Discord'); inner = <ProfileConnect go={go} kind={props.kind} />; }
     else if (key === 'referral') { header = head('Referrals'); inner = <ProfileReferral go={go} />; }
+    else if (key === 'portfolio') { header = head('Portfolio'); inner = <Portfolio go={go} />; }
+    else if (key === 'copytrade') { custom = true; inner = <CopyTrading go={go} plan={plan} onUpsell={upsell} />; }
 
     return (
       <div style={{ position: 'absolute', inset: 0, background: 'var(--bg)', zIndex: 30, display: 'flex', flexDirection: 'column' }}>
@@ -130,7 +177,12 @@ function App() {
 
   const body = (
     <div ref={rootRef} style={{ height: '100%', position: 'relative', fontFamily: 'inherit', overflow: 'hidden', background: 'var(--bg)', color: 'var(--text)' }}>
-      {phase === 'onboard' && <Onboarding dark={t.dark} onDone={() => { setPhase('app'); setWizard(true); }} />}
+      {phase === 'onboard' && <Onboarding dark={t.dark} onDone={() => {
+        let intent = null;
+        try { intent = sessionStorage.getItem('fx_intent'); sessionStorage.removeItem('fx_intent'); } catch (e) {}
+        setPhase('app');
+        if (intent === 'wallet') setTab('wallet'); else setWizard(true);
+      }} />}
       {phase === 'app' && <>
         <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
           <div style={{ height: 54, flexShrink: 0 }} />
@@ -195,6 +247,21 @@ function Profile({ go, t, setTweak, plan, planLabel, onSignOut }) {
   // Live counts derived from the same data the detail screens render, so the
   // summary never contradicts what the user sees when they tap through.
   const FX = window.FX || {};
+  // Paper trading mode — account-level; every execution path simulates fills.
+  const [paper, setPaper] = shS(null);
+  shE(() => {
+    let alive = true;
+    if (window.FXAPI && window.FXAPI.getPaperMode) window.FXAPI.getPaperMode().then((v) => { if (alive) setPaper(v); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  const togglePaper = async () => {
+    const next = !paper;
+    setPaper(next);
+    try {
+      await window.FXAPI.setPaperMode(next);
+      if (window.FXToast) window.FXToast.show(next ? '📝 Paper trading ON — all fills are simulated' : 'Live trading — real on-chain orders');
+    } catch (e) { setPaper(!next); }
+  };
   const exConnected = (FX.exchanges || []).filter((e) => e.connected).length;
   const wstate = (window.FXWallet && window.FXWallet.ready() && window.FXWallet.state()) || null;
   const walletCount = wstate ? wstate.wallets.length : 0;
@@ -227,6 +294,15 @@ function Profile({ go, t, setTweak, plan, planLabel, onSignOut }) {
         {plan === 'free' ? <Btn size="sm" icon="crown">Upgrade</Btn> : <Icon name="chevR" size={18} color="var(--faint)" />}
       </div>
       <Group title="Trading">
+        <div style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 13, padding: '14px 16px', borderBottom: '1px solid var(--line)' }}>
+          <div style={{ width: 34, height: 34, borderRadius: 10, background: paper ? 'var(--glow)' : 'var(--surface2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent)' }}><Icon name="edit" size={18} /></div>
+          <span style={{ flex: 1, minWidth: 0 }}>
+            <span style={{ display: 'block', fontSize: 14.5, fontWeight: 600 }}>Paper trading</span>
+            <span style={{ display: 'block', fontSize: 11.5, color: 'var(--muted)', marginTop: 1 }}>{paper == null ? 'Loading…' : paper ? 'Simulated fills — no real funds move' : 'Off — trades are real'}</span>
+          </span>
+          <Toggle on={!!paper} onClick={togglePaper} />
+        </div>
+        {item('briefcase', 'Portfolio & PnL', 'Positions · exits', () => go('portfolio'))}
         {item('layers', 'Connected exchanges', exConnected ? exConnected + ' linked' : 'Connect', () => go('exchanges'))}
         {item('wallet', 'Wallets', walletCount ? walletCount + (walletCount === 1 ? ' chain' : ' chains') : 'Set up', () => go('wallet'))}
         {item('robot', 'Automation rules', autoActive ? autoActive + ' active' : 'Set up', () => go('automation'))}

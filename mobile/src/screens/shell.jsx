@@ -48,6 +48,30 @@ function App() {
     return () => window.removeEventListener('fx:update', onUpdate);
   }, []);
 
+  // Stripe credit-pack return (?credits=success|cancel) → toast the outcome.
+  // The usage pill re-fetches on chat mount, so the fresh balance shows there.
+  shE(() => {
+    const r = window.FXAPI && window.FXAPI.consumeCreditsReturn && window.FXAPI.consumeCreditsReturn();
+    if (r && window.FXToast) window.FXToast.show(r === 'success' ? '✅ Credits added to your account' : 'Checkout canceled — you were not charged');
+  }, []);
+
+  // Push-notification deep link (?goto=portfolio|signals|…) → open that screen
+  // once the app phase is live, then strip the param.
+  shE(() => {
+    if (phase !== 'app') return;
+    try {
+      const url = new URL(window.location.href);
+      const target = url.searchParams.get('goto');
+      if (!target) return;
+      // Optional chat-session id (Pointer watch-task analyses deep-link here).
+      const session = url.searchParams.get('session');
+      if (session) window.__fxOpenSession = session;
+      url.searchParams.delete('goto'); url.searchParams.delete('session');
+      window.history.replaceState({}, '', url.pathname + (url.searchParams.toString() ? '?' + url.searchParams.toString() : ''));
+      go(target);
+    } catch (e) { /* bad URL — ignore */ }
+  }, [phase]);
+
   // Pull the user's live data (profile, signals, exchange balances) once in the app.
   shE(() => {
     if (phase === 'app' && window.FXLive) window.FXLive.bootstrapUser();
@@ -139,6 +163,8 @@ function App() {
     else if (key === 'sessions') { header = head('Sessions'); inner = <ProfileSessions go={go} />; }
     else if (key === 'connect') { header = head(props.kind === 'telegram' ? 'Telegram' : 'Discord'); inner = <ProfileConnect go={go} kind={props.kind} />; }
     else if (key === 'referral') { header = head('Referrals'); inner = <ProfileReferral go={go} />; }
+    else if (key === 'portfolio') { header = head('Portfolio'); inner = <Portfolio go={go} />; }
+    else if (key === 'copytrade') { custom = true; inner = <CopyTrading go={go} plan={plan} onUpsell={upsell} />; }
 
     return (
       <div style={{ position: 'absolute', inset: 0, background: 'var(--bg)', zIndex: 30, display: 'flex', flexDirection: 'column' }}>
@@ -221,6 +247,21 @@ function Profile({ go, t, setTweak, plan, planLabel, onSignOut }) {
   // Live counts derived from the same data the detail screens render, so the
   // summary never contradicts what the user sees when they tap through.
   const FX = window.FX || {};
+  // Paper trading mode — account-level; every execution path simulates fills.
+  const [paper, setPaper] = shS(null);
+  shE(() => {
+    let alive = true;
+    if (window.FXAPI && window.FXAPI.getPaperMode) window.FXAPI.getPaperMode().then((v) => { if (alive) setPaper(v); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  const togglePaper = async () => {
+    const next = !paper;
+    setPaper(next);
+    try {
+      await window.FXAPI.setPaperMode(next);
+      if (window.FXToast) window.FXToast.show(next ? '📝 Paper trading ON — all fills are simulated' : 'Live trading — real on-chain orders');
+    } catch (e) { setPaper(!next); }
+  };
   const exConnected = (FX.exchanges || []).filter((e) => e.connected).length;
   const wstate = (window.FXWallet && window.FXWallet.ready() && window.FXWallet.state()) || null;
   const walletCount = wstate ? wstate.wallets.length : 0;
@@ -253,6 +294,15 @@ function Profile({ go, t, setTweak, plan, planLabel, onSignOut }) {
         {plan === 'free' ? <Btn size="sm" icon="crown">Upgrade</Btn> : <Icon name="chevR" size={18} color="var(--faint)" />}
       </div>
       <Group title="Trading">
+        <div style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 13, padding: '14px 16px', borderBottom: '1px solid var(--line)' }}>
+          <div style={{ width: 34, height: 34, borderRadius: 10, background: paper ? 'var(--glow)' : 'var(--surface2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent)' }}><Icon name="edit" size={18} /></div>
+          <span style={{ flex: 1, minWidth: 0 }}>
+            <span style={{ display: 'block', fontSize: 14.5, fontWeight: 600 }}>Paper trading</span>
+            <span style={{ display: 'block', fontSize: 11.5, color: 'var(--muted)', marginTop: 1 }}>{paper == null ? 'Loading…' : paper ? 'Simulated fills — no real funds move' : 'Off — trades are real'}</span>
+          </span>
+          <Toggle on={!!paper} onClick={togglePaper} />
+        </div>
+        {item('briefcase', 'Portfolio & PnL', 'Positions · exits', () => go('portfolio'))}
         {item('layers', 'Connected exchanges', exConnected ? exConnected + ' linked' : 'Connect', () => go('exchanges'))}
         {item('wallet', 'Wallets', walletCount ? walletCount + (walletCount === 1 ? ' chain' : ' chains') : 'Set up', () => go('wallet'))}
         {item('robot', 'Automation rules', autoActive ? autoActive + ' active' : 'Set up', () => go('automation'))}

@@ -30,8 +30,48 @@ async function billingConfig(db) {
     prices: { ...DEFAULT_PRICES, ...(c.planPricesUsd || {}) },
     stripePriceIds: c.stripePriceIds || {},     // { proMonthly, eliteMonthly }
     frontendUrl: c.frontendUrl || 'https://fxcrypt-app.web.app',
+    // Usage metering + controls (admin-editable; metering.js reads via cfg.raw).
+    pointerQuota: { free: 10, pro: 50, elite: 200, ...(c.pointerQuota || {}) },
+    gemScanQuota: { free: 5, pro: 50, elite: 200, ...(c.gemScanQuota || {}) },
+    creditPack: { usd: 10, credits: 50, ...(c.creditPack || {}) },
+    autoTrade: { globalEnabled: true, defaultMaxBuyUsd: 100, defaultDailyTradeCap: 10, ...(c.autoTrade || {}) },
+    referral: { enabled: true, rewardCredits: 25, ...(c.referral || {}) },
     raw: c,
   }
+}
+
+// ── Referral reward — called from EVERY successful-payment path ──
+// Grants the referrer their reward exactly once per referee, on the referee's
+// FIRST payment (anti-abuse: unpaid signups earn nothing, self-referrals are
+// rejected, and the `referralRewarded` latch makes it idempotent across
+// webhook retries).
+async function processReferralReward(db, uid, cfg) {
+  try {
+    if (!cfg.referral.enabled) return null
+    const reward = Math.max(0, parseInt(cfg.referral.rewardCredits) || 0)
+    if (!reward) return null
+    const userRef = db.doc(`users/${uid}`)
+    const snap = await userRef.get()
+    const d = snap.exists ? snap.data() : {}
+    if (d.referralRewarded) return null                        // already rewarded (idempotent)
+    const code = String(d.referredBy || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 16)
+    if (!code) return null
+    const regSnap = await db.doc(`referralCodes/${code}`).get()
+    const refUid = regSnap.exists ? regSnap.data().uid : null
+    if (!refUid || refUid === uid) return null                  // unknown code or self-referral
+    const admin = require('firebase-admin')
+    const inc = admin.firestore.FieldValue.increment
+    await db.runTransaction(async (t) => {
+      const fresh = await t.get(userRef)
+      if (fresh.exists && fresh.data().referralRewarded) return // raced webhook retry
+      t.set(userRef, { referralRewarded: true, referredByUid: refUid }, { merge: true })
+      t.set(db.doc(`users/${refUid}`), {
+        pointerCredits: inc(reward),
+        referralStats: { paid: inc(1), earnedCredits: inc(reward) },
+      }, { merge: true })
+    })
+    return { refUid, reward }
+  } catch (e) { console.warn(`referral reward failed for ${uid}:`, e.message); return null }
 }
 
 function isAdminEmail(context, cfg) {
@@ -132,5 +172,6 @@ async function verifyPayment(ctx, invoice) {
 
 module.exports = {
   billingConfig, isAdminEmail, grantPlan, computeCryptoAmount, verifyPayment,
+  processReferralReward,
   STABLECOINS, DEFAULT_PRICES, isStable,
 }

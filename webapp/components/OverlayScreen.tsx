@@ -9,9 +9,10 @@ const TITLE: Record<string, (p: any) => string> = {
   trade: () => 'Manual Trade', execSignal: () => 'Execute Signal', signalChart: (p) => p.signal?.pair || 'Signal',
   profile: () => 'Profile', exchanges: () => 'Exchanges', signing: () => 'Signing', '2fa': () => 'Security',
   sessions: () => 'Sessions', connect: (p) => (p.kind === 'telegram' ? 'Telegram' : 'Discord'), referral: () => 'Referrals',
+  portfolio: () => 'Portfolio',
 };
 // These render their own full-screen chrome (no standard header).
-const CUSTOM = new Set(['scanner', 'paywall', 'automation', 'alerts']);
+const CUSTOM = new Set(['scanner', 'paywall', 'automation', 'alerts', 'copytrade']);
 
 export default function OverlayScreen({ screen }: { screen: string }) {
   const app = useApp();

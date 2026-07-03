@@ -143,9 +143,13 @@ async function loadStats(){
     document.getElementById('stats').innerHTML = `
       <div class="stat"><div class="n">${s.totalUsers}</div><div class="l">Total users</div></div>
       <div class="stat"><div class="n">${s.premium}</div><div class="l">Premium</div></div>
-      <div class="stat"><div class="n" style="color:var(--accent)">${s.byPlan.pro}</div><div class="l">Pro</div></div>
+      <div class="stat"><div class="n" style="color:var(--accent)">${s.byPlan.pro}</div><div class="l">Pro (Basic)</div></div>
       <div class="stat"><div class="n gold">${s.byPlan.elite}</div><div class="l">Elite</div></div>
-      <div class="stat"><div class="n muted">${s.byPlan.free}</div><div class="l">Free</div></div>`;
+      <div class="stat"><div class="n muted">${s.byPlan.free}</div><div class="l">Free</div></div>
+      <div class="stat"><div class="n" style="color:var(--accent)">${s.pointerReqsMTD!=null?s.pointerReqsMTD:'—'}</div><div class="l">Pointer reqs (${esc(s.period||'mo')})</div></div>
+      <div class="stat"><div class="n">${s.activeUsers!=null?s.activeUsers:'—'}</div><div class="l">Active (30d)</div></div>
+      <div class="stat"><div class="n up" style="color:var(--up)">${s.creditsOutstanding!=null?s.creditsOutstanding:'—'}</div><div class="l">Credits outstanding</div></div>
+      <div class="stat"><div class="n" style="font-size:16px">${s.funnel30d?`${s.funnel30d.paywallView} → ${s.funnel30d.checkoutStart} → ${s.funnel30d.checkoutComplete}`:'—'}</div><div class="l">Funnel 30d (view → start → paid)</div></div>`;
   }catch(e){ document.getElementById('stats').innerHTML = `<div class="stat"><div class="n err">!</div><div class="l">${esc(e.message)}</div></div>`; }
 }
 
@@ -202,6 +206,11 @@ async function onAction(act,uid,ds){
 
 function showUser(u,d){
   const pays = (d.payments||[]).map(p=>`<div class="muted" style="font-size:12px">${esc(p.provider)} · ${esc(p.plan||'')} · ${esc(p.status||'')} · ${p.amountUsd?('$'+p.amountUsd):(p.amount?('$'+(p.amount/100)):'')} · ${fmtDate(p.paidAt||p.at||p.createdAt)}</div>`).join('')||'<div class="muted" style="font-size:12px">No payments</div>';
+  const usage = d.usage||{}, pu = usage.pointer||{}, gu = usage.gemScan||{};
+  const ff = d.featureFlags||{}, ul = d.userLimits||{};
+  const resetStr = pu.resetsAt ? fmtDate(pu.resetsAt) : '—';
+  const chk = (id,label,on)=>`<label style="display:inline-flex;align-items:center;gap:6px;font-size:13px;margin:0 12px 8px 0"><input type="checkbox" id="${id}" ${on!==false?'checked':''}/> ${label}</label>`;
+  const lim = (id,label,val,ph)=>`<label style="display:block;flex:1;min-width:120px"><div class="muted" style="font-size:11px;margin-bottom:3px">${label}</div><input id="${id}" value="${val!=null?esc(String(val)):''}" placeholder="${ph||'default'}" style="width:100%"/></label>`;
   const bg = document.createElement('div'); bg.className='modal-bg';
   bg.innerHTML = `<div class="modal">
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
@@ -209,18 +218,56 @@ function showUser(u,d){
       <button class="btn ghost sm" id="close">Close</button>
     </div>
     <div style="margin-bottom:10px">${planBadge(u.plan,u.planExpiry)} ${u.banned?'<span class="badge b-banned">banned</span>':''}</div>
-    <div style="font-weight:700;margin:12px 0 6px">Payments</div>${pays}
+
+    <div style="font-weight:700;margin:14px 0 8px">AI usage &amp; controls</div>
+    <div class="stats" style="margin-bottom:10px">
+      <div class="stat"><div class="n" style="color:var(--accent)">${pu.used!=null?pu.used:0}/${pu.quota!=null?pu.quota:'—'}</div><div class="l">Pointer this month</div></div>
+      <div class="stat"><div class="n up" style="color:var(--up)">${pu.credits!=null?pu.credits:0}</div><div class="l">Credits</div></div>
+      <div class="stat"><div class="n muted" style="font-size:15px">${resetStr}</div><div class="l">Resets</div></div>
+      <div class="stat"><div class="n">${gu.used!=null?gu.used:0}/${gu.quota!=null?gu.quota:'—'}</div><div class="l">Gem scans</div></div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:12px">
+      <label style="flex:1"><div class="muted" style="font-size:11px;margin-bottom:3px">Add / deduct credits (±)</div><input id="ac_amt" type="number" value="50" style="width:100%"/></label>
+      <button class="btn sm" id="ac_btn" style="height:38px">Add credits</button>
+    </div>
+    <div style="font-weight:700;margin:6px 0 6px;font-size:13px">Feature access</div>
+    <div style="margin-bottom:8px">
+      ${chk('ff_pointer','Pointer',ff.pointer)}${chk('ff_deep','Deep research',ff.deepResearch)}${chk('ff_scanner','Gem scanner',ff.scanner)}${chk('ff_signals','Signals',ff.signals)}${chk('ff_auto','Auto-execute',ff.autoExecute)}
+    </div>
+    <div style="font-weight:700;margin:6px 0 6px;font-size:13px">Limit overrides <span class="muted" style="font-weight:400">(blank = plan default)</span></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+      ${lim('ul_pq','Pointer quota/mo',ul.pointerQuota)}${lim('ul_gq','Gem scans/mo',ul.gemScanQuota)}${lim('ul_mb','Max auto-buy $',ul.maxBuyUsd)}${lim('ul_dc','Daily auto-trades',ul.dailyTradeCap)}
+    </div>
+    <button class="btn" id="sc_btn" style="width:100%;margin-bottom:8px">Save controls</button>
+
+    <div style="font-weight:700;margin:14px 0 6px">Payments</div>${pays}
     <div style="font-weight:700;margin:14px 0 6px">Profile (secrets redacted)</div>
     <pre>${esc(JSON.stringify(d.doc||{},null,2))}</pre>
   </div>`;
   bg.onclick = e=>{ if(e.target===bg||e.target.id==='close') bg.remove(); };
   document.body.appendChild(bg);
+  const gv=id=>{ const el=document.getElementById(id); return el?el.value.trim():''; };
+  bg.querySelector('#ac_btn').onclick = async ()=>{
+    const amount = parseInt(gv('ac_amt')); if(!amount){ toast('Enter a non-zero amount',true); return; }
+    try{ const r = await call('adminAddPointerCredits',{uid:u.uid,amount}); toast('Credits: '+r.credits); }catch(e){ toast(e.message,true); }
+  };
+  bg.querySelector('#sc_btn').onclick = async ()=>{
+    const featureFlags = {
+      pointer:document.getElementById('ff_pointer').checked, deepResearch:document.getElementById('ff_deep').checked,
+      scanner:document.getElementById('ff_scanner').checked, signals:document.getElementById('ff_signals').checked,
+      autoExecute:document.getElementById('ff_auto').checked,
+    };
+    const num = v => v===''? null : v;
+    const userLimits = { pointerQuota:num(gv('ul_pq')), gemScanQuota:num(gv('ul_gq')), maxBuyUsd:num(gv('ul_mb')), dailyTradeCap:num(gv('ul_dc')) };
+    try{ await call('adminSetUserLimits',{uid:u.uid,featureFlags,userLimits}); toast('Controls saved'); }catch(e){ toast(e.message,true); }
+  };
 }
 
 async function showConfig(){
   let cfg = {};
   try{ const r = await call('adminGetConfig'); cfg = r.config||{}; }catch(e){ toast(e.message,true); return; }
   const ra = cfg.receivingAddresses||{}, pp = cfg.planPricesUsd||{}, sp = cfg.stripePriceIds||{};
+  const pq = cfg.pointerQuota||{}, gq = cfg.gemScanQuota||{}, cpk = cfg.creditPack||{}, at = cfg.autoTrade||{};
   const bg = document.createElement('div'); bg.className='modal-bg';
   const fld = (id,label,val,ph)=>`<label style="display:block;margin-bottom:10px"><div class="muted" style="font-size:12px;margin-bottom:4px">${label}</div><input id="${id}" value="${esc(val||'')}" placeholder="${ph||''}" style="width:100%"/></label>`;
   bg.innerHTML = `<div class="modal">
@@ -242,6 +289,17 @@ async function showConfig(){
       <option value="openai"${cfg.aiProvider==='openai'?' selected':''}>ChatGPT (OpenAI)</option>
     </select>
     <div class="muted" style="font-size:12px;margin:6px 0 0">Applies to every user's in-app Pointer. The matching API key must be set in Secret Manager.</div>
+
+    <div style="font-weight:700;margin:16px 0 8px">Pointer request quotas / month</div>
+    <div style="display:flex;gap:10px">${fld('q_pf','Free',pq.free!=null?pq.free:10)}${fld('q_pp','Basic (Pro)',pq.pro!=null?pq.pro:50)}${fld('q_pe','Elite',pq.elite!=null?pq.elite:200)}</div>
+    <div style="font-weight:700;margin:8px 0 8px">Gem scan quotas / month</div>
+    <div style="display:flex;gap:10px">${fld('q_gf','Free',gq.free!=null?gq.free:5)}${fld('q_gp','Basic (Pro)',gq.pro!=null?gq.pro:50)}${fld('q_ge','Elite',gq.elite!=null?gq.elite:200)}</div>
+    <div style="font-weight:700;margin:8px 0 8px">Pointer credit pack</div>
+    <div style="display:flex;gap:10px">${fld('cp_usd','Price (USD)',cpk.usd!=null?cpk.usd:10)}${fld('cp_cr','Credits',cpk.credits!=null?cpk.credits:50)}</div>
+    <div style="font-weight:700;margin:8px 0 8px">Auto-trade controls</div>
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:10px"><input type="checkbox" id="at_on" ${at.globalEnabled!==false?'checked':''}/> Global auto-execute enabled (kill-switch)</label>
+    <div style="display:flex;gap:10px">${fld('at_mb','Default max auto-buy (USD)',at.defaultMaxBuyUsd!=null?at.defaultMaxBuyUsd:100)}${fld('at_dc','Default daily auto-trades',at.defaultDailyTradeCap!=null?at.defaultDailyTradeCap:10)}</div>
+
     <div class="muted" style="font-size:12px;margin:10px 0">Note: Stripe API keys & webhook secret are set via <span class="mono">firebase functions:secrets:set</span>, not here.</div>
     <button class="btn" id="csave" style="width:100%">Save settings</button>
   </div>`;
@@ -255,6 +313,10 @@ async function showConfig(){
         planPricesUsd:{pro:parseInt(v('p_pro'))||29,elite:parseInt(v('p_elite'))||99},
         stripePriceIds:{proMonthly:v('s_pro'),eliteMonthly:v('s_elite')},
         frontendUrl:v('furl'), aiProvider:document.getElementById('aimodel').value, adminEmails:(cfg.adminEmails||[]),
+        pointerQuota:{free:parseInt(v('q_pf'))||10,pro:parseInt(v('q_pp'))||50,elite:parseInt(v('q_pe'))||200},
+        gemScanQuota:{free:parseInt(v('q_gf'))||5,pro:parseInt(v('q_gp'))||50,elite:parseInt(v('q_ge'))||200},
+        creditPack:{usd:parseInt(v('cp_usd'))||10,credits:parseInt(v('cp_cr'))||50},
+        autoTrade:{globalEnabled:document.getElementById('at_on').checked,defaultMaxBuyUsd:parseFloat(v('at_mb'))||100,defaultDailyTradeCap:parseInt(v('at_dc'))||10},
       }});
       bg.remove(); toast('Settings saved');
     }catch(e){ toast(e.message,true); }

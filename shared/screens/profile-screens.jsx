@@ -1,5 +1,5 @@
 // profile-screens.jsx — flows for the Profile rows
-const { useState: pfS } = React;
+const { useState: pfS, useEffect: pfE } = React;
 
 function PfHead({ title, sub, action }) {
   return (
@@ -329,21 +329,30 @@ function ProfileConnect({ go, kind }) {
 // ─── Referral program ───
 function ProfileReferral({ go }) {
   const [copied, setCopied] = pfS(false);
-  // Real, stable referral code derived from the signed-in user's uid.
-  const uid = (window.FXAuth && window.FXAuth.currentUser() && window.FXAuth.currentUser().uid) || '';
-  const code = uid ? ('FX' + uid.slice(0, 6).toUpperCase()) : 'FX—';
-  const link = 'https://fxcrypt-app.web.app/signup?ref=' + code;
+  // Real server-issued code + verified funnel stats (clicks → signups → paid).
+  const [info, setInfo] = pfS(null);
+  pfE(() => {
+    let alive = true;
+    if (window.FXAPI && window.FXAPI.getReferralInfo) window.FXAPI.getReferralInfo().then((r) => { if (alive && r) setInfo(r); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  const code = (info && info.code) || '……';
+  // Share the app the user is currently in (mobile PWA vs webapp).
+  const link = window.location.origin + '/?ref=' + code;
+  const stats = (info && info.stats) || { clicks: 0, signups: 0, paid: 0, earnedCredits: 0 };
+  const reward = (info && info.rewardCredits) || 25;
   const copy = () => { try { navigator.clipboard.writeText(link); } catch (e) {} setCopied(true); setTimeout(() => setCopied(false), 1500); };
   const share = () => { try { if (navigator.share) navigator.share({ title: 'FXcrypt', text: 'Trade smarter with FXcrypt', url: link }); else copy(); } catch (e) {} };
   return (
     <div style={{ paddingBottom: 24 }}>
-      <PfHead title="Referral program" sub="Invite friends to FXcrypt" />
+      <PfHead title="Referral program" sub={`Earn ${reward} Pointer credits per paid referral`} />
       <div style={{ margin: '0 16px 16px', background: 'linear-gradient(135deg, var(--accent-deep), var(--accent))', borderRadius: 18, padding: 18 }}>
         <div style={{ fontSize: 12.5, color: 'var(--on-accent)', fontWeight: 700, opacity: 0.8 }}>Total earned</div>
-        <div style={{ fontSize: 32, fontWeight: 800, color: 'var(--on-accent)', letterSpacing: -0.6, marginTop: 2 }}>$0.00</div>
+        <div style={{ fontSize: 32, fontWeight: 800, color: 'var(--on-accent)', letterSpacing: -0.6, marginTop: 2 }}>{stats.earnedCredits} <span style={{ fontSize: 15, fontWeight: 700, opacity: 0.85 }}>credits</span></div>
         <div style={{ display: 'flex', gap: 18, marginTop: 12 }}>
-          <div><div style={{ fontSize: 19, fontWeight: 800, color: 'var(--on-accent)' }}>0</div><div style={{ fontSize: 11.5, color: 'var(--on-accent)', opacity: 0.8, fontWeight: 600 }}>Friends joined</div></div>
-          <div><div style={{ fontSize: 19, fontWeight: 800, color: 'var(--on-accent)' }}>25%</div><div style={{ fontSize: 11.5, color: 'var(--on-accent)', opacity: 0.8, fontWeight: 600 }}>Fee share</div></div>
+          {[[stats.clicks, 'Link clicks'], [stats.signups, 'Signed up'], [stats.paid, 'Went paid']].map(([v, l]) => (
+            <div key={l}><div style={{ fontSize: 19, fontWeight: 800, color: 'var(--on-accent)' }}>{v}</div><div style={{ fontSize: 11.5, color: 'var(--on-accent)', opacity: 0.8, fontWeight: 600 }}>{l}</div></div>
+          ))}
         </div>
       </div>
       {/* referral link */}
@@ -358,12 +367,18 @@ function ProfileReferral({ go }) {
           <Btn icon="send" onClick={share}>Share</Btn>
         </div>
       </div>
-      {/* invited list — honest empty state */}
-      <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.4, margin: '0 18px 8px' }}>Your referrals</div>
+      {/* how it works */}
+      <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.4, margin: '0 18px 8px' }}>How it works</div>
       <PfCard>
-        <div style={{ textAlign: 'center', padding: '26px 16px', color: 'var(--muted)' }}>
-          <Icon name="user" size={24} color="var(--faint)" style={{ marginBottom: 8 }} />
-          <div style={{ fontSize: 13.5 }}>No referrals yet — share your link to get started.</div>
+        <div style={{ padding: '4px 2px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {[['link', 'Share your link', 'Friends land in FXcrypt with your code attached.'],
+            ['user', 'They sign up', 'The signup is credited to you automatically.'],
+            ['zap', `You earn ${reward} credits`, 'Paid the moment they make their first purchase — any plan or credit pack.']].map(([ic, t, s]) => (
+            <div key={t} style={{ display: 'flex', gap: 11, alignItems: 'flex-start' }}>
+              <div style={{ width: 32, height: 32, borderRadius: 10, background: 'var(--surface2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent)', flexShrink: 0 }}><Icon name={ic} size={16} /></div>
+              <div><div style={{ fontSize: 13.5, fontWeight: 700 }}>{t}</div><div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 1 }}>{s}</div></div>
+            </div>
+          ))}
         </div>
       </PfCard>
     </div>

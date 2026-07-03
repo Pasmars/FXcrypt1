@@ -6,7 +6,13 @@ service cloud.firestore {
     // profile but can never set or change these — only Cloud Functions (admin SDK,
     // which bypasses rules) write them. This is what stops a user self-granting Pro.
     function protectedKeys() {
-      return ['plan', 'planExpiry', 'subscription', 'banned', 'adminNote'];
+      return ['plan', 'planExpiry', 'subscription', 'banned', 'adminNote',
+              // Metering & entitlement controls — a client writing any of these
+              // could self-grant credits/quota or unlock disabled features.
+              'pointerCredits', 'pointerUsage', 'gemScanUsage', 'userLimits', 'featureFlags',
+              // Referral accounting — server-written only (self-granting rewards
+              // or faking paid referrals must be impossible).
+              'referralStats', 'referralRewarded', 'referredByUid'];
     }
 
     match /users/{userId} {
@@ -15,7 +21,9 @@ service cloud.firestore {
       allow create: if request.auth != null && request.auth.uid == userId
         && !request.resource.data.keys().hasAny(protectedKeys());
       allow update: if request.auth != null && request.auth.uid == userId
-        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(protectedKeys());
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(protectedKeys())
+        // Attribution is set once at signup (allowed on create) and permanent.
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['referredBy']);
 
       // Payment invoices & receipts — written only by Cloud Functions.
       match /payments/{docId} {
@@ -46,6 +54,39 @@ service cloud.firestore {
       }
       match /pointerChats/{docId} {
         allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+      // FCM push tokens for this user's devices (written by fx-push.js).
+      match /devices/{docId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+      // Copy-trading follows. copyEnabled is just intent — the server enforces
+      // plan/flags/caps before any real buy happens.
+      match /followedWallets/{docId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+      // Price alerts are CREATED/EDITED only via the savePriceAlert callable so
+      // plan caps are server-enforced; the client may list and delete.
+      match /priceAlerts/{docId} {
+        allow read, delete: if request.auth != null && request.auth.uid == userId;
+        allow create, update: if false;
+      }
+      // Pointer watch-tasks are created by the agent (server); the client may
+      // list, delete, and pause/resume (status only — conditions stay immutable).
+      match /pointerTasks/{docId} {
+        allow read, delete: if request.auth != null && request.auth.uid == userId;
+        allow create: if false;
+        allow update: if request.auth != null && request.auth.uid == userId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+          && request.resource.data.status in ['armed', 'paused'];
+      }
+      // Positions are BOOKKEPT server-side (trade trigger + exit monitor). The
+      // client may only read them and arm/edit its own exit rules — never touch
+      // quantities, entry prices, or realized PnL.
+      match /positions/{docId} {
+        allow read: if request.auth != null && request.auth.uid == userId;
+        allow create, delete: if false;
+        allow update: if request.auth != null && request.auth.uid == userId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['exit', 'exitArmed']);
       }
     }
 

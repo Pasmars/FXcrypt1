@@ -2,7 +2,7 @@
 const { useState: uS, useEffect: uE, useRef: uR } = React;
 
 // ─── Shared: AI composer bar ───
-function AIBar({ onFocus, value, onChange, onSend, compact }) {
+function AIBar({ onFocus, value, onChange, onSend, compact, deep, onToggleDeep }) {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surface)',
@@ -13,6 +13,13 @@ function AIBar({ onFocus, value, onChange, onSend, compact }) {
         onKeyDown={e => e.key === 'Enter' && onSend && onSend()}
         placeholder={compact ? 'Message Pointer…' : 'Ask Pointer anything…'}
         style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', color: 'var(--text)', fontSize: 15, fontFamily: 'inherit' }} />
+      {onToggleDeep && (
+        <button onClick={onToggleDeep} aria-pressed={!!deep} aria-label="Deep research"
+          title={deep ? 'Deep research: on — uses the most capable model' : 'Deep research: off'}
+          style={{ width: 38, height: 38, borderRadius: 11, border: 'none', cursor: 'pointer', background: deep ? 'var(--accent)' : 'var(--chip)', color: deep ? 'var(--on-accent)' : 'var(--muted)', boxShadow: deep ? '0 0 0 2px var(--glow)' : 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'all .15s' }}>
+          <Icon name="compass" size={18} />
+        </button>
+      )}
       <button onClick={onSend} style={{ width: 38, height: 38, borderRadius: 11, border: 'none', cursor: 'pointer', background: value ? 'var(--accent)' : 'var(--chip)', color: value ? 'var(--on-accent)' : 'var(--muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'all .15s' }}>
         <Icon name={compact ? 'send' : 'arrowUR'} size={18} />
       </button>
@@ -66,6 +73,7 @@ function PointerHome({ go, layout, openChat, user }) {
           <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
             <Btn size="sm" icon="zap" onClick={() => go('trade')} style={{ flex: 1 }}>Trade</Btn>
             <Btn size="sm" kind="soft" icon="scan" onClick={() => go('scanner')} style={{ flex: 1 }}>Scan gems</Btn>
+            <Btn size="sm" kind="soft" icon="briefcase" onClick={() => go('portfolio')} style={{ flex: 1 }}>Portfolio</Btn>
           </div>
         </Card>
         <div>
@@ -174,6 +182,9 @@ function PointerChat({ go, seed, style, onProposalTrade }) {
   const [msgs, setMsgs] = uS([POINTER_GREETING]);
   const [input, setInput] = uS(seed || '');
   const [typing, setTyping] = uS(false);
+  const [deep, setDeep] = uS(false);           // deep-research: use the admin model's top tier
+  const deepRef = uR(false);                    // latest deep flag for send() closures
+  uE(() => { deepRef.current = deep; }, [deep]);
   const [chatId, setChatId] = uS(null);        // null = unsaved new chat
   const [sheetOpen, setSheetOpen] = uS(false);
   const [sessions, setSessions] = uS([]);
@@ -181,13 +192,57 @@ function PointerChat({ go, seed, style, onProposalTrade }) {
   const history = uR([]); // [{ role, content }] sent to the backend
   const played = uR(false);
   const saveT = uR(null);
+  const streamT = uR(null);   // typewriter interval handle
+  const streaming = uR(false); // true while a reply is being typed out
+  const [usage, setUsage] = uS(null); // { remaining, quota, credits, resetsAt, pack }
+
+  // Load the Pointer usage snapshot (quota pill / out-of-requests paywall).
+  uE(() => {
+    let alive = true;
+    if (window.FXAPI && window.FXAPI.getPointerUsage) window.FXAPI.getPointerUsage().then((u) => { if (alive && u) setUsage(u); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
 
   uE(() => { if (scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight; }, [msgs, typing]);
+  // Stop any in-flight typewriter when the chat unmounts.
+  uE(() => () => clearInterval(streamT.current), []);
+
+  // Reveal an AI reply one keystroke at a time (typewriter effect). Resolves
+  // once the full text is on screen so the caller can append any proposal after.
+  function streamReply(full, token) {
+    return new Promise((resolve) => {
+      const text = String(full == null ? '' : full);
+      streaming.current = true;
+      setTyping(false); // swap the "thinking" dots for live text
+      setMsgs(m => [...m, { role: 'ai', text: '', token, streaming: true }]);
+      if (!text) { streaming.current = false; resolve(); return; }
+      let i = 0;
+      // Scale the stride so long replies still finish in a few seconds while
+      // short ones keep a natural per-character cadence.
+      const step = Math.max(1, Math.round(text.length / 220));
+      clearInterval(streamT.current);
+      streamT.current = setInterval(() => {
+        i += step;
+        const done = i >= text.length;
+        setMsgs(m => {
+          const n = m.slice();
+          for (let j = n.length - 1; j >= 0; j--) {
+            if (n[j].role === 'ai' && n[j].streaming) {
+              n[j] = { ...n[j], text: done ? text : text.slice(0, i), streaming: !done };
+              break;
+            }
+          }
+          return n;
+        });
+        if (done) { clearInterval(streamT.current); streaming.current = false; resolve(); }
+      }, 18);
+    });
+  }
 
   // Auto-save the session (debounced) once it has real content — creating the
   // doc on the first user message and titling it from that message.
   uE(() => {
-    if (typing || !msgs.some((m) => m.role === 'user')) return;
+    if (typing || streaming.current || !msgs.some((m) => m.role === 'user')) return;
     clearTimeout(saveT.current);
     saveT.current = setTimeout(async () => {
       const title = (msgs.find((m) => m.role === 'user') || {}).text || 'New chat';
@@ -200,20 +255,30 @@ function PointerChat({ go, seed, style, onProposalTrade }) {
   // Real Pointer AI call → europe-west1 chatPointer (DeepSeek / ChatGPT switchable).
   async function send(t) {
     const text = String((typeof t === 'string' ? t : '') || input).trim();
-    if (!text || typing) return;
+    if (!text || typing || streaming.current) return;
     setInput('');
     setMsgs(m => [...m, { role: 'user', text }]);
     setTyping(true);
     const hist = history.current.slice();
     history.current.push({ role: 'user', content: text });
+    const isDeep = deepRef.current;
     try {
-      const res = await window.FXAPI.chatPointer(text, hist);
+      const res = await window.FXAPI.chatPointer(text, hist, { deep: isDeep });
       const reply = res.text || res.reply || '…';
       history.current.push({ role: 'assistant', content: reply });
-      setMsgs(m => [...m, { role: 'ai', text: reply, token: res.proposal ? (res.proposal.tokenSymbol || res.proposal.tokenAddress) : undefined }]);
+      if (res.usage) setUsage((u) => ({ ...(u || {}), ...res.usage }));
+      await streamReply(reply, res.proposal ? (res.proposal.tokenSymbol || res.proposal.tokenAddress) : undefined);
       if (res.proposal) setMsgs(m => [...m, { role: 'proposal', proposal: res.proposal }]);
     } catch (e) {
-      setMsgs(m => [...m, { role: 'ai', text: '⚠️ ' + ((e && e.message) || 'Pointer is unavailable. Make sure you are signed in and try again.') }]);
+      // Out of Pointer requests → show a buy-credits paywall card instead of an error.
+      const details = (e && e.details) || {};
+      const isQuota = details.code === 'quota_exhausted' || String((e && e.code) || '').includes('resource-exhausted');
+      if (isQuota) {
+        if (details.quota != null) setUsage((u) => ({ ...(u || {}), remaining: 0, quota: details.quota, credits: details.credits ?? (u && u.credits) ?? 0, resetsAt: details.resetsAt, pack: details.pack || (u && u.pack) }));
+        setMsgs(m => [...m, { role: 'quota', info: details, restore: text }]);
+      } else {
+        setMsgs(m => [...m, { role: 'ai', text: '⚠️ ' + ((e && e.message) || 'Pointer is unavailable. Make sure you are signed in and try again.') }]);
+      }
     } finally {
       setTyping(false);
     }
@@ -224,12 +289,19 @@ function PointerChat({ go, seed, style, onProposalTrade }) {
   // ── Session controls ──
   const newChat = () => {
     clearTimeout(saveT.current);
+    clearInterval(streamT.current); streaming.current = false;
     setMsgs([POINTER_GREETING]); history.current = []; setChatId(null); setInput(''); played.current = true; setSheetOpen(false);
   };
   const openSessions = async () => { setSheetOpen(true); try { setSessions(await window.FXChats.list()); } catch (e) {} };
+  // Deep link from a watch-task push (?goto=chat&session=…) → open that session.
+  uE(() => {
+    const sid = window.__fxOpenSession;
+    if (sid) { window.__fxOpenSession = null; switchTo(sid); }
+  }, []);
   const switchTo = async (id) => {
     const s = await window.FXChats.load(id);
     setSheetOpen(false);
+    clearInterval(streamT.current); streaming.current = false;
     if (!s) return;
     const loaded = (s.messages && s.messages.length) ? s.messages : [POINTER_GREETING];
     setMsgs(loaded);
@@ -252,18 +324,32 @@ function PointerChat({ go, seed, style, onProposalTrade }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '2px 16px 8px' }}>
         <Icon name="message" size={15} color="var(--muted)" />
         <div style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 700, color: 'var(--muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{curTitle}</div>
+        {usage && (() => {
+          const rem = usage.remaining != null ? usage.remaining : 0;
+          const low = rem <= 3;
+          return (
+            <button aria-label="Pointer requests remaining" title={`${rem} Pointer requests left${usage.credits ? ' · ' + usage.credits + ' credits' : ''} · tap to add credits`}
+              onClick={() => { if (window.FXAPI && window.FXAPI.buyPointerCredits) window.FXAPI.buyPointerCredits().catch(() => {}); }}
+              style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11.5, fontWeight: 800, padding: '6px 9px', borderRadius: 9, border: 'none', cursor: 'pointer', flexShrink: 0, fontFamily: 'inherit', background: low ? 'var(--down-bg)' : 'var(--surface2)', color: low ? 'var(--down)' : 'var(--muted)' }}>
+              <Icon name="zap" size={12} /> {rem}
+            </button>
+          );
+        })()}
         <button aria-label="Chat history" onClick={openSessions} style={sbBtn}><Icon name="history" size={18} /></button>
         <button aria-label="New chat" onClick={newChat} style={{ ...sbBtn, background: 'var(--accent)', color: 'var(--on-accent)' }}><Icon name="plus" size={18} /></button>
       </div>
       <div ref={scroller} style={{ flex: 1, overflowY: 'auto', padding: '4px 16px 16px', display: 'flex', flexDirection: 'column', gap: 14 }}>
         {msgs.map((m, i) => <Msg key={i} m={m} style={style} go={go} onTrade={onProposalTrade} />)}
         {typing && <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--muted)', fontSize: 13 }}>
-          <div style={{ width: 26, height: 26, borderRadius: 9, background: 'var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="spark" size={15} color="var(--on-accent)" /></div>
-          <TypingDots />
+          <div style={{ width: 26, height: 26, borderRadius: 9, background: 'var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={deep ? 'compass' : 'spark'} size={15} color="var(--on-accent)" /></div>
+          {deep ? <span style={{ display: 'flex', alignItems: 'center', gap: 7, fontWeight: 600, color: 'var(--accent)' }}>Researching deeply <TypingDots /></span> : <TypingDots />}
         </div>}
       </div>
+      {deep && <div style={{ padding: '0 16px 6px', display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'var(--accent)', fontWeight: 600 }}>
+        <Icon name="compass" size={13} /> Deep research on — replies use the most capable model and may take longer.
+      </div>}
       <div style={{ padding: '8px 16px 12px', borderTop: '1px solid var(--line)', background: 'var(--bg)' }}>
-        <AIBar compact value={input} onChange={setInput} onSend={() => send()} />
+        <AIBar compact value={input} onChange={setInput} onSend={() => send()} deep={deep} onToggleDeep={() => setDeep(d => !d)} />
       </div>
       {/* saved sessions sheet */}
       <Sheet open={sheetOpen} onClose={() => setSheetOpen(false)} title="Your chats">
@@ -291,6 +377,38 @@ function TypingDots() {
   return <div style={{ display: 'flex', gap: 4 }}>
     {[0, 1, 2].map(i => <div key={i} style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--muted)', animation: `fxdot 1s ${i * 0.15}s infinite ease-in-out` }} />)}
   </div>;
+}
+
+// Copy-to-clipboard action for a chat message. Falls back to execCommand for
+// non-secure contexts / older webviews, and flashes a "Copied" confirmation.
+function CopyBtn({ text, onAccent }) {
+  const [ok, setOk] = uS(false);
+  const doneT = uR(null);
+  uE(() => () => clearTimeout(doneT.current), []);
+  const copy = async (e) => {
+    e && e.stopPropagation();
+    const val = String(text == null ? '' : text);
+    if (!val) return;
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(val);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = val; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.focus(); ta.select();
+        document.execCommand('copy'); document.body.removeChild(ta);
+      }
+      setOk(true);
+      clearTimeout(doneT.current); doneT.current = setTimeout(() => setOk(false), 1400);
+    } catch (_) { /* clipboard blocked — silently ignore */ }
+  };
+  const col = onAccent ? 'var(--on-accent)' : 'var(--muted)';
+  return (
+    <button onClick={copy} aria-label={ok ? 'Copied' : 'Copy message'} title="Copy"
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'transparent', border: 'none', cursor: 'pointer', color: col, opacity: ok ? 1 : (onAccent ? 0.85 : 0.7), fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600, padding: '2px 3px', transition: 'opacity .15s' }}>
+      <Icon name={ok ? 'check' : 'copy'} size={13} />{ok ? 'Copied' : 'Copy'}
+    </button>
+  );
 }
 
 // Inline markdown: **bold**, *italic*, `code`.
@@ -336,19 +454,48 @@ function mdRender(text) {
   return out;
 }
 
+// Out-of-requests paywall card shown when the Pointer quota is exhausted.
+function QuotaCard({ info }) {
+  const [busy, setBusy] = uS(false);
+  const pack = info.pack || { usd: 10, credits: 50 };
+  const reset = info.resetsAt ? new Date(info.resetsAt) : null;
+  const resetStr = reset ? reset.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : null;
+  const buy = async () => {
+    if (busy) return; setBusy(true);
+    try { await window.FXAPI.buyPointerCredits(); } catch (e) { setBusy(false); }
+  };
+  return (
+    <div style={{ display: 'flex', gap: 9, alignSelf: 'flex-start', maxWidth: '92%' }}>
+      <div style={{ width: 28, height: 28, borderRadius: 9, background: 'var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="zap" size={15} color="var(--on-accent)" /></div>
+      <div style={{ background: 'var(--surface)', borderRadius: '16px 16px 16px 4px', boxShadow: 'inset 0 0 0 1.5px var(--accent)', padding: 14 }}>
+        <div style={{ fontSize: 14.5, fontWeight: 800, marginBottom: 4 }}>You're out of Pointer requests</div>
+        <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.5, marginBottom: 12 }}>
+          You've used all {info.quota != null ? info.quota : ''} requests in your plan for this period{resetStr ? <> — they reset on <b style={{ color: 'var(--text)' }}>{resetStr}</b></> : ''}. Add credits to keep going now.
+        </div>
+        <Btn full icon={busy ? undefined : 'zap'} onClick={buy} disabled={busy}>{busy ? 'Opening checkout…' : `Buy ${pack.credits} credits · $${pack.usd}`}</Btn>
+      </div>
+    </div>
+  );
+}
+
 function Msg({ m, style, go, onTrade }) {
   if (!m) return null;
   if (m.role === 'proposal') return <TradeProposal proposal={m.proposal} go={go} onTrade={onTrade} style={style} />;
+  if (m.role === 'quota') return <QuotaCard info={m.info || {}} />;
   const ai = m.role === 'ai';
   if (m.role === 'user') {
-    return <div style={{ alignSelf: 'flex-end', maxWidth: '82%', background: 'var(--accent)', color: 'var(--on-accent)', padding: '10px 14px', borderRadius: '16px 16px 4px 16px', fontSize: 14.5, fontWeight: 500, lineHeight: 1.4, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{m.text}</div>;
+    return <div style={{ alignSelf: 'flex-end', maxWidth: '82%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+      <div style={{ background: 'var(--accent)', color: 'var(--on-accent)', padding: '10px 14px', borderRadius: '16px 16px 4px 16px', fontSize: 14.5, fontWeight: 500, lineHeight: 1.4, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{m.text}</div>
+      <CopyBtn text={m.text} />
+    </div>;
   }
   // AI message — style variants
   const body = (
     <div style={{ fontSize: 14.5, color: 'var(--text2)', lineHeight: 1.5, minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
       {m.tool && <Pill tone="accent" style={{ marginBottom: 7 }}><Icon name="sliders" size={12} /> {m.tool}</Pill>}
-      <div>{mdRender(m.text)}</div>
-      {m.token && <TokenInline sym={m.token} go={go} />}
+      <div>{mdRender(m.text)}{m.streaming && <span style={{ display: 'inline-block', width: 2, height: '1em', marginLeft: 1, verticalAlign: '-0.15em', background: 'var(--accent)', animation: 'fxblink 1s step-end infinite' }} />}</div>
+      {!m.streaming && m.token && <TokenInline sym={m.token} go={go} />}
+      {!m.streaming && m.text && <div style={{ marginTop: 6, marginLeft: -3 }}><CopyBtn text={m.text} /></div>}
     </div>
   );
   if (style === 'compact') {

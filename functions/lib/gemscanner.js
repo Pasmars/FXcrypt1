@@ -62,7 +62,14 @@ async function searchNarrativePairs(narrative, chainId) {
 // feeds miss) so "All" genuinely scans across the whole chain. Returns pairs for
 // every chain in one pass (DexScreener search is chain-agnostic); callers filter
 // by chainId. Kept short so it adds ~2s, not minutes.
-const GENERIC_DISCOVERY_TERMS = ['token', 'protocol', 'finance', 'swap', 'chain', 'dao', 'meme', 'ai', 'rwa', 'gaming']
+// Spread across EVERY narrative (and a few theme-neutral words) so the "All"
+// sweep genuinely spans the whole market instead of skewing to meme/DeFi. Runs
+// once per scan (DexScreener search is chain-agnostic), so the extra terms add a
+// fixed ~1-2s regardless of how many chains are selected.
+const GENERIC_DISCOVERY_TERMS = [
+  'token', 'protocol', 'finance', 'swap', 'chain', 'dao', 'meme', 'ai', 'rwa', 'gaming',
+  'depin', 'layer', 'staking', 'yield', 'payment', 'social', 'nft', 'bridge', 'oracle', 'infra',
+]
 async function searchGenericPairs() {
   const out = []
   for (const term of GENERIC_DISCOVERY_TERMS) {
@@ -529,14 +536,37 @@ async function discoverGems(chains, filters = {}) {
     }
   }
 
-  // Sort by requested trend
-  if (sort === 'trending')      allGems.sort((a, b) => b.volume24h - a.volume24h)
-  else if (sort === 'new')      allGems.sort((a, b) => (a.ageHours ?? 1e9) - (b.ageHours ?? 1e9))
-  else if (sort === 'gainers')  allGems.sort((a, b) => b.priceChange24h - a.priceChange24h)
-  else                          allGems.sort((a, b) => b.gemScore - a.gemScore)
+  // Rank by the requested trend.
+  const cmp =
+    sort === 'trending' ? (a, b) => b.volume24h - a.volume24h
+    : sort === 'new'    ? (a, b) => (a.ageHours ?? 1e9) - (b.ageHours ?? 1e9)
+    : sort === 'gainers' ? (a, b) => b.priceChange24h - a.priceChange24h
+    : (a, b) => b.gemScore - a.gemScore
+
+  // Fair per-chain representation: bucket by chain, sort each bucket, then
+  // round-robin across the requested chains up to maxResults. A single global
+  // sort let high-volume SOL/BSC memecoins fill the entire top slice and pushed
+  // ETH/Base out even when their tokens passed every filter — round-robin
+  // guarantees each requested chain surfaces (chains with fewer tokens simply
+  // contribute what they have; the remainder is filled from chains that have more).
+  const byChain = new Map()
+  for (const c of chains) if (CHAIN_MAP[c]) byChain.set(c, [])
+  for (const g of allGems) { if (!byChain.has(g.chain)) byChain.set(g.chain, []); byChain.get(g.chain).push(g) }
+  for (const bucket of byChain.values()) bucket.sort(cmp)
+
+  const ordered = []
+  const buckets = [...byChain.values()]
+  for (let round = 0; ordered.length < allGems.length; round++) {
+    let progressed = false
+    for (const bucket of buckets) {
+      if (round < bucket.length) { ordered.push(bucket[round]); progressed = true }
+    }
+    if (!progressed) break
+  }
+
   // Firebase callables can't JSON-encode NaN/Infinity (any one breaks the whole
   // response with a 500). Scrub every numeric before returning.
-  return allGems.slice(0, maxResults).map(jsonSafe)
+  return ordered.slice(0, maxResults).map(jsonSafe)
 }
 
 // Recursively replace NaN/Infinity with null so the result is JSON-serializable.

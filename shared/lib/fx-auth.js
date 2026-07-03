@@ -65,8 +65,13 @@ window.FXAuth = {
       email: String(email).trim(),
       createdAt: new Date().toISOString(),
     };
-    const refCode = String(ref || '').trim();
-    if (refCode) profile.referredBy = refCode.toUpperCase(); // attribution; not a protected key
+    // Attribution: explicit form field wins, else the captured ?ref= link code.
+    // Written once at profile creation; rules make it immutable afterwards.
+    let refCode = String(ref || '').trim();
+    if (!refCode) { try { refCode = localStorage.getItem('fx_ref') || ''; } catch (e) {} }
+    refCode = refCode.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 22);
+    if (refCode.length >= 6) profile.referredBy = refCode;
+    try { localStorage.removeItem('fx_ref'); } catch (e) {}
     await setDoc(doc(db, 'users', cred.user.uid), profile);
     return cred;
   },
@@ -89,6 +94,13 @@ window.FXAuth = {
     } catch (e) {
       return null;
     }
+  },
+  // One-time webapp first-run flag — per account (Firestore), not per device,
+  // so onboarding never re-appears on a new browser.
+  markOnboarded: async () => {
+    const u = auth.currentUser;
+    if (!u) return;
+    try { await setDoc(doc(db, 'users', u.uid), { webOnboarded: true }, { merge: true }); } catch (e) { /* non-critical */ }
   },
   mapError,
 };

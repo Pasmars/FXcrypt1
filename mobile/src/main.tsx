@@ -13,6 +13,7 @@ import '@shared/lib/fx-api.js';
 import '@shared/lib/fx-live.js';
 import '@shared/lib/fx-wallet.js';
 import '@shared/lib/fx-watch.js';
+import '@shared/lib/fx-push.js';
 
 import '@shared/screens/theme.jsx';
 import '@shared/screens/ui.jsx';
@@ -20,6 +21,8 @@ import '@shared/screens/pointer.jsx';
 import '@shared/screens/markets.jsx';
 import '@shared/screens/trade.jsx';
 import '@shared/screens/signals.jsx';
+import '@shared/screens/portfolio.jsx';
+import '@shared/screens/copytrade.jsx';
 import './screens/wallet.jsx';
 import '@shared/screens/profile-screens.jsx';
 import '@shared/screens/automation.jsx';

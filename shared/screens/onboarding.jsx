@@ -1,9 +1,11 @@
 // onboarding.jsx — splash, value carousel, auth, connect wallet
 const { useState: oS, useEffect: oE } = React;
 
-function Onboarding({ onDone, dark }) {
-  const [step, setStep] = oS(0); // 0 splash, 1 carousel, 2 auth, 3 connect
-  const next = () => setStep(s => s + 1);
+// postAuth: the webapp runs its own /login & /signup routes, so its first-run
+// onboarding starts at the carousel and skips the Auth step entirely.
+function Onboarding({ onDone, dark, postAuth }) {
+  const [step, setStep] = oS(postAuth ? 1 : 0); // 0 splash, 1 carousel, 2 auth, 3 connect
+  const next = () => setStep(s => (postAuth && s === 1 ? 3 : s + 1));
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg)' }}>

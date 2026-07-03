@@ -31,11 +31,27 @@ function clusterSummary(addresses, edges) {
 // Both DeepSeek and OpenAI (ChatGPT) speak the OpenAI Chat Completions API, so
 // switching is just base URL + model + key. Per-provider env overrides let you
 // point either slot at OpenRouter/Together/Groq/Ollama without code changes.
+// `model` is the everyday model; `deepModel` is the provider's top-tier model
+// used when the user turns on "deep research". Both are env-overridable so you
+// can point a slot at OpenRouter/Together/Groq/Ollama without code changes, and
+// the admin can also pin the deep model via config/billing.aiDeepModel.
+// Defaults verified 2026-07: `deepseek-chat`/`deepseek-reasoner` are deprecated
+// 2026-07-24 (they alias deepseek-v4-flash), so v4 ids are used directly.
+// `gpt-5-pro` lives only on OpenAI's Responses API — NOT chat completions, which
+// this agent speaks — so the OpenAI deep slot uses gpt-5.5 (flagship, supports
+// /v1/chat/completions).
 const PROVIDERS = {
-  deepseek: { baseURL: process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com',    model: process.env.DEEPSEEK_MODEL || 'deepseek-chat' },
-  openai:   { baseURL: process.env.OPENAI_BASE_URL   || 'https://api.openai.com/v1',   model: process.env.OPENAI_MODEL   || 'gpt-4o-mini' },
+  deepseek: { baseURL: process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com',    model: process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash',  deepModel: process.env.DEEPSEEK_DEEP_MODEL || 'deepseek-v4-pro' },
+  openai:   { baseURL: process.env.OPENAI_BASE_URL   || 'https://api.openai.com/v1',   model: process.env.OPENAI_MODEL   || 'gpt-4o-mini', deepModel: process.env.OPENAI_DEEP_MODEL   || 'gpt-5.5' },
 }
 const MAX_LOOPS = 6
+const DEEP_MAX_LOOPS = 10
+
+// Prepended to the system prompt when deep research is requested.
+const DEEP_DIRECTIVE = `
+
+[DEEP RESEARCH MODE — the user has explicitly requested a deeper, more rigorous analysis]
+Do not answer superficially. Before concluding: gather the relevant live data with your tools (prices, safety/contract checks, holders/bubble-map concentration, market movers, and web news/policy where useful) and cross-check it. Reason step by step, weigh multiple scenarios and the key risks, and then deliver a thorough, well-structured answer that ends with a clear, concrete conclusion or recommendation. Prefer accuracy and completeness over brevity.`
 
 const SYSTEM = `You are the FXcrypt Operations Agent — the brain that monitors and helps operate the FXcrypt crypto trading app for its owner, who talks to you in Discord.
 
@@ -45,7 +61,7 @@ You have read/analysis access to most of the app: live balances, bot config, rec
 
 OFF-LIMITS: you have NO access to the user's Wallet page (portfolio management, send/receive, private keys) or the PnL Calculator. If asked to do either, politely decline and say it's not available to you.
 
-TRADING IS GATED. You CANNOT execute trades. To act on a trade, call propose_trade — this sends an Approve/Reject card to the owner in Discord and they decide. Never claim a trade was executed; only that it was proposed. Always run a safety check (check_token) and state the risk before proposing a buy.
+TRADING IS GATED. You CANNOT execute trades. To act on a trade, call propose_trade — this sends an Approve/Reject card to the owner in Discord and they decide. Never claim a trade was executed; only that it was proposed. Always run a safety check (check_token) and state the risk before proposing a buy. Before proposing, you MUST have the token's exact contract address from a tool (lookup_token / check_token / a gem scan) — NEVER type, guess, or recall a contract address from memory, and do not set slippage yourself.
 
 Finding tokens: when the owner names a token (e.g. "track PEPE", "info on WIF"), search for it yourself with lookup_token (cross-chain by name/symbol) or just pass the name as track_token's \`query\` — DO NOT ask the owner for a contract address. Only ask for the contract if the search returns nothing or is genuinely ambiguous between similarly-named tokens.
 
@@ -70,18 +86,26 @@ const TOOLS = [
   fnTool('get_recent_signals', 'Most recent trade signals the AI signal agent generated.', { properties: { limit: { type: 'integer', description: 'How many (max 20)' } } }),
   fnTool('get_cex_balances', "USDT spot (and futures) balances on the owner's connected CEX exchange API keys.", { properties: {} }),
   fnTool('get_token_info', 'Full Token-Tracker view for one token by contract address: price, market cap, 24h volume, liquidity, 24h change, holders.', { properties: { chain: { type: 'string', enum: ['bsc', 'eth', 'sol'] }, address: { type: 'string' } }, required: ['chain', 'address'] }),
-  fnTool('get_tracked_tokens', "The owner's Token Tracker watchlist with live price, 24h change, market cap, volume, liquidity.", { properties: {} }),
+  fnTool('get_tracked_tokens', "The owner's FULL watchlist — both their Markets-tab starred coins/tokens AND their Token Tracker list, merged and deduped — each with live price, 24h change, market cap, volume, liquidity. Use this whenever they mention 'my watchlist', 'my tracked tokens', 'coins I'm watching', etc.", { properties: {} }),
   fnTool('track_token', "Add a token to the owner's Token Tracker watchlist. Accepts a name/symbol (resolved automatically to the best-liquidity match) OR a contract address. Do NOT ask the user for a contract address — pass the name as `query`.", { properties: { query: { type: 'string', description: 'Token name, symbol, or contract address' }, chain: { type: 'string', enum: ['bsc', 'eth', 'sol', 'base'], description: 'Optional — narrows the search if known' }, address: { type: 'string', description: 'Optional — only if you already have the exact contract' }, name: { type: 'string' }, symbol: { type: 'string' } } }),
   fnTool('untrack_token', "Remove a token from the owner's Token Tracker watchlist.", { properties: { chain: { type: 'string', enum: ['bsc', 'eth', 'sol'] }, address: { type: 'string' } }, required: ['chain', 'address'] }),
   fnTool('get_bubble_map', 'Bubble-map holder analysis for a token: top holders with %, top-10 concentration, contract holders, and connected-wallet clusters (whale/insider/bundling risk). EVM via Moralis, SOL via Helius.', { properties: { chain: { type: 'string', enum: ['bsc', 'eth', 'base', 'sol'] }, address: { type: 'string' } }, required: ['chain', 'address'] }),
-  fnTool('propose_trade', 'Propose a trade for human approval. Does NOT execute — sends an Approve/Reject card to Discord. For buys, amount is the native-token amount (e.g. 0.01 BNB). For sells, percent is 1-100 (% of holdings).', { properties: { chain: { type: 'string', enum: ['bsc', 'eth', 'sol', 'base'] }, action: { type: 'string', enum: ['buy', 'sell'] }, tokenAddress: { type: 'string' }, tokenSymbol: { type: 'string' }, amount: { type: 'string', description: 'Native amount for buys' }, percent: { type: 'integer', description: '1-100 for sells' }, rationale: { type: 'string', description: 'Why, including the safety read' } }, required: ['chain', 'action', 'tokenAddress', 'rationale'] }),
+  fnTool('propose_trade', 'Propose a trade for the owner to approve. Does NOT execute — it shows an Approve/Reject card to the owner and the trade runs only if they approve, from their own wallet. You MUST pass the exact on-chain contract address obtained from lookup_token / check_token / a gem scan — NEVER invent, guess, or recall an address from memory. Pass the real tokenSymbol too. Do NOT set slippage — the app uses the owner\'s configured slippage automatically. For buys, amount is the native-token amount (e.g. 0.01 BNB). For sells, percent is 1-100 (% of holdings).', { properties: { chain: { type: 'string', enum: ['bsc', 'eth', 'sol', 'base'] }, action: { type: 'string', enum: ['buy', 'sell'] }, tokenAddress: { type: 'string', description: 'Exact contract address from a tool lookup — never guessed' }, tokenSymbol: { type: 'string' }, amount: { type: 'string', description: 'Native amount for buys' }, percent: { type: 'integer', description: '1-100 for sells' }, rationale: { type: 'string', description: 'Why, including the safety read' } }, required: ['chain', 'action', 'tokenAddress', 'rationale'] }),
 ]
 
 // ── In-app Pointer surface ──────────────────────────────────────────────────
 // The Pointer is the same agent brain exposed inside the FXcrypt app, with FULL
 // access — including the owner's wallet balances and config (never private keys,
 // which are never exposed by any tool). Only the framing differs from Discord.
-const TOOLS_POINTER = TOOLS
+// Pointer-only tools: standing watch-tasks ("ping me if BTC breaks $150k").
+// Conditions are STRUCTURED fields — the monitor never re-feeds free text as
+// instructions, which is the prompt-injection boundary for automated runs.
+const TASK_TOOLS = [
+  fnTool('create_watch_task', "Create a standing watch-task: the app monitors the condition 24/7 and when it fires, you (Pointer) automatically analyze the situation and notify the owner. Use whenever the owner asks to be pinged/alerted/notified when a price condition happens. cond 'above'/'below' = absolute USD price; 'move' = ±% change from now.", { properties: { query: { type: 'string', description: 'Token name or symbol (e.g. "BTC", "PEPE") — resolved automatically' }, cond: { type: 'string', enum: ['above', 'below', 'move'] }, value: { type: 'number', description: 'USD price for above/below; percent for move' }, note: { type: 'string', description: "Short summary of what the owner wants analyzed when it fires (their words)" } }, required: ['query', 'cond', 'value'] }),
+  fnTool('list_watch_tasks', "The owner's standing watch-tasks with status (armed/paused/fired).", { properties: {} }),
+  fnTool('cancel_watch_task', 'Delete a watch-task by id (from list_watch_tasks).', { properties: { taskId: { type: 'string' } }, required: ['taskId'] }),
+]
+const TOOLS_POINTER = [...TOOLS, ...TASK_TOOLS]
 
 const SYSTEM_POINTER = `You are Pointer — the in-app AI assistant inside the FXcrypt mobile & web app. You help the owner explore the market, manage their wallet, and run the app's tools.
 
@@ -91,9 +115,13 @@ You CAN: read the owner's wallet balances (BNB/ETH/SOL/MATIC/TON) and bot/wallet
 
 PRIVATE KEYS: you never see or expose private keys, seed phrases or the means to move funds without approval. You can report balances and addresses, but never reveal secrets.
 
-TRADING IS GATED: you CANNOT execute trades directly. To act on a trade idea, call propose_trade — this surfaces an Approve/Reject card in the app and the owner decides; execution happens only if they approve, from their own wallet. Never claim a trade executed; only that you proposed it. Always run check_token and state the risk before proposing a buy.
+TRADING IS GATED: you CANNOT execute trades directly. To act on a trade idea, call propose_trade — this surfaces an Approve/Reject card RIGHT HERE IN THE APP and the owner decides; execution happens only if they approve, from their own wallet. The card appears in this chat — NEVER tell the owner to open Discord, a Telegram bot, or any other place to approve, sign, or execute; they do everything here in the app. Never claim a trade executed; only that you proposed it.
+
+TRADE ACCURACY (critical): before you call propose_trade you MUST have the token's exact contract address from a tool — call lookup_token (or check_token / a gem scan) and use the address it returns. NEVER type, guess, or recall a contract address from memory; a wrong address means the owner could buy the wrong or a scam token. Always run check_token and state the risk before proposing a buy. Do not set slippage yourself — the app applies the owner's configured slippage.
 
 Finding tokens: when the owner names a token ("info on WIF", "track PEPE"), search it yourself with lookup_token or pass the name as track_token's \`query\` — do NOT ask for a contract address unless the search returns nothing or is genuinely ambiguous.
+
+STANDING WATCH-TASKS: when the owner asks to be pinged/alerted/notified when something happens ("watch BTC and ping me if it breaks $150k", "tell me if PEPE dumps 20%"), call create_watch_task — the app monitors it 24/7 and you'll automatically analyze and notify them when it fires. Confirm what you armed. Manage tasks with list_watch_tasks / cancel_watch_task.
 
 Research: you DO have live internet access through web_search — NEVER tell the user you can't browse or lack real-time data. For anything current (prices aside) — news, trends, narratives, regulation/government policy, project updates — call web_search first, then summarize and cite the source names and dates. Be clear about what's confirmed news vs. opinion/rumor.
 
@@ -101,6 +129,52 @@ Style: concise, mobile-friendly markdown. Lead with the answer. Use compact numb
 
 const NATIVE = { bsc: 'BNB', eth: 'ETH', base: 'ETH', sol: 'SOL', ton: 'TON' }
 const TRACKER_CID = { bsc: 'bsc', eth: 'ethereum', sol: 'solana' } // DexScreener chain ids for the tracker
+const DS_CID = { bsc: 'bsc', eth: 'ethereum', sol: 'solana', base: 'base', poly: 'polygon', arb: 'arbitrum' } // DexScreener chain ids
+
+// Verify/resolve a proposed trade's token ON-CHAIN before it becomes a proposal
+// card, so a hallucinated or mistyped contract address never reaches the owner.
+// Trusts the model's address only if it actually exists on the given chain;
+// otherwise falls back to resolving by symbol (best-liquidity, exact-symbol
+// preferred). Returns the canonical address + real symbol + live price/liquidity,
+// or { ok:false, reason } so the agent is told to look the token up instead.
+async function verifyProposalToken(args) {
+  const chain = args.chain
+  const cid = DS_CID[chain]
+  if (!cid) return { ok: false, reason: `Unsupported chain "${chain}".` }
+  const okFrom = (p) => ({
+    ok: true, chain,
+    tokenAddress: p.baseToken.address,
+    tokenSymbol: p.baseToken.symbol || args.tokenSymbol || '???',
+    priceUsd: parseFloat(p.priceUsd) || null,
+    liquidityUsd: p.liquidity?.usd || null,
+  })
+  const rawAddr = String(args.tokenAddress || '').trim()
+  const looksAddr = /^0x[0-9a-fA-F]{40}$/.test(rawAddr) || /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(rawAddr)
+
+  // 1) Trust the model's address ONLY if DexScreener confirms it on this chain.
+  if (looksAddr) {
+    try {
+      const { data } = await axios.get('https://api.dexscreener.com/latest/dex/tokens/' + encodeURIComponent(rawAddr), { timeout: 10000 })
+      const cand = (data?.pairs || []).filter((p) => p.baseToken?.address && p.chainId === cid && p.baseToken.address.toLowerCase() === rawAddr.toLowerCase())
+      if (cand.length) { cand.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0)); return okFrom(cand[0]) }
+    } catch { /* fall through to symbol resolution */ }
+  }
+
+  // 2) Resolve by symbol/name (address missing, malformed, or not found on-chain).
+  const q = String(args.tokenSymbol || rawAddr || '').trim()
+  if (q) {
+    try {
+      const { data } = await axios.get('https://api.dexscreener.com/latest/dex/search?q=' + encodeURIComponent(q), { timeout: 10000 })
+      const cand = (data?.pairs || []).filter((p) => p.baseToken?.address && p.chainId === cid)
+      if (cand.length) {
+        cand.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))
+        const exact = cand.find((p) => (p.baseToken?.symbol || '').toLowerCase() === q.toLowerCase())
+        return okFrom(exact || cand[0])
+      }
+    } catch { /* no match */ }
+  }
+  return { ok: false, reason: `No ${String(chain).toUpperCase()} token found matching ${args.tokenSymbol ? `"${args.tokenSymbol}"` : 'that address'}.` }
+}
 
 // ── Tool executors (read-only) ─────────────────────────────────────────────
 async function runTool(name, input, ctx) {
@@ -326,23 +400,64 @@ async function runTool(name, input, ctx) {
       return { name: pair.baseToken?.name, symbol: pair.baseToken?.symbol, chain, address: addr, priceUsd: pair.priceUsd, marketCap: pair.marketCap || pair.fdv, volume24h: pair.volume?.h24, liquidity: pair.liquidity?.usd, change24h: pair.priceChange?.h24, holders, dexUrl: pair.url }
     }
     case 'get_tracked_tokens': {
-      const snap = await db.collection(`users/${uid}/trackedTokens`).get().catch(() => null)
-      if (!snap || snap.empty) return []
-      const items = snap.docs.map((d) => d.data())
-      const byChain = {}
-      for (const t of items) { (byChain[t.chain] = byChain[t.chain] || []).push(t) }
+      // The owner's watchlist spans TWO collections and Pointer must see BOTH:
+      //   users/{uid}/watchlist     — Markets-tab stars (CoinGecko coins AND on-chain tokens)
+      //   users/{uid}/trackedTokens — the standalone Token Tracker (on-chain only)
+      // Union them (deduped by token identity) so the full watchlist is returned,
+      // not just the Token Tracker subset.
+      const [wSnap, tSnap] = await Promise.all([
+        db.collection(`users/${uid}/watchlist`).get().catch(() => null),
+        db.collection(`users/${uid}/trackedTokens`).get().catch(() => null),
+      ])
+      const keyOf = (o) => o.cg ? 'cg:' + o.cg
+        : o.address ? 'tk:' + (o.chain || '') + ':' + String(o.address).toLowerCase()
+        : 'sym:' + String(o.symbol || '').toUpperCase()
+      const byKey = new Map()
+      // Markets-tab watchlist first (primary), then Token Tracker (merged, deduped).
+      if (wSnap) for (const d of wSnap.docs) {
+        const x = d.data()
+        const o = { cg: x.cg || null, chain: x.chain || null, address: x.address || null, symbol: x.sym || '', name: x.name || x.sym || '', source: 'watchlist' }
+        const k = x.key || keyOf(o); if (!byKey.has(k)) byKey.set(k, o)
+      }
+      if (tSnap) for (const d of tSnap.docs) {
+        const x = d.data()
+        const o = { cg: null, chain: x.chain || null, address: x.contractAddress || x.address || null, symbol: x.symbol || '', name: x.name || x.symbol || '', source: 'tracker' }
+        const k = keyOf(o); if (!byKey.has(k)) byKey.set(k, o)
+      }
+      const items = [...byKey.values()]
+      if (!items.length) return []
+
+      // Enrich on-chain tokens with live DexScreener data (best pair per token).
       const priceMap = {}
+      const byChain = {}
+      for (const t of items) { if (t.address && t.chain) (byChain[t.chain] = byChain[t.chain] || []).push(t) }
       for (const [ch, group] of Object.entries(byChain)) {
-        const cid = TRACKER_CID[ch] || ch
+        const cid = DS_CID[ch] || ch
         for (let i = 0; i < group.length; i += 30) {
           try {
-            const addrs = group.slice(i, i + 30).map((t) => t.contractAddress).join(',')
+            const addrs = group.slice(i, i + 30).map((t) => t.address).join(',')
             const { data } = await axios.get(`https://api.dexscreener.com/tokens/v1/${cid}/${addrs}`, { timeout: 10000 })
             if (Array.isArray(data)) for (const p of data) { const a = p.baseToken?.address?.toLowerCase(); if (a && (!priceMap[a] || (p.liquidity?.usd || 0) > (priceMap[a].liquidity?.usd || 0))) priceMap[a] = p }
           } catch {}
         }
       }
-      return items.map((t) => { const p = priceMap[(t.contractAddress || '').toLowerCase()]; return { name: t.name || t.symbol, symbol: t.symbol, chain: t.chain, address: t.contractAddress, priceUsd: p?.priceUsd || null, change24h: p?.priceChange?.h24 ?? null, marketCap: p?.marketCap || p?.fdv || null, volume24h: p?.volume?.h24 || null, liquidity: p?.liquidity?.usd || null } })
+      // Enrich CoinGecko coins (watchlist stars with a cg id) with live price.
+      const cgMap = {}
+      const cgIds = items.filter((t) => t.cg).map((t) => t.cg)
+      if (cgIds.length) {
+        try {
+          const { data } = await axios.get(`https://api.coingecko.com/api/v3/simple/price?ids=${encodeURIComponent(cgIds.join(','))}&vs_currencies=usd&include_24hr_change=true&include_market_cap=true&include_24hr_vol=true`, { timeout: 10000 })
+          Object.assign(cgMap, data || {})
+        } catch {}
+      }
+      return items.map((t) => {
+        if (t.address && t.chain) {
+          const p = priceMap[String(t.address).toLowerCase()]
+          return { name: t.name || t.symbol, symbol: t.symbol, chain: t.chain, address: t.address, source: t.source, priceUsd: p?.priceUsd || null, change24h: p?.priceChange?.h24 ?? null, marketCap: p?.marketCap || p?.fdv || null, volume24h: p?.volume?.h24 || null, liquidity: p?.liquidity?.usd || null }
+        }
+        const c = cgMap[t.cg] || {}
+        return { name: t.name || t.symbol, symbol: t.symbol, cgId: t.cg || undefined, chain: t.chain || 'coingecko', address: t.address || null, source: t.source, priceUsd: c.usd ?? null, change24h: c.usd_24h_change ?? null, marketCap: c.usd_market_cap ?? null, volume24h: c.usd_24h_vol ?? null, liquidity: null }
+      })
     }
     case 'track_token': {
       const REV = { bsc: 'bsc', ethereum: 'eth', solana: 'sol', base: 'base' }
@@ -377,12 +492,99 @@ async function runTool(name, input, ctx) {
     }
     case 'untrack_token': {
       const chain = input.chain, addr = String(input.address || '').trim()
+      // Remove from BOTH the Token Tracker and the Markets-tab watchlist so the
+      // token doesn't linger in one collection after the owner asks to drop it.
       const snap = await db.collection(`users/${uid}/trackedTokens`).where('chain', '==', chain).get().catch(() => null)
-      if (!snap) return { ok: false, error: 'lookup failed' }
-      const matches = snap.docs.filter((d) => (d.data().contractAddress || '').toLowerCase() === addr.toLowerCase())
-      if (!matches.length) return { ok: false, note: 'Not in watchlist' }
-      await Promise.all(matches.map((d) => d.ref.delete()))
-      return { ok: true, removed: matches.length }
+      const matches = snap ? snap.docs.filter((d) => (d.data().contractAddress || '').toLowerCase() === addr.toLowerCase()) : []
+      await Promise.all(matches.map((d) => d.ref.delete().catch(() => {})))
+      // The watchlist doc id is the token key with non-alphanumerics → '_'.
+      let watchRemoved = 0
+      if (addr) {
+        const watchKey = ('tk:' + (chain || '') + ':' + addr.toLowerCase()).replace(/[^a-zA-Z0-9_-]/g, '_')
+        const ref = db.doc(`users/${uid}/watchlist/${watchKey}`)
+        try { const ds = await ref.get(); if (ds.exists) { await ref.delete(); watchRemoved = 1 } } catch { /* ignore */ }
+      }
+      const removed = matches.length + watchRemoved
+      if (!removed) return { ok: false, note: 'Not in watchlist' }
+      return { ok: true, removed }
+    }
+    case 'create_watch_task': {
+      const cond = ['above', 'below', 'move'].includes(input.cond) ? input.cond : null
+      const value = parseFloat(input.value)
+      if (!cond || !Number.isFinite(value) || value <= 0) return { ok: false, error: 'cond (above/below/move) and a positive value are required' }
+      const q = String(input.query || '').trim()
+      if (!q) return { ok: false, error: 'query (token name/symbol) required' }
+
+      // Plan cap on ACTIVE tasks (armed or quota-paused).
+      const uSnap = await db.doc(`users/${uid}`).get()
+      const uDoc = uSnap.exists ? uSnap.data() : {}
+      const plan = ['free', 'pro', 'elite'].includes(uDoc.plan) ? uDoc.plan : 'free'
+      const ovr = parseInt((uDoc.userLimits || {}).pointerTaskQuota)
+      const quota = Number.isFinite(ovr) ? ovr : ({ free: 2, pro: 10, elite: 30 })[plan]
+      const activeSnap = await db.collection(`users/${uid}/pointerTasks`).where('status', 'in', ['armed', 'quota-paused']).get().catch(() => null)
+      if (activeSnap && activeSnap.size >= quota) return { ok: false, error: `The owner's plan allows ${quota} active watch-tasks and they already have ${activeSnap.size}. Suggest cancelling one (list_watch_tasks) or upgrading.` }
+
+      // Resolve the token: CoinGecko first (majors like BTC), DexScreener fallback
+      // (on-chain tokens). Store the canonical id so the monitor prices it.
+      let target = null
+      try {
+        const { data } = await axios.get('https://api.coingecko.com/api/v3/search?query=' + encodeURIComponent(q), { timeout: 10000 })
+        const c = (data?.coins || [])[0]
+        if (c && (c.symbol || '').toLowerCase() === q.toLowerCase().replace(/^\$/, '')) target = { cg: c.id, sym: c.symbol.toUpperCase(), name: c.name }
+        else if (c && !target) target = null // ambiguous CG match — try DexScreener before settling
+      } catch { /* fall through */ }
+      if (!target) {
+        try {
+          const { data } = await axios.get('https://api.dexscreener.com/latest/dex/search?q=' + encodeURIComponent(q), { timeout: 10000 })
+          const cand = (data?.pairs || []).filter((p) => p.baseToken?.address && DS_CID[p.chainId === 'ethereum' ? 'eth' : p.chainId === 'solana' ? 'sol' : p.chainId])
+          if (cand.length) {
+            cand.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))
+            const p = cand[0]
+            const chain = p.chainId === 'ethereum' ? 'eth' : p.chainId === 'solana' ? 'sol' : p.chainId
+            target = { chain, address: p.baseToken.address, sym: p.baseToken.symbol || q.toUpperCase(), name: p.baseToken.name || q }
+          }
+        } catch { /* no match */ }
+      }
+      if (!target) return { ok: false, error: `Couldn't resolve "${q}" to a token — ask the owner to clarify.` }
+
+      // Base price (required for 'move', useful context for all kinds).
+      let basePrice = null
+      try {
+        if (target.cg) {
+          const { data } = await axios.get(`https://api.coingecko.com/api/v3/simple/price?ids=${encodeURIComponent(target.cg)}&vs_currencies=usd`, { timeout: 10000 })
+          basePrice = data?.[target.cg]?.usd || null
+        } else {
+          const { data } = await axios.get('https://api.dexscreener.com/latest/dex/tokens/' + encodeURIComponent(target.address), { timeout: 10000 })
+          const pair = (data?.pairs || []).sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0]
+          basePrice = pair ? parseFloat(pair.priceUsd) || null : null
+        }
+      } catch { /* base price is best-effort except for move */ }
+      if (cond === 'move' && !basePrice) return { ok: false, error: 'No live price available — % move tasks need one.' }
+
+      const task = {
+        kind: 'price', cond, value,
+        cg: target.cg || null, chain: target.chain || null, address: target.address || null,
+        sym: target.sym, name: target.name, basePrice,
+        note: String(input.note || '').slice(0, 200),
+        status: 'armed', createdAt: Date.now(),
+      }
+      const ref = await db.collection(`users/${uid}/pointerTasks`).add(task)
+      const condDesc = cond === 'above' ? `rises above $${value}` : cond === 'below' ? `falls below $${value}` : `moves ±${value}% from $${basePrice}`
+      return { ok: true, taskId: ref.id, armed: `${target.sym} ${condDesc}`, currentPrice: basePrice, monitoredEvery: '5 minutes' }
+    }
+    case 'list_watch_tasks': {
+      const snap = await db.collection(`users/${uid}/pointerTasks`).orderBy('createdAt', 'desc').limit(30).get().catch(() => null)
+      if (!snap) return []
+      return snap.docs.map((d) => { const t = d.data(); return { taskId: d.id, sym: t.sym, cond: t.cond, value: t.value, status: t.status, basePrice: t.basePrice, firedAt: t.firedAt || null } })
+    }
+    case 'cancel_watch_task': {
+      const id = String(input.taskId || '').trim()
+      if (!id) return { ok: false, error: 'taskId required' }
+      const ref = db.doc(`users/${uid}/pointerTasks/${id}`)
+      const s = await ref.get()
+      if (!s.exists) return { ok: false, error: 'No such task' }
+      await ref.delete()
+      return { ok: true, cancelled: s.data().sym }
     }
     case 'get_bubble_map': {
       const chain = input.chain, addr = String(input.address || '').trim()
@@ -432,27 +634,51 @@ async function runTool(name, input, ctx) {
 
 // ── Main agent loop ────────────────────────────────────────────────────────
 // history: prior [{role,content(text)}] turns. Returns { text, proposal|null, history }.
-async function runAgent({ prompt, history = [], ctx, provider = 'deepseek', apiKey, surface = 'discord' }) {
+async function runAgent({ prompt, history = [], ctx, provider = 'deepseek', apiKey, surface = 'discord', deep = false, deepModel = null }) {
   const isPointer = surface === 'pointer'
   const cfg = PROVIDERS[provider] || PROVIDERS.deepseek
+  // Deep research → the provider's top-tier model (admin override wins), more
+  // agent loops and a larger answer budget so it can reason and cross-check.
+  let activeModel = deep ? (deepModel || cfg.deepModel || cfg.model) : cfg.model
+  const maxLoops = deep ? DEEP_MAX_LOOPS : MAX_LOOPS
+  const maxTokens = deep ? 8000 : 4096
   const client = new OpenAI({ apiKey, baseURL: cfg.baseURL })
   const tools = isPointer ? TOOLS_POINTER : TOOLS
   const toolCtx = { ...ctx, surface }
   const messages = [
-    { role: 'system', content: isPointer ? SYSTEM_POINTER : SYSTEM },
+    { role: 'system', content: (isPointer ? SYSTEM_POINTER : SYSTEM) + (deep ? DEEP_DIRECTIVE : '') },
     ...history.map(h => ({ role: h.role, content: h.content })),
     { role: 'user', content: prompt },
   ]
   let proposal = null
 
-  for (let i = 0; i < MAX_LOOPS; i++) {
-    const resp = await client.chat.completions.create({
-      model: cfg.model,
-      max_tokens: 4096,
-      messages,
-      tools,
-      tool_choice: 'auto',
-    })
+  for (let i = 0; i < maxLoops; i++) {
+    let resp
+    try {
+      // OpenAI's reasoning-class models (o*/gpt-5*) reject `max_tokens` and
+      // require `max_completion_tokens`; DeepSeek (and most OpenAI-compatible
+      // proxies) only understand `max_tokens`. Pick per provider so the deep
+      // model doesn't 400 on every call and silently lose deep mode.
+      const tokenParam = provider === 'openai' ? { max_completion_tokens: maxTokens } : { max_tokens: maxTokens }
+      resp = await client.chat.completions.create({
+        model: activeModel,
+        ...tokenParam,
+        messages,
+        tools,
+        tool_choice: 'auto',
+      })
+    } catch (e) {
+      // If the top-tier deep model rejects the request (unavailable, or doesn't
+      // support tool-calls on this account), fall back to the standard model
+      // once rather than failing the whole turn.
+      if (deep && activeModel !== cfg.model) {
+        console.warn(`deep model "${activeModel}" failed (${e.message}); falling back to "${cfg.model}"`)
+        activeModel = cfg.model
+        i--
+        continue
+      }
+      throw e
+    }
     const msg = resp.choices?.[0]?.message
     if (!msg) break
 
@@ -460,7 +686,7 @@ async function runAgent({ prompt, history = [], ctx, provider = 'deepseek', apiK
     if (calls.length === 0) {
       const text = (msg.content || '').trim()
       const newHistory = [...history, { role: 'user', content: prompt }, { role: 'assistant', content: text || '(no response)' }]
-      return { text: text || 'Done.', proposal, history: newHistory.slice(-12) }
+      return { text: text || 'Done.', proposal, history: newHistory.slice(-12), model: activeModel }
     }
 
     messages.push(msg) // assistant turn carrying tool_calls
@@ -469,8 +695,29 @@ async function runAgent({ prompt, history = [], ctx, provider = 'deepseek', apiK
       try { args = JSON.parse(tc.function?.arguments || '{}') } catch {}
       const fname = tc.function?.name
       if (fname === 'propose_trade') {
-        proposal = { ...args }
-        messages.push({ role: 'tool', tool_call_id: tc.id, content: 'Proposal sent to the owner for approval. Do not propose it again; summarize what you proposed and why.' })
+        // Verify the token on-chain so a hallucinated/mistyped address or wrong
+        // slippage never reaches the owner's approval card.
+        const verified = await verifyProposalToken(args)
+        if (!verified.ok) {
+          proposal = null
+          messages.push({ role: 'tool', tool_call_id: tc.id, content: `Could not verify the token on-chain: ${verified.reason} Call lookup_token to get the correct contract address, then call propose_trade again with that exact address. Never guess a contract address.` })
+          continue
+        }
+        // Slippage is the owner's configured value — never the model's guess — so
+        // the card matches what execution will actually use.
+        let slippage = 10
+        try { const us = await toolCtx.db.doc(`users/${toolCtx.uid}`).get(); const s = us.exists ? (us.data().botSettings || {}) : {}; slippage = s.defaultSlippage != null ? s.defaultSlippage : 10 } catch { /* keep default */ }
+        proposal = {
+          ...args,
+          chain: verified.chain,
+          tokenAddress: verified.tokenAddress,
+          tokenSymbol: verified.tokenSymbol,
+          slippage,
+          priceUsd: verified.priceUsd,
+          liquidityUsd: verified.liquidityUsd,
+        }
+        const place = isPointer ? 'right here in the app' : 'in Discord'
+        messages.push({ role: 'tool', tool_call_id: tc.id, content: `Verified on-chain: ${verified.tokenSymbol} at ${verified.tokenAddress} (${verified.chain}), slippage ${slippage}%. An Approve/Reject card is now shown to the owner ${place}. Do not propose again. Briefly summarize what you proposed and why (use the verified symbol), and tell the owner to approve or reject the card ${isPointer ? 'here in the app' : 'in Discord'} — do not mention any other place.` })
         continue
       }
       try {
@@ -482,7 +729,7 @@ async function runAgent({ prompt, history = [], ctx, provider = 'deepseek', apiK
     }
   }
 
-  return { text: 'Reached step limit. Try a more specific request.', proposal, history }
+  return { text: 'Reached step limit. Try a more specific request.', proposal, history, model: activeModel }
 }
 
 // ── Execute an approved trade (called by the approve-button handler ONLY) ───

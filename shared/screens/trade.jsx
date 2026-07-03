@@ -13,6 +13,7 @@ function TradeFlow({ token, side = 'buy', go, onDone }) {
   const [stage, setStage] = tS('form'); // form | confirm | processing | success
   const [tradeErr, setTradeErr] = tS('');
   const [txHash, setTxHash] = tS('');
+  const [wasPaper, setWasPaper] = tS(false); // last fill was simulated (paper mode)
   const txRef = React.useRef(null);
   const chain = (tok && FX.chains.find(c => c.id === tok.chain)) || FX.chains[0];
 
@@ -34,7 +35,7 @@ function TradeFlow({ token, side = 'buy', go, onDone }) {
   };
   const finishTrade = async () => {
     if (!txRef.current) { setStage('success'); return; }
-    try { const res = await txRef.current; setTxHash((res && (res.txHash || res.signature || res.hash)) || ''); setStage('success'); }
+    try { const res = await txRef.current; setTxHash((res && (res.txHash || res.signature || res.hash)) || ''); setWasPaper(!!(res && res.simulated)); setStage('success'); }
     catch (e) { setTradeErr((e && e.message) || 'Trade failed — check your DEX bot wallet.'); setStage('form'); }
     finally { txRef.current = null; }
   };
@@ -82,7 +83,8 @@ function TradeFlow({ token, side = 'buy', go, onDone }) {
         <div style={{ width: 84, height: 84, borderRadius: '50%', background: 'var(--up-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 18 }}>
           <Icon name="checkCircle" size={48} color="var(--up)" />
         </div>
-        <div style={{ fontSize: 22, fontWeight: 800 }}>Trade filled</div>
+        <div style={{ fontSize: 22, fontWeight: 800 }}>{wasPaper ? 'Paper trade filled' : 'Trade filled'}</div>
+        {wasPaper && <Pill tone="accent" style={{ marginTop: 8 }}>📝 SIMULATED — no real funds moved</Pill>}
         <div style={{ fontSize: 14.5, color: 'var(--muted)', marginTop: 6, lineHeight: 1.5 }}>
           {s === 'buy' ? 'Bought' : 'Sold'} <b style={{ color: 'var(--text)' }}>{recv.toLocaleString('en-US', { maximumFractionDigits: 4 })} {tok.sym}</b><br />for {amt} {payUnit} on {chain.dex}
         </div>
@@ -317,7 +319,7 @@ const GEM_NARRATIVES = ['All', 'AI', 'Meme', 'DeFi', 'DePIN', 'RWA', 'GameFi', '
 const GEM_CHAIN_OPTS = [['All', 'All chains'], ['sol', 'Solana'], ['eth', 'Ethereum'], ['base', 'Base'], ['bsc', 'BSC']];
 const GEM_SORT_OPTS = [{ value: 'score', label: 'Top score' }, { value: 'trending', label: 'Trending' }, { value: 'new', label: 'Newest' }, { value: 'gainers', label: 'Top gainers' }];
 const GEM_AGE_UNITS = [{ value: 'hours', label: 'Hours' }, { value: 'days', label: 'Days' }, { value: 'weeks', label: 'Weeks' }, { value: 'months', label: 'Months' }, { value: 'years', label: 'Years' }];
-const GEM_SETTINGS_DEFAULT = { minLiquidity: 5000, minVolume: 1000, minMarketCap: 0, minScore: 60, sort: 'score', minAgeAmount: 0, minAgeUnit: 'hours', minAgeHours: 0, maxAgeAmount: 1, maxAgeUnit: 'days', maxAgeHours: 24 };
+const GEM_SETTINGS_DEFAULT = { minLiquidity: 5000, minVolume: 1000, minMarketCap: 0, minScore: 60, sort: 'score', minAgeAmount: 0, minAgeUnit: 'hours', minAgeHours: 0, maxAgeAmount: 1, maxAgeUnit: 'days', maxAgeHours: 24, buyAmountBsc: 0.005, buyAmountEth: 0.01, buyAmountSol: 0.05, buySlippage: 10, exitTp: 100, exitSl: 30, exitTrail: 0, exitMaxHold: 0 };
 const GEM_SCAN_STEPS = [
   { icon: 'scan', label: 'Pulling fresh pairs', sub: 'DexScreener · GeckoTerminal' },
   { icon: 'layers', label: 'Scanning the broad market', sub: 'New, trending & established pools' },
@@ -338,6 +340,9 @@ function GemScanner({ go, onTrade, locked, onUpsell }) {
   const [tgAlerts, setTgAlerts] = tS(null);
   const [tgLinked, setTgLinked] = tS(false);
   const [tgBusy, setTgBusy] = tS(false);
+  // Auto-execution (botSettings.gemAutoBuy) — the trading bot auto-buys gems.
+  const [autoBuy, setAutoBuy] = tS(null);
+  const [abBusy, setAbBusy] = tS(false);
   // Persisted scan filter settings (botSettings.gem*) + the settings sheet.
   const [cfg, setCfg] = tS(GEM_SETTINGS_DEFAULT);
   const [setOpen, setSetOpen] = tS(false);
@@ -347,6 +352,7 @@ function GemScanner({ go, onTrade, locked, onUpsell }) {
       if (!alive || !p) return;
       setTgAlerts(!!p.gemAutoEnabled);
       setTgLinked(!!p.telegramLinked);
+      setAutoBuy(!!p.gemAutoBuy);
     }).catch(() => {});
     window.FXAPI.getGemSettings().then(s => { if (alive && s) setCfg(s); }).catch(() => {});
     return () => { alive = false; };
@@ -358,6 +364,20 @@ function GemScanner({ go, onTrade, locked, onUpsell }) {
     try { await window.FXAPI.setGemAutoAlerts(next); }
     catch (e) { setTgAlerts(!next); }            // revert on failure
     finally { setTgBusy(false); }
+  };
+  const toggleAutoBuy = async () => {
+    if (abBusy) return;
+    const next = !autoBuy;
+    // Buying without exit rules means the bot enters positions it will never
+    // manage — force an explicit confirmation before allowing that.
+    if (next) {
+      const noExits = !(parseFloat(cfg.exitTp) > 0 || parseFloat(cfg.exitSl) > 0 || parseFloat(cfg.exitTrail) > 0 || parseFloat(cfg.exitMaxHold) > 0);
+      if (noExits && !window.confirm('No exit rules are set — the bot will BUY gems but never sell them. Set take-profit / stop-loss in scan settings (⚙), or tap OK to proceed anyway.')) return;
+    }
+    setAutoBuy(next); setAbBusy(true);           // optimistic
+    try { await window.FXAPI.setGemAutoBuy(next); }
+    catch (e) { setAutoBuy(!next); }             // revert on failure
+    finally { setAbBusy(false); }
   };
   const runScan = async () => {
     if (scan.on) return;
@@ -380,7 +400,9 @@ function GemScanner({ go, onTrade, locked, onUpsell }) {
       setScan({ on: false, ago: 'just now', found: hi });
       setModal({ open: true, done: true, found: hi, total: arr.length, err: '' });
     } catch (e) {
-      setScan({ on: false, ago: 'failed — sign in to scan', found: 0 });
+      const details = (e && e.details) || {};
+      const quota = details.code === 'quota_exhausted' || String((e && e.code) || '').includes('resource-exhausted');
+      setScan({ on: false, ago: quota ? 'monthly scan limit reached' : 'failed — sign in to scan', found: 0 });
       setModal({ open: true, done: true, found: 0, total: 0, err: (e && e.message) || 'Sign in to scan, then try again.' });
     }
   };
@@ -388,6 +410,21 @@ function GemScanner({ go, onTrade, locked, onUpsell }) {
   if (narr !== 'All') list = list.filter(g => g.narrative === narr);
   if (chain !== 'All') list = list.filter(g => g.chain === chain);
   if (safe) list = list.filter(g => g.safe);
+
+  // Compact toggle card — used for the Safe / Telegram / Auto-execute row.
+  const toggleCard = ({ icon, tint, label, on, onClick }) => (
+    <div style={{
+      flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 9,
+      background: on ? 'var(--surface2)' : 'var(--surface)', borderRadius: 13, padding: '12px 6px 11px',
+      boxShadow: on ? `inset 0 0 0 1.5px ${tint}` : 'inset 0 0 0 1px var(--line)', transition: 'all .2s',
+    }}>
+      <div style={{ width: 34, height: 34, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', background: on ? tint : 'var(--surface2)', transition: 'all .2s' }}>
+        <Icon name={icon} size={17} color={on ? '#fff' : tint} />
+      </div>
+      <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text)', textAlign: 'center', lineHeight: 1.15, minHeight: 26, display: 'flex', alignItems: 'center' }}>{label}</span>
+      <Toggle on={on} onClick={onClick} />
+    </div>
+  );
 
   return (
     <div>
@@ -406,23 +443,25 @@ function GemScanner({ go, onTrade, locked, onUpsell }) {
           <Dropdown label="Narrative" icon="grid" value={narr} options={GEM_NARRATIVES.map(n => ({ value: n, label: n }))} onChange={setNarr} />
           <Dropdown label="Chain" icon="layers" value={chain} options={GEM_CHAIN_OPTS.map(([v, l]) => ({ value: v, label: l }))} onChange={setChain} />
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--surface)', borderRadius: 11, padding: '9px 14px', boxShadow: 'inset 0 0 0 1px var(--line)' }}>
-          <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13.5, fontWeight: 600 }}><Icon name="shield" size={16} color="var(--up)" /> Safe only · honeypot filter</span>
-          <Toggle on={safe} onClick={() => setSafe(!safe)} />
+        {/* Safety + automation switches — one horizontal row */}
+        <div style={{ display: 'flex', gap: 8 }}>
+          {toggleCard({ icon: 'shield', tint: 'var(--up)', label: 'Safe only', on: safe, onClick: () => setSafe(!safe) })}
+          {toggleCard({ icon: 'telegram', tint: '#229ED9', label: 'Telegram alerts', on: !!tgAlerts, onClick: toggleTgAlerts })}
+          {toggleCard({ icon: 'zap', tint: 'var(--up)', label: 'Auto-execute', on: !!autoBuy, onClick: toggleAutoBuy })}
         </div>
-        {/* Telegram gem auto-alerts — drives the processGemScanner scheduler */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: tgAlerts ? 'var(--glow)' : 'var(--surface)', borderRadius: 11, padding: '9px 14px', boxShadow: tgAlerts ? 'inset 0 0 0 1.5px #229ED9' : 'inset 0 0 0 1px var(--line)', transition: 'all .2s' }}>
-          <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
-            <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13.5, fontWeight: 600 }}><Icon name="telegram" size={16} color="#229ED9" /> Telegram auto-alerts</span>
-            <span style={{ fontSize: 11, color: 'var(--muted)' }}>
-              {tgAlerts === null ? 'Loading…'
-                : !tgLinked ? 'Connect Telegram in Profile to receive alerts'
-                : tgAlerts ? 'New gems sent to @FXcryptBot every 5 min'
-                : 'Auto-send fresh gems to your Telegram'}
-            </span>
-          </span>
-          <Toggle on={!!tgAlerts} onClick={toggleTgAlerts} />
-        </div>
+        {/* Contextual hints for the switches above */}
+        {tgAlerts && !tgLinked && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--muted)', padding: '0 2px' }}>
+            <Icon name="telegram" size={13} color="#229ED9" style={{ flexShrink: 0 }} />
+            <span>Connect Telegram in Profile to receive gem alerts.</span>
+          </div>
+        )}
+        {autoBuy && (
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, fontSize: 11, color: 'var(--muted)', lineHeight: 1.45, padding: '0 2px' }}>
+            <Icon name="alert" size={13} color="var(--down)" style={{ flexShrink: 0, marginTop: 1 }} />
+            <span>Auto-execute makes real on-chain buys from your funded bot wallet. Set buy size, slippage &amp; min score in scan settings (⚙).</span>
+          </div>
+        )}
       </div>
       <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
         {list.length === 0 && !scan.on && (
@@ -554,12 +593,12 @@ function GemSettingsSheet({ open, onClose, cfg, onSaved }) {
   const [busy, setBusy] = tS(false);
   const [err, setErr] = tS('');
   tE(() => { if (open) { setV(cfg); setErr(''); } }, [open, cfg]);
-  const field = (key, label, hint, min, max) => (
+  const field = (key, label, hint, min, max, step) => (
     <label style={{ display: 'block', marginBottom: 14 }}>
       <span style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, fontWeight: 700, marginBottom: 6 }}>
         <span>{label}</span><span style={{ color: 'var(--muted)', fontWeight: 600 }}>{hint}</span>
       </span>
-      <input type="number" inputMode="numeric" min={min} max={max} value={v[key]}
+      <input type="number" inputMode="decimal" min={min} max={max} step={step || 1} value={v[key]}
         onChange={(e) => setV(s => ({ ...s, [key]: e.target.value }))}
         style={{ width: '100%', padding: '11px 13px', borderRadius: 11, border: 'none', background: 'var(--surface)', color: 'var(--text)', fontSize: 15, fontWeight: 700, fontFamily: 'inherit', boxShadow: 'inset 0 0 0 1px var(--line)', outline: 'none' }} />
     </label>
@@ -602,6 +641,36 @@ function GemSettingsSheet({ open, onClose, cfg, onSaved }) {
         <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 7 }}>Sort by</div>
         <Segmented options={GEM_SORT_OPTS} value={v.sort} onChange={(s) => setV(x => ({ ...x, sort: s }))} />
       </div>
+
+      {/* Auto-execute (gem trading bot) — per-chain buy size + slippage. */}
+      <div style={{ marginTop: 4, marginBottom: 10, paddingTop: 14, borderTop: '1px solid var(--line)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13.5, fontWeight: 800, marginBottom: 4 }}>
+          <Icon name="zap" size={15} color="var(--accent)" /> Auto-execute (trading bot)
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5, marginBottom: 14 }}>
+          When auto-execute is on, the bot buys this much native token per gem (score ≥ min gem score) from your funded bot wallet on each chain.
+        </div>
+      </div>
+      {field('buyAmountBsc', 'Buy size — BSC', 'BNB per gem', 0, 1000, 'any')}
+      {field('buyAmountEth', 'Buy size — ETH / Base', 'ETH per gem', 0, 1000, 'any')}
+      {field('buyAmountSol', 'Buy size — Solana', 'SOL per gem', 0, 100000, 'any')}
+      {field('buySlippage', 'Max slippage', '% (1–50)', 1, 50, 1)}
+
+      {/* Exit rules armed on every auto-bought position (0 = rule off). The
+          exit monitor sells automatically when one triggers — see Portfolio. */}
+      <div style={{ marginTop: 4, marginBottom: 10, paddingTop: 14, borderTop: '1px solid var(--line)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13.5, fontWeight: 800, marginBottom: 4 }}>
+          <Icon name="target" size={15} color="var(--accent)" /> Auto-exit (sell rules)
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5, marginBottom: 14 }}>
+          Every auto-bought gem is armed with these rules; the bot sells automatically when one triggers. 0 turns a rule off. Manage armed positions in Profile → Portfolio.
+        </div>
+      </div>
+      {field('exitTp', 'Take profit', '+% from entry (0 = off)', 0, 100000, 'any')}
+      {field('exitSl', 'Stop loss', '−% from entry (0 = off)', 0, 99, 'any')}
+      {field('exitTrail', 'Trailing stop', '% off peak (0 = off)', 0, 99, 'any')}
+      {field('exitMaxHold', 'Max hold', 'hours (0 = off)', 0, 8760, 'any')}
+
       {err && <div style={{ fontSize: 12.5, color: 'var(--down)', marginBottom: 10 }}>{err}</div>}
       <div style={{ display: 'flex', gap: 10, marginBottom: 6 }}>
         <Btn kind="ghost" full onClick={() => setV(GEM_SETTINGS_DEFAULT)}>Reset</Btn>

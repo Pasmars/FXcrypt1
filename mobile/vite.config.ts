@@ -20,6 +20,7 @@ export default defineConfig({
       'firebase/auth': here('./node_modules/firebase/auth'),
       'firebase/firestore': here('./node_modules/firebase/firestore'),
       'firebase/functions': here('./node_modules/firebase/functions'),
+      'firebase/messaging': here('./node_modules/firebase/messaging'),
     },
   },
   build: {

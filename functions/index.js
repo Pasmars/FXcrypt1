@@ -17,6 +17,11 @@ const signalGen      = require('./lib/signal-generator')
 const agentLib       = require('./lib/agent')
 const discordLib     = require('./lib/discord')
 const payments       = require('./lib/payments')
+const metering       = require('./lib/metering')
+const positions      = require('./lib/positions')
+const signalTracker  = require('./lib/signal-tracker')
+const notify         = require('./lib/notify')
+const copytrader     = require('./lib/copytrader')
 const crypto2        = require('crypto')
 
 const DISCORD_TOPIC = 'fxcrypt-discord-jobs'
@@ -560,6 +565,28 @@ exports.executeTrade = fn.https.onCall(async (data, context) => {
   const settings = userSnap.data().botSettings || {}
   const wallets  = settings.wallets || {}
 
+  // ── PAPER MODE: simulate the fill at the live price and return BEFORE any
+  // wallet/key access. This early return is the server-side guarantee that
+  // paper trading can never touch encryption.decrypt or on-chain execution —
+  // and it's why free users can paper-trade without a funded wallet.
+  if (userSnap.data().paperMode === true) {
+    const info = await positions.tokenPrice(chain, tokenAddress)
+    if (!info || !info.priceUsd) throw new functions.https.HttpsError('failed-precondition', 'No live market price for this token — paper fill unavailable.')
+    const isBuy = action === 'buy'
+    const trade = {
+      chain, tokenAddress, type: action, paper: true,
+      amountIn: isBuy ? String(validateAmount(amount)) : null,
+      percentSold: isBuy ? null : validatePercent(percent),
+      tokenSymbol: info.symbol || null,
+      entryPriceUsd: isBuy ? info.priceUsd : null,
+      exitPriceUsd: isBuy ? null : info.priceUsd,
+      txHash: null, status: 'paper', source: 'manual',
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    }
+    await db.collection(`users/${uid}/trades`).add(trade)
+    return { status: 'paper', simulated: true, txHash: null, chain, tokenAddress, priceUsd: info.priceUsd }
+  }
+
   if (!wallets[chain]?.encryptedKey)
     throw new functions.https.HttpsError('failed-precondition', `No ${chain.toUpperCase()} wallet configured`)
 
@@ -924,34 +951,80 @@ exports.scanGems = functions.region('europe-west1').runWith({ secrets: ALL_SECRE
   const maxMarketCap = Math.max(0, parseInt(data?.maxMarketCap) || 0)
   const sort         = ['score', 'trending', 'new', 'gainers'].includes(data?.sort) ? data.sort : 'score'
 
-  const gems = await gemscanner.discoverGems(chains, {
-    minLiquidity, maxAgeHours, minAgeHours, minScore, minVolume, maxVolume, minMarketCap, maxMarketCap, sort,
-    dextoolsKey: process.env.DEXTOOLS_API_KEY || null,
-  })
-  return { gems, scannedAt: Date.now() }
+  // Meter the scan against the user's monthly gem-scan quota (+ scanner flag).
+  const uid = context.auth.uid
+  const cfg = await payments.billingConfig(db)
+  const uSnap = await db.doc(`users/${uid}`).get()
+  const uDoc = uSnap.exists ? uSnap.data() : {}
+  const plan = ['free', 'pro', 'elite'].includes(uDoc.plan) ? uDoc.plan : 'free'
+  let scanUsage
+  try {
+    scanUsage = await metering.consume(db, uid, { kind: 'gemScan', plan, cfg, count: 1, flagKey: 'scanner' })
+  } catch (e) {
+    if (e.kind === 'feature-disabled') throw new functions.https.HttpsError('permission-denied', 'The gem scanner is disabled on your account.')
+    if (e.kind === 'quota-exhausted') {
+      const i = e.info || {}
+      throw new functions.https.HttpsError('resource-exhausted', `You've used all ${i.quota} gem scans for this period. They reset next month, or upgrade your plan for more.`, { code: 'quota_exhausted', quota: i.quota, resetsAt: i.resetsAt })
+    }
+    throw new functions.https.HttpsError('internal', 'Usage check failed. Try again.')
+  }
+
+  try {
+    const gems = await gemscanner.discoverGems(chains, {
+      minLiquidity, maxAgeHours, minAgeHours, minScore, minVolume, maxVolume, minMarketCap, maxMarketCap, sort,
+      dextoolsKey: process.env.DEXTOOLS_API_KEY || null,
+    })
+    await metering.track(db, uid, { gemScans: 1 })
+    return { gems, scannedAt: Date.now(), usage: { used: scanUsage.used, remaining: scanUsage.remaining, quota: scanUsage.quota } }
+  } catch (e) {
+    await metering.refund(db, uid, { kind: 'gemScan', ...scanUsage })
+    throw new functions.https.HttpsError('internal', e.message || 'Scan failed')
+  }
 })
 
 // ── Gem Scanner Scheduler (runs every 5 minutes) ──────────────────────────
-exports.processGemScanner = fn.pubsub
+// A 4-chain safety-checked scan per user can take well over the platform's 60s
+// default, so this scheduler gets its own extended timeout + memory — otherwise
+// the run is killed mid-scan and no alerts go out.
+const gemScanFn = functions.region('europe-west1').runWith({ secrets: ALL_SECRETS, timeoutSeconds: 300, memory: '512MB' })
+exports.processGemScanner = gemScanFn.pubsub
   .schedule('every 5 minutes')
   .onRun(async () => {
     const snap = await db.collection('users')
       .where('botSettings.gemAutoEnabled', '==', true)
-      .limit(10).get()
+      .limit(25).get()
 
     if (snap.empty) return null
 
     let tgToken
     try { tgToken = TG_TOKEN() } catch (_) { tgToken = null }
 
+    // Global auto-trade controls (admin kill-switch + default caps) + native USD
+    // prices, fetched once per run for the maxBuyUsd clamp.
+    const cfg = await payments.billingConfig(db)
+    const autoTradeOn = cfg.autoTrade.globalEnabled !== false
+    let nativePx = {}
+    if (autoTradeOn) {
+      try {
+        const axios = require('axios')
+        const { data } = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=binancecoin,ethereum,solana&vs_currencies=usd', { timeout: 10000 })
+        nativePx = { bsc: data.binancecoin?.usd || 0, eth: data.ethereum?.usd || 0, base: data.ethereum?.usd || 0, sol: data.solana?.usd || 0 }
+      } catch (_) { /* clamp simply won't apply without prices */ }
+    }
+
     await Promise.allSettled(snap.docs.map(async (userDoc) => {
       const uid      = userDoc.id
       const settings = userDoc.data().botSettings || {}
+      const flags    = userDoc.data().featureFlags || {}
+      const limits   = userDoc.data().userLimits || {}
       const wallets  = settings.wallets || {}
       const chatId   = settings.telegramChatId
+      const paperMode = userDoc.data().paperMode === true
+      const userPlan = ['free', 'pro', 'elite'].includes(userDoc.data().plan) ? userDoc.data().plan : 'free'
 
       if (!chatId || !tgToken) return
 
+      // Always scan every supported chain unless the owner explicitly narrowed it.
       const chains = (settings.gemChains || ['bsc', 'eth', 'sol', 'base']).filter(c => VALID_CHAINS.has(c))
       if (!chains.length) return
 
@@ -979,11 +1052,23 @@ exports.processGemScanner = fn.pubsub
           gems, settings, bot, chatId, db, uid
         )
 
-        // Auto-buy if enabled
-        if (settings.gemAutoBuy && sentCount > 0) {
+        // Auto-buy if enabled — gated by the admin global kill-switch and the
+        // per-user autoExecute feature flag.
+        if (settings.gemAutoBuy && sentCount > 0 && autoTradeOn && flags.autoExecute !== false) {
+          // Daily auto-trade cap: per-user override else admin default (0 = off).
+          const dailyCap = (limits.dailyTradeCap != null ? limits.dailyTradeCap : cfg.autoTrade.defaultDailyTradeCap) || 0
+          const maxBuyUsd = (limits.maxBuyUsd != null ? limits.maxBuyUsd : cfg.autoTrade.defaultMaxBuyUsd) || 0
+          // Daily cap counts ALL automated trades — auto-buys AND automated exits.
+          const autoTodayStart = dailyCap > 0 ? await positions.autoTradesToday(db, uid) : 0
+          let autoToday = autoTodayStart
           for (const gem of gems.slice(0, 3)) {
+            if (dailyCap > 0 && autoToday >= dailyCap) break
             if (gem.gemScore < (settings.gemMinScore || 60)) continue
-            if (!wallets[gem.chain]?.encryptedKey) continue
+            // Paper mode needs no wallet — that's the free-user unlock.
+            if (!paperMode && !wallets[gem.chain]?.encryptedKey) continue
+            // REAL auto-execution is a paid feature; Free users get the full
+            // loop in paper mode only (plan repackaging, roadmap 4.3).
+            if (!paperMode && userPlan === 'free') continue
 
             const alertSnap = await db.collection(`users/${uid}/gemAlerts`)
               .where('tokenAddress', '==', gem.tokenAddress)
@@ -993,13 +1078,44 @@ exports.processGemScanner = fn.pubsub
 
             if (!alertSnap.empty) continue
 
-            const buyAmount = gem.chain === 'bsc'
-              ? (settings.gemBuyAmountBsc || 0.005)
+            let buyAmount = gem.chain === 'bsc' ? (settings.gemBuyAmountBsc || 0.005)
+              : (gem.chain === 'eth' || gem.chain === 'base') ? (settings.gemBuyAmountEth || 0.01)
               : (settings.gemBuyAmountSol || 0.05)
+            // Clamp to the max USD buy size when a native price is available.
+            const px = nativePx[gem.chain] || 0
+            if (maxBuyUsd > 0 && px > 0 && buyAmount * px > maxBuyUsd) buyAmount = +(maxBuyUsd / px).toFixed(6)
+
+            // ── PAPER MODE: record a simulated fill at the gem's live price —
+            // never touches the wallet or chain. Exit defaults still arm, so the
+            // exit monitor simulates the full round trip.
+            if (paperMode) {
+              if (!(gem.priceUsd > 0)) continue
+              const exitDefaults = positions.normalizeExit({
+                tp: settings.gemExitTp, sl: settings.gemExitSl,
+                trail: settings.gemExitTrail, maxHoldHours: settings.gemExitMaxHold,
+              })
+              await db.collection(`users/${uid}/trades`).add({
+                chain: gem.chain, tokenAddress: gem.tokenAddress,
+                tokenName: gem.tokenName, tokenSymbol: gem.tokenSymbol,
+                type: 'buy', amountIn: String(buyAmount), paper: true,
+                txHash: null, status: 'paper', source: 'gem-auto',
+                gemScore: gem.gemScore, entryPriceUsd: gem.priceUsd,
+                exit: exitDefaults,
+                timestamp: admin.firestore.FieldValue.serverTimestamp(),
+              })
+              const alertDocs = await db.collection(`users/${uid}/gemAlerts`)
+                .where('tokenAddress', '==', gem.tokenAddress).where('chain', '==', gem.chain).limit(1).get()
+              if (!alertDocs.empty) await alertDocs.docs[0].ref.set({ autoBought: true }, { merge: true }).catch(() => {})
+              await bot.sendMessage(chatId,
+                `📝 PAPER · *Auto-bought ${gem.tokenSymbol}* (simulated)\n\nScore: ${gem.gemScore}/100\nSize: ${buyAmount} ${gem.chain === 'bsc' ? 'BNB' : (gem.chain === 'eth' || gem.chain === 'base') ? 'ETH' : 'SOL'} @ $${gem.priceUsd}\nTrack it in Portfolio.`,
+                { parse_mode: 'Markdown' }).catch(() => {})
+              await notify.send(db, admin, uid, { category: 'gems', title: `📝 PAPER · Auto-bought ${gem.tokenSymbol}`, body: `Simulated buy · score ${gem.gemScore}/100 · track it in Portfolio`, link: '/?goto=portfolio', tag: 'gembuy-' + gem.tokenAddress })
+              continue
+            }
 
             try {
               const pk   = encryption.decrypt(wallets[gem.chain].encryptedKey, uid, MASTER_SECRET())
-              const slip = Math.min(settings.defaultSlippage || 10, 50)
+              const slip = Math.min(settings.gemBuySlippage || settings.defaultSlippage || 10, 50)
               const gasX = settings.defaultGasMultiplier || 1.2
 
               if (gem.chain === 'sol') {
@@ -1014,7 +1130,16 @@ exports.processGemScanner = fn.pubsub
               }
 
               const result = await trader.buyTokenEVM(gem.chain, pk, gem.tokenAddress, buyAmount, slip, settings[gem.chain + 'Rpc'], gasX)
+              autoToday++
+              await metering.track(db, uid, { autoBuys: 1 })
 
+              // Exit defaults from the user's gem settings ride on the trade doc;
+              // the onTradeCreated trigger arms them on the resulting position so
+              // the bot manages the whole round trip, not just the entry.
+              const exitDefaults = positions.normalizeExit({
+                tp: settings.gemExitTp, sl: settings.gemExitSl,
+                trail: settings.gemExitTrail, maxHoldHours: settings.gemExitMaxHold,
+              })
               await db.collection(`users/${uid}/trades`).add({
                 chain:        gem.chain,
                 tokenAddress: gem.tokenAddress,
@@ -1026,6 +1151,7 @@ exports.processGemScanner = fn.pubsub
                 status:       result.status,
                 source:       'gem-auto',
                 gemScore:     gem.gemScore,
+                exit:         exitDefaults,
                 timestamp:    admin.firestore.FieldValue.serverTimestamp(),
               })
 
@@ -1046,11 +1172,12 @@ exports.processGemScanner = fn.pubsub
               await bot.sendMessage(chatId,
                 `🤖 *Auto-Bought ${gem.tokenSymbol}!*\n\n` +
                 `Score: ${gem.gemScore}/100\n` +
-                `Amount: ${buyAmount} ${gem.chain === 'bsc' ? 'BNB' : 'SOL'}\n` +
+                `Amount: ${buyAmount} ${gem.chain === 'bsc' ? 'BNB' : (gem.chain === 'eth' || gem.chain === 'base') ? 'ETH' : 'SOL'}\n` +
                 `Status: ${result.status}\n` +
                 `[View TX](${txUrl})`,
                 { parse_mode: 'Markdown', disable_web_page_preview: true }
               ).catch(() => {})
+              await notify.send(db, admin, uid, { category: 'gems', title: `🤖 Auto-bought ${gem.tokenSymbol}`, body: `Score ${gem.gemScore}/100 · ${buyAmount} ${gem.chain === 'bsc' ? 'BNB' : (gem.chain === 'eth' || gem.chain === 'base') ? 'ETH' : 'SOL'} · exits armed`, link: '/?goto=portfolio', tag: 'gembuy-' + gem.tokenAddress })
 
             } catch (buyErr) {
               console.error(`Gem auto-buy failed for ${gem.tokenSymbol}:`, buyErr.message)
@@ -1068,6 +1195,442 @@ exports.processGemScanner = fn.pubsub
 
     return null
   })
+
+// ── Position bookkeeping (Firestore trigger) ──────────────────────────────
+// Every trade doc (manual, Pointer-approved, gem auto-buy, exit sell, sniper)
+// folds into users/{uid}/positions — quantities, avg entry, realized PnL.
+// Trade docs may carry an `exit` map (gem auto-buy defaults) which arms rules.
+exports.onTradeCreated = functions.region('europe-west1')
+  .runWith({ timeoutSeconds: 60 })
+  .firestore.document('users/{uid}/trades/{tradeId}')
+  .onCreate(async (snap, context) => {
+    try { await positions.applyTrade(db, context.params.uid, snap.data()) }
+    catch (e) { console.error('position bookkeeping failed:', e.message) }
+    return null
+  })
+
+// ── Exit Monitor (runs every minute) ──────────────────────────────────────
+// Prices every armed position and executes TP / SL / trailing / max-hold sells
+// from the user's bot wallet. Same guardrails as auto-buy: admin kill-switch,
+// per-user autoExecute flag, daily automated-trade cap.
+exports.processExitMonitor = gemScanFn.pubsub
+  .schedule('every 1 minutes')
+  .onRun(async () => {
+    let tgToken = null
+    try { tgToken = TG_TOKEN() } catch (_) {}
+    const cfg = await payments.billingConfig(db)
+    const res = await positions.runExitMonitor({
+      db, admin, trader, encryption,
+      masterSecret: MASTER_SECRET(), tgToken, cfg,
+      heliusKey: SECRET_HELIUS.value() || null,
+      notify: (uid, msg) => notify.send(db, admin, uid, msg),
+    })
+    if (res.sold) console.log(`exit monitor: sold ${res.sold} of ${res.checked} armed positions`)
+    return null
+  })
+
+// ── Price Alerts ───────────────────────────────────────────────────────────
+// Alerts live at users/{uid}/priceAlerts (created ONLY via this callable so
+// plan caps are server-enforced; clients may read/delete per rules).
+const PRICE_ALERT_QUOTA = { free: 5, pro: 25, elite: 100 }
+exports.savePriceAlert = functions.region('europe-west1').runWith({ timeoutSeconds: 30 }).https.onCall(async (data, context) => {
+  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
+  const uid = context.auth.uid
+  const kind = ['above', 'below', 'move'].includes(data?.kind) ? data.kind : null
+  const value = parseFloat(data?.value)
+  const id = data?.id ? String(data.id) : null
+  const on = data?.on !== false
+
+  // Toggling an existing alert (id + on only) skips re-validation of the token.
+  const ref = id ? db.doc(`users/${uid}/priceAlerts/${id}`) : db.collection(`users/${uid}/priceAlerts`).doc()
+  let existing = null
+  if (id) {
+    const s = await ref.get()
+    if (!s.exists) throw new functions.https.HttpsError('not-found', 'Alert not found')
+    existing = s.data()
+  }
+
+  // Cap check whenever the result is an ACTIVE alert (create or re-enable).
+  if (on) {
+    const uSnap = await db.doc(`users/${uid}`).get()
+    const d = uSnap.exists ? uSnap.data() : {}
+    const plan = ['free', 'pro', 'elite'].includes(d.plan) ? d.plan : 'free'
+    const ovr = parseInt((d.userLimits || {}).priceAlertQuota)
+    const quota = Number.isFinite(ovr) ? ovr : PRICE_ALERT_QUOTA[plan]
+    const activeSnap = await db.collection(`users/${uid}/priceAlerts`).where('on', '==', true).get()
+    const activeOthers = activeSnap.docs.filter((x) => x.id !== ref.id).length
+    if (activeOthers >= quota) {
+      throw new functions.https.HttpsError('resource-exhausted',
+        `Your plan allows ${quota} active alerts. Disable one or upgrade for more.`,
+        { code: 'quota_exhausted', quota })
+    }
+  }
+
+  if (existing && data.kind === undefined && data.value === undefined) {
+    // pure toggle
+    await ref.set({ on }, { merge: true })
+    return { id: ref.id, ...existing, on }
+  }
+
+  if (!kind || !Number.isFinite(value) || value <= 0) throw new functions.https.HttpsError('invalid-argument', 'kind (above/below/move) and a positive value are required')
+  const cg = data.cg ? String(data.cg).slice(0, 60) : null
+  const chain = data.chain && VALID_CHAINS.has(data.chain) ? data.chain : null
+  const address = data.address ? String(data.address).trim().slice(0, 80) : null
+  if (!cg && !(chain && address)) throw new functions.https.HttpsError('invalid-argument', 'Pass a CoinGecko id or a chain + contract address')
+
+  // 'move' alerts are relative — pin the base price at creation time.
+  let basePrice = existing?.basePrice || null
+  if (kind === 'move') {
+    if (cg) {
+      try {
+        const axios = require('axios')
+        const { data: px } = await axios.get(`https://api.coingecko.com/api/v3/simple/price?ids=${encodeURIComponent(cg)}&vs_currencies=usd`, { timeout: 10000 })
+        basePrice = px?.[cg]?.usd || null
+      } catch (_) {}
+    } else {
+      const info = await positions.tokenPrice(chain, address)
+      basePrice = info?.priceUsd || null
+    }
+    if (!basePrice) throw new functions.https.HttpsError('failed-precondition', 'No live price for this token — % alerts need one.')
+  }
+
+  const alert = {
+    kind, value, on, cg, chain, address,
+    sym: String(data.sym || '').slice(0, 20), name: String(data.name || '').slice(0, 60),
+    basePrice, fireCount: existing?.fireCount || 0,
+    createdAt: existing?.createdAt || Date.now(), updatedAt: Date.now(),
+  }
+  await ref.set(alert)
+  return { id: ref.id, ...alert }
+})
+
+// Monitor: prices every active alert and fires push + Telegram, then disarms
+// (one-shot). Runs every 2 minutes.
+exports.processPriceAlerts = functions.region('europe-west1')
+  .runWith({ secrets: ALL_SECRETS, timeoutSeconds: 120, memory: '512MB' })
+  .pubsub.schedule('every 2 minutes')
+  .onRun(async () => {
+    const snap = await db.collectionGroup('priceAlerts').where('on', '==', true).limit(500).get()
+    if (snap.empty) return null
+
+    // Batch prices: CoinGecko ids in one call, chain tokens per chain.
+    const axios = require('axios')
+    const cgIds = new Set(), byChain = {}
+    for (const doc of snap.docs) {
+      const a = doc.data()
+      if (a.cg) cgIds.add(a.cg)
+      else if (a.chain && a.address) (byChain[a.chain] = byChain[a.chain] || new Set()).add(a.address.toLowerCase())
+    }
+    let cgPx = {}
+    if (cgIds.size) {
+      try {
+        const { data } = await axios.get(`https://api.coingecko.com/api/v3/simple/price?ids=${encodeURIComponent([...cgIds].join(','))}&vs_currencies=usd`, { timeout: 10000 })
+        cgPx = data || {}
+      } catch (_) {}
+    }
+    const chainPx = {}
+    for (const [chain, set] of Object.entries(byChain)) chainPx[chain] = await positions.batchPrices(chain, [...set])
+
+    let tgToken = null
+    try { tgToken = TG_TOKEN() } catch (_) {}
+    const bot = tgToken ? tg.createBot(tgToken) : null
+
+    for (const doc of snap.docs) {
+      const a = doc.data()
+      const px = a.cg ? (cgPx[a.cg] && cgPx[a.cg].usd) : (chainPx[a.chain] || {})[String(a.address || '').toLowerCase()]
+      if (!px) continue
+      let fired = null
+      if (a.kind === 'above' && px >= a.value) fired = `${a.sym || 'Token'} is above $${a.value}`
+      else if (a.kind === 'below' && px <= a.value) fired = `${a.sym || 'Token'} is below $${a.value}`
+      else if (a.kind === 'move' && a.basePrice > 0) {
+        const movePct = ((px - a.basePrice) / a.basePrice) * 100
+        if (Math.abs(movePct) >= a.value) fired = `${a.sym || 'Token'} moved ${movePct >= 0 ? '+' : ''}${movePct.toFixed(1)}% since you set the alert`
+      }
+      if (!fired) continue
+
+      const uid = doc.ref.parent.parent.id
+      await doc.ref.set({ on: false, firedAt: Date.now(), firedPriceUsd: px, fireCount: (a.fireCount || 0) + 1 }, { merge: true }).catch(() => {})
+      await notify.send(db, admin, uid, {
+        category: 'alerts', title: `🔔 ${fired}`,
+        body: `Now $${px < 1 ? px.toPrecision(4) : px.toLocaleString()}`,
+        link: '/?goto=alerts', tag: 'alert-' + doc.id,
+      })
+      if (bot) {
+        try {
+          const uSnap = await db.doc(`users/${uid}`).get()
+          const chatId = uSnap.exists && (uSnap.data().botSettings || {}).telegramChatId
+          if (chatId) await bot.sendMessage(chatId, `🔔 *Price alert* — ${fired}\nNow $${px < 1 ? px.toPrecision(4) : px.toLocaleString()}`, { parse_mode: 'Markdown' }).catch(() => {})
+        } catch (_) {}
+      }
+    }
+    return null
+  })
+
+// ── Copy Trading Monitor (runs every 2 minutes) ────────────────────────────
+// Detects fresh DEX buys by followed wallets (Moralis EVM / Helius SOL),
+// safety-checks them, alerts followers, and auto-copies for Elite (or paper)
+// users through the same guardrails as gem auto-buy.
+exports.processCopyTrading = gemScanFn.pubsub
+  .schedule('every 2 minutes')
+  .onRun(async () => {
+    const cfg = await payments.billingConfig(db)
+    // Native USD prices once per run for the maxBuyUsd clamp.
+    let nativePx = {}
+    try {
+      const axios = require('axios')
+      const { data } = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=binancecoin,ethereum,solana&vs_currencies=usd', { timeout: 10000 })
+      nativePx = { bsc: data.binancecoin?.usd || 0, eth: data.ethereum?.usd || 0, base: data.ethereum?.usd || 0, sol: data.solana?.usd || 0 }
+    } catch (_) {}
+    const res = await copytrader.runCopyMonitor({
+      db, admin, trader, encryption,
+      masterSecret: MASTER_SECRET(), cfg, nativePx,
+      keys: { moralisKey: SECRET_MORALIS.value() || null, heliusKey: SECRET_HELIUS.value() || null },
+      notify: (uid, msg) => notify.send(db, admin, uid, msg),
+    })
+    if (res.buys) console.log(`copy monitor: ${res.buys} fresh buys across ${res.wallets} wallets`)
+    return null
+  })
+
+// Feed + leaderboard for the Copy Trading screen (copyWallets is server-only).
+const copyFn = functions.region('europe-west1').runWith({ timeoutSeconds: 60 })
+exports.getCopyFeed = copyFn.https.onCall(async (data, context) => {
+  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
+  return { items: await copytrader.feed(db, context.auth.uid) }
+})
+exports.getCopyLeaderboard = copyFn.https.onCall(async (data, context) => {
+  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
+  const uid = context.auth.uid
+  const snap = await db.doc(`users/${uid}`).get()
+  const d = snap.exists ? snap.data() : {}
+  const plan = ['free', 'pro', 'elite'].includes(d.plan) ? d.plan : 'free'
+  // Leaderboard is the Elite flagship view; others get a locked marker.
+  if (plan !== 'elite') return { locked: true, wallets: [] }
+  return { locked: false, wallets: await copytrader.leaderboard(db, uid) }
+})
+
+// ── Pointer Watch-Tasks (runs every 5 minutes) ─────────────────────────────
+// Standing "watch X and ping me" orders created by the Pointer agent
+// (create_watch_task). When a task's STRUCTURED price condition fires, run a
+// metered Pointer analysis, save it as a chat session, and push a deep link.
+// Free text from the owner rides along only as user-role content — conditions
+// themselves are structured fields (prompt-injection boundary).
+exports.processPointerTasks = functions.region('europe-west1')
+  .runWith({ secrets: [...ALL_SECRETS, SECRET_DEEPSEEK, SECRET_OPENAI], timeoutSeconds: 300, memory: '512MB' })
+  .pubsub.schedule('every 5 minutes')
+  .onRun(async () => {
+    const snap = await db.collectionGroup('pointerTasks').where('status', '==', 'armed').limit(200).get()
+    if (snap.empty) return null
+
+    // Batch prices (same sources as price alerts).
+    const axios = require('axios')
+    const cgIds = new Set(), byChain = {}
+    for (const doc of snap.docs) {
+      const t = doc.data()
+      if (t.cg) cgIds.add(t.cg)
+      else if (t.chain && t.address) (byChain[t.chain] = byChain[t.chain] || new Set()).add(t.address.toLowerCase())
+    }
+    let cgPx = {}
+    if (cgIds.size) {
+      try {
+        const { data } = await axios.get(`https://api.coingecko.com/api/v3/simple/price?ids=${encodeURIComponent([...cgIds].join(','))}&vs_currencies=usd`, { timeout: 10000 })
+        cgPx = data || {}
+      } catch (_) {}
+    }
+    const chainPx = {}
+    for (const [chain, set] of Object.entries(byChain)) chainPx[chain] = await positions.batchPrices(chain, [...set])
+
+    const cfg = await payments.billingConfig(db)
+    const prov = cfg.raw.aiProvider === 'openai' ? 'openai' : 'deepseek'
+    const apiKey = prov === 'openai' ? SECRET_OPENAI.value() : SECRET_DEEPSEEK.value()
+
+    for (const doc of snap.docs) {
+      const t = doc.data()
+      const px = t.cg ? (cgPx[t.cg] && cgPx[t.cg].usd) : (chainPx[t.chain] || {})[String(t.address || '').toLowerCase()]
+      if (!px) continue
+      let fired = null
+      if (t.cond === 'above' && px >= t.value) fired = `broke above $${t.value}`
+      else if (t.cond === 'below' && px <= t.value) fired = `dropped below $${t.value}`
+      else if (t.cond === 'move' && t.basePrice > 0) {
+        const movePct = ((px - t.basePrice) / t.basePrice) * 100
+        if (Math.abs(movePct) >= t.value) fired = `moved ${movePct >= 0 ? '+' : ''}${movePct.toFixed(1)}% (from $${t.basePrice})`
+      }
+      if (!fired) continue
+
+      const uid = doc.ref.parent.parent.id
+      // Disarm FIRST so a crash mid-analysis can't re-fire the task every tick.
+      await doc.ref.set({ status: 'fired', firedAt: Date.now(), firedPriceUsd: px }, { merge: true }).catch(() => {})
+
+      // Meter the run like any Pointer request; out of quota → pause + notify.
+      const uSnap = await db.doc(`users/${uid}`).get()
+      const uDoc = uSnap.exists ? uSnap.data() : {}
+      const plan = ['free', 'pro', 'elite'].includes(uDoc.plan) ? uDoc.plan : 'free'
+      let spent
+      try {
+        spent = await metering.consume(db, uid, { kind: 'pointer', plan, cfg, count: 1, flagKey: 'pointer' })
+      } catch (e) {
+        await doc.ref.set({ status: 'quota-paused' }, { merge: true }).catch(() => {})
+        await notify.send(db, admin, uid, { category: 'tasks', title: `⏸ Watch-task paused — ${t.sym} ${fired}`, body: 'The condition fired but you\'re out of Pointer requests. Add credits to run the analysis.', link: '/?goto=chat', tag: 'task-' + doc.id })
+        continue
+      }
+
+      // Structured, server-built prompt; the owner's note rides along quoted as
+      // their own words (user-role), never as system instructions.
+      const prompt = `[Automated watch-task fired] ${t.sym} (${t.name || t.sym}) just ${fired} — it now trades at $${px}.` +
+        (t.note ? ` When setting this task the owner said: "${t.note.replace(/"/g, "'")}".` : '') +
+        ` Give a brief, timely analysis: what likely drove the move (use your tools — market movers, token info, safety if on-chain), where key levels sit now, and a clear recommendation (hold / take profit / cut / wait). Keep it tight.`
+
+      try {
+        if (!apiKey) throw new Error('No AI provider key configured')
+        const { text } = await agentLib.runAgent({
+          prompt, history: [], provider: prov, apiKey, surface: 'pointer',
+          ctx: { uid, db, admin, trader, gemscanner, encryption, masterSecret: MASTER_SECRET(), heliusKey: SECRET_HELIUS.value() || null, moralisKey: SECRET_MORALIS.value() || null },
+        })
+        // Save as a chat session so the push deep-links into a real conversation.
+        const chatRef = db.collection(`users/${uid}/pointerChats`).doc()
+        await chatRef.set({
+          title: `⚡ ${t.sym} ${t.cond === 'move' ? '±' + t.value + '%' : (t.cond === 'above' ? '>' : '<') + '$' + t.value} fired`,
+          messages: [
+            { role: 'user', text: `Watch-task: ${t.sym} ${fired} (now $${px})`, proposal: null, token: null },
+            { role: 'ai', text: text || 'Analysis unavailable.', proposal: null, token: t.sym || null },
+          ],
+          updatedAt: Date.now(),
+        })
+        await doc.ref.set({ chatId: chatRef.id }, { merge: true }).catch(() => {})
+        await metering.track(db, uid, { pointerReqs: 1, taskRuns: 1 })
+        await notify.send(db, admin, uid, {
+          category: 'tasks', title: `⚡ ${t.sym} ${fired}`,
+          body: String(text || '').slice(0, 140) || 'Pointer analyzed the move — open to read.',
+          link: '/?goto=chat&session=' + chatRef.id, tag: 'task-' + doc.id,
+        })
+      } catch (e) {
+        // Analysis failed — refund the metered unit and still notify the raw event.
+        await metering.refund(db, uid, { kind: 'pointer', ...spent })
+        await notify.send(db, admin, uid, { category: 'tasks', title: `⚡ ${t.sym} ${fired}`, body: `Now $${px}. (Pointer analysis failed: ${String(e.message).slice(0, 80)})`, link: '/?goto=chat', tag: 'task-' + doc.id })
+      }
+    }
+    return null
+  })
+
+// ── Daily Digest (runs hourly; sends to users whose chosen hour matches) ───
+// Opt-in via users/{uid}.digest = { enabled, hourUtc }. One metered Pointer
+// run composes the digest from STRUCTURED data gathered here; it lands as a
+// push + Telegram message and a saved chat session. Failures skip the day
+// silently — a broken digest never error-spams the user.
+exports.processDailyDigest = functions.region('europe-west1')
+  .runWith({ secrets: [...ALL_SECRETS, SECRET_DEEPSEEK, SECRET_OPENAI], timeoutSeconds: 540, memory: '512MB' })
+  .pubsub.schedule('every 1 hours')
+  .onRun(async () => {
+    const hour = new Date().getUTCHours()
+    const snap = await db.collection('users')
+      .where('digest.enabled', '==', true)
+      .where('digest.hourUtc', '==', hour)
+      .limit(100).get()
+    if (snap.empty) return null
+
+    const cfg = await payments.billingConfig(db)
+    const prov = cfg.raw.aiProvider === 'openai' ? 'openai' : 'deepseek'
+    const apiKey = prov === 'openai' ? SECRET_OPENAI.value() : SECRET_DEEPSEEK.value()
+    if (!apiKey) return null
+    const axios = require('axios')
+
+    for (const userDoc of snap.docs) {
+      const uid = userDoc.id
+      const d = userDoc.data()
+      try {
+        // Once per day, even across scheduler retries/restarts.
+        if (d.digest.lastSentAt && Date.now() - d.digest.lastSentAt < 20 * 3600000) continue
+        const plan = ['free', 'pro', 'elite'].includes(d.plan) ? d.plan : 'free'
+
+        // ── Gather structured facts (never free text from external sources) ──
+        const facts = []
+        // Open positions with live prices.
+        const posSnap = await db.collection(`users/${uid}/positions`).where('status', '==', 'open').limit(50).get().catch(() => null)
+        const paperMode = d.paperMode === true
+        const open = posSnap ? posSnap.docs.map((x) => x.data()).filter((p) => !!p.paper === paperMode) : []
+        if (open.length) {
+          const byChain = {}
+          for (const p of open) (byChain[p.chain] = byChain[p.chain] || new Set()).add(String(p.tokenAddress).toLowerCase())
+          const px = {}
+          for (const [chain, set] of Object.entries(byChain)) px[chain] = await positions.batchPrices(chain, [...set])
+          const rows = open.map((p) => {
+            const cur = (px[p.chain] || {})[String(p.tokenAddress).toLowerCase()] || p.lastPriceUsd || 0
+            const pnl = cur && p.avgEntryUsd ? ((cur / p.avgEntryUsd - 1) * 100) : null
+            return { sym: p.tokenSymbol, pnlPct: pnl != null ? +pnl.toFixed(1) : null, exitArmed: !!p.exitArmed }
+          }).sort((a, b) => Math.abs(b.pnlPct || 0) - Math.abs(a.pnlPct || 0))
+          facts.push(`Open positions (${paperMode ? 'PAPER' : 'live'}): ` + rows.slice(0, 5).map((r) => `${r.sym} ${r.pnlPct != null ? (r.pnlPct >= 0 ? '+' : '') + r.pnlPct + '%' : 'n/a'}${r.exitArmed ? ' (exits armed)' : ''}`).join(', '))
+        } else facts.push('No open positions.')
+        // Signals from the last 24h.
+        const sigSnap = await db.collection(`users/${uid}/signals`).where('generatedAt', '>', Date.now() - 86400000).limit(10).get().catch(() => null)
+        if (sigSnap && sigSnap.size) {
+          const best = sigSnap.docs.map((x) => x.data()).sort((a, b) => (b.confidence || 0) - (a.confidence || 0))[0]
+          facts.push(`${sigSnap.size} signal(s) in the last 24h; strongest: ${String(best.bias || '').toUpperCase()} ${best.symbol} @ ${best.confidence}%`)
+        }
+        // Top watchlist movers (CoinGecko coins only — cheap single call).
+        const wSnap = await db.collection(`users/${uid}/watchlist`).limit(30).get().catch(() => null)
+        const cgIds = wSnap ? wSnap.docs.map((x) => x.data().cg).filter(Boolean).slice(0, 25) : []
+        if (cgIds.length) {
+          try {
+            const { data } = await axios.get(`https://api.coingecko.com/api/v3/simple/price?ids=${encodeURIComponent(cgIds.join(','))}&vs_currencies=usd&include_24hr_change=true`, { timeout: 10000 })
+            const movers = Object.entries(data || {}).map(([id, v]) => ({ id, ch: v.usd_24h_change || 0 })).sort((a, b) => Math.abs(b.ch) - Math.abs(a.ch)).slice(0, 3)
+            if (movers.length) facts.push('Watchlist movers 24h: ' + movers.map((m) => `${m.id} ${m.ch >= 0 ? '+' : ''}${m.ch.toFixed(1)}%`).join(', '))
+          } catch (_) {}
+        }
+
+        // One metered, non-deep Pointer run. Out of quota → skip silently.
+        let spent
+        try { spent = await metering.consume(db, uid, { kind: 'pointer', plan, cfg, count: 1, flagKey: 'pointer' }) }
+        catch (_) { continue }
+
+        try {
+          const prompt = `[Automated daily digest] Compose the owner's morning crypto digest from these facts about their account:\n- ${facts.join('\n- ')}\nAdd one line of overall market context (you may use ONE tool call for market movers if helpful). Format: short, warm, mobile-friendly markdown — 4-6 lines max, lead with their portfolio. End with one actionable suggestion.`
+          const { text } = await agentLib.runAgent({
+            prompt, history: [], provider: prov, apiKey, surface: 'pointer',
+            ctx: { uid, db, admin, trader, gemscanner, encryption, masterSecret: MASTER_SECRET(), heliusKey: SECRET_HELIUS.value() || null, moralisKey: SECRET_MORALIS.value() || null },
+          })
+          const chatRef = db.collection(`users/${uid}/pointerChats`).doc()
+          const dayStr = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+          await chatRef.set({
+            title: `🌅 Daily digest — ${dayStr}`,
+            messages: [{ role: 'ai', text: text || 'Digest unavailable today.', proposal: null, token: null }],
+            updatedAt: Date.now(),
+          })
+          await db.doc(`users/${uid}`).set({ digest: { ...d.digest, lastSentAt: Date.now() } }, { merge: true })
+          await metering.track(db, uid, { pointerReqs: 1, digests: 1 })
+          await notify.send(db, admin, uid, {
+            category: 'system', title: `🌅 Your daily digest`,
+            body: String(text || '').replace(/[*_#`]/g, '').slice(0, 140),
+            link: '/?goto=chat&session=' + chatRef.id, tag: 'digest',
+          })
+          const chatId = (d.botSettings || {}).telegramChatId
+          let tgToken = null
+          try { tgToken = TG_TOKEN() } catch (_) {}
+          if (chatId && tgToken) await tg.createBot(tgToken).sendMessage(chatId, `🌅 *Daily digest*\n\n${text}`, { parse_mode: 'Markdown' }).catch(() => {})
+        } catch (e) {
+          await metering.refund(db, uid, { kind: 'pointer', ...spent })
+          console.warn(`digest failed for ${uid}: ${e.message}`) // silent for the user by design
+        }
+      } catch (e) { console.warn(`digest loop error for ${uid}: ${e.message}`) }
+    }
+    return null
+  })
+
+// ── Signal Outcome Tracker (runs every 30 minutes) ────────────────────────
+// Resolves every published signal against its SL/TP levels using exchange
+// candles and rolls outcomes into signalStats/{day} — the public track record.
+exports.processSignalOutcomes = functions.region('europe-west1')
+  .runWith({ timeoutSeconds: 300, memory: '512MB' })
+  .pubsub.schedule('every 30 minutes')
+  .onRun(async () => {
+    const res = await signalTracker.resolveSignals(db, admin)
+    if (res.resolved) console.log(`signal outcomes: resolved ${res.resolved} of ${res.checked} recent signals`)
+    return null
+  })
+
+// Public (authed) track-record aggregates for the Signals screen + paywall.
+exports.getSignalStats = functions.region('europe-west1').runWith({ timeoutSeconds: 60 }).https.onCall(async (data, context) => {
+  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
+  return signalTracker.readStats(db)
+})
 
 // ── Snipe Queue Processor (runs every 1 minute) ───────────────────────────
 exports.processSnipeQueue = fn.pubsub
@@ -1524,6 +2087,17 @@ exports.processAgentScans = functions
         { merge: true }
       )
 
+      // One summary push per scan (not one per signal — that would spam).
+      if (newSignals.length > 0) {
+        const first = newSignals[0]
+        await notify.send(db, admin, uid, {
+          category: 'signals',
+          title: `📡 ${newSignals.length} new signal${newSignals.length > 1 ? 's' : ''}`,
+          body: `${first.bias.toUpperCase()} ${first.symbol} · ${first.confidence}%${newSignals.length > 1 ? ` + ${newSignals.length - 1} more` : ''}`,
+          link: '/?goto=signals', tag: 'signals-scan',
+        })
+      }
+
       // Send Telegram signals
       if (chatId && tgToken && agentSettings.telegramSignals !== false && newSignals.length > 0) {
         const bot = tg.createBot(tgToken)
@@ -1814,24 +2388,67 @@ exports.chatPointer = functions
       ? data.history.slice(-12).filter((h) => h && (h.role === 'user' || h.role === 'assistant') && typeof h.content === 'string').map((h) => ({ role: h.role, content: h.content }))
       : []
 
+    // Deep-research toggle → run the admin provider's top-tier model with more
+    // reasoning headroom for harder questions.
+    const deep = data?.deep === true
+
+    // Load billing config + the user's plan for metering and model selection.
+    const cfg = await payments.billingConfig(db)
+    const userSnap = await db.doc(`users/${uid}`).get()
+    const userDoc = userSnap.exists ? userSnap.data() : {}
+    const plan = ['free', 'pro', 'elite'].includes(userDoc.plan) ? userDoc.plan : 'free'
+
+    // Deep research requires its own feature flag (in addition to `pointer`)
+    // AND a paid plan (roadmap 4.3 — the flag stays as the admin kill-switch).
+    if (deep && !metering.flagEnabled(userDoc, 'deepResearch')) {
+      throw new functions.https.HttpsError('permission-denied', 'Deep research is disabled on your account.')
+    }
+    if (deep && plan === 'free') {
+      throw new functions.https.HttpsError('permission-denied', 'Deep research uses our most capable model and is a Pro feature — upgrade to unlock it.')
+    }
+
+    // Meter the request: consume 1 unit of the monthly Pointer allowance (then
+    // credits). Blocks when the feature is disabled or the quota is exhausted.
+    let spent
+    try {
+      spent = await metering.consume(db, uid, { kind: 'pointer', plan, cfg, count: 1, flagKey: 'pointer' })
+    } catch (e) {
+      if (e.kind === 'feature-disabled') throw new functions.https.HttpsError('permission-denied', 'Pointer is disabled on your account. Contact support.')
+      if (e.kind === 'quota-exhausted') {
+        const i = e.info || {}
+        const pack = cfg.creditPack || { usd: 10, credits: 50 }
+        const err = new functions.https.HttpsError('resource-exhausted',
+          `You've used all ${i.quota} Pointer requests for this period. Buy ${pack.credits} more credits for $${pack.usd}, upgrade your plan, or wait until your allowance resets.`,
+          { code: 'quota_exhausted', quota: i.quota, used: i.used, credits: i.credits, resetsAt: i.resetsAt, pack })
+        throw err
+      }
+      throw new functions.https.HttpsError('internal', 'Usage check failed. Try again.')
+    }
+
     // Provider/model is chosen centrally by the admin (config/billing.aiProvider).
     // Users no longer switch models in-app; the client request can't override it.
-    let prov = 'deepseek'
-    try {
-      const cfgSnap = await db.doc('config/billing').get()
-      if (cfgSnap.exists && cfgSnap.data().aiProvider === 'openai') prov = 'openai'
-    } catch (_) { /* default deepseek */ }
+    // The admin may optionally pin the deep-research model via config/billing.aiDeepModel.
+    let prov = cfg.raw.aiProvider === 'openai' ? 'openai' : 'deepseek'
+    let deepModel = cfg.raw.aiDeepModel ? String(cfg.raw.aiDeepModel) : null
     const apiKey = prov === 'openai' ? SECRET_OPENAI.value() : SECRET_DEEPSEEK.value()
-    if (!apiKey) throw new functions.https.HttpsError('failed-precondition', `No API key configured for ${prov === 'openai' ? 'ChatGPT' : 'DeepSeek'}`)
+    if (!apiKey) {
+      await metering.refund(db, uid, { kind: 'pointer', ...spent })
+      throw new functions.https.HttpsError('failed-precondition', `No API key configured for ${prov === 'openai' ? 'ChatGPT' : 'DeepSeek'}`)
+    }
 
     const ctx = {
       uid, db, admin, trader, gemscanner, encryption,
       masterSecret: MASTER_SECRET(), heliusKey: SECRET_HELIUS.value() || null, moralisKey: SECRET_MORALIS.value() || null,
     }
     try {
-      const { text, proposal, history: newHistory } = await agentLib.runAgent({ prompt, history, ctx, provider: prov, apiKey, surface: 'pointer' })
-      return { text, proposal: proposal || null, history: newHistory, provider: prov }
+      const { text, proposal, history: newHistory, model } = await agentLib.runAgent({ prompt, history, ctx, provider: prov, apiKey, surface: 'pointer', deep, deepModel })
+      await metering.track(db, uid, { pointerReqs: 1, ...(deep ? { deepReqs: 1 } : {}) })
+      const usage = { used: spent.used, remaining: spent.remaining, credits: spent.credits, quota: spent.quota, resetsAt: spent.resetsAt }
+      return { text, proposal: proposal || null, history: newHistory, provider: prov, deep, model, usage }
     } catch (e) {
+      // Infra failure — refund the metered unit so a failed call isn't charged.
+      await metering.refund(db, uid, { kind: 'pointer', ...spent })
+      await metering.track(db, uid, { pointerErrors: 1 })
       throw new functions.https.HttpsError('internal', e.message || 'Pointer failed')
     }
   })
@@ -1851,30 +2468,178 @@ exports.createStripeCheckout = billingFn.https.onCall(async (data, context) => {
   const uid = context.auth.uid
   const email = context.auth.token.email || undefined
   const plan = data?.plan === 'elite' ? 'elite' : 'pro'
-  const mode = data?.billing === 'subscription' ? 'subscription' : 'payment'
+  const annual = data?.billing === 'annual'
+  const mode = (data?.billing === 'subscription' || annual) ? 'subscription' : 'payment'
   const key = SECRET_STRIPE.value()
   if (!key || key === 'REPLACE_ME') throw new functions.https.HttpsError('failed-precondition', 'Card payments are not configured yet — please use crypto, or contact support.')
   const stripe = require('stripe')(key)
   const cfg = await payments.billingConfig(db)
+  const planName = plan.charAt(0).toUpperCase() + plan.slice(1)
   let line_items
-  if (mode === 'subscription') {
+  if (annual) {
+    // Annual = 12 months for the price of 10 (inline recurring price — no
+    // Stripe dashboard setup needed). Renews yearly; webhook grants like any
+    // subscription (clearExpiry).
+    const usd = Math.round(cfg.prices[plan] * 10)
+    line_items = [{ price_data: { currency: 'usd', product_data: { name: `FXcrypt ${planName} — Annual (2 months free)` }, recurring: { interval: 'year' }, unit_amount: usd * 100 }, quantity: 1 }]
+  } else if (mode === 'subscription') {
     const priceId = cfg.stripePriceIds[plan === 'elite' ? 'eliteMonthly' : 'proMonthly']
     if (!priceId) throw new functions.https.HttpsError('failed-precondition', 'Subscription pricing not configured (set config/billing.stripePriceIds)')
     line_items = [{ price: priceId, quantity: 1 }]
   } else {
     const usd = cfg.prices[plan]
-    line_items = [{ price_data: { currency: 'usd', product_data: { name: `FXcrypt ${plan.charAt(0).toUpperCase() + plan.slice(1)} — 30 days` }, unit_amount: Math.round(usd * 100) }, quantity: 1 }]
+    line_items = [{ price_data: { currency: 'usd', product_data: { name: `FXcrypt ${planName} — 30 days` }, unit_amount: Math.round(usd * 100) }, quantity: 1 }]
   }
   const base = cfg.frontendUrl.replace(/\/$/, '')
   const session = await stripe.checkout.sessions.create({
     mode, line_items,
     customer_email: email,
     client_reference_id: uid,
-    metadata: { uid, plan, billing: mode },
+    metadata: { uid, plan, billing: annual ? 'annual' : mode },
     success_url: `${base}/?upgrade=success`,
     cancel_url: `${base}/?upgrade=cancel`,
     allow_promotion_codes: true,
     ...(mode === 'subscription' ? { subscription_data: { metadata: { uid, plan } } } : {}),
+  })
+  return { url: session.url, sessionId: session.id }
+})
+
+// ── Pointer usage snapshot (for the in-app usage pill / paywall) ──
+exports.getPointerUsage = plainFn.https.onCall(async (data, context) => {
+  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
+  const uid = context.auth.uid
+  const cfg = await payments.billingConfig(db)
+  const snap = await db.doc(`users/${uid}`).get()
+  const d = snap.exists ? snap.data() : {}
+  const plan = ['free', 'pro', 'elite'].includes(d.plan) ? d.plan : 'free'
+  const u = metering.readUsage(d, plan, cfg, 'pointer')
+  const flags = d.featureFlags || {}
+  return {
+    plan, quota: u.quota, used: u.used, remaining: u.remaining, credits: u.credits, resetsAt: u.resetsAt,
+    pack: cfg.creditPack,
+    flags: { pointer: flags.pointer !== false, deepResearch: flags.deepResearch !== false },
+  }
+})
+
+// ── Paywall conversion funnel (roadmap 4.3) ────────────────────────────────
+// Global daily counters in funnel/{YYYY-MM-DD}: paywallView / checkoutStart
+// (client-reported via this callable) and checkoutComplete (webhook-stamped —
+// completions are never client-reported). Surfaced in adminStats.
+const FUNNEL_EVENTS = new Set(['paywallView', 'checkoutStart'])
+async function bumpFunnel(field) {
+  try {
+    const day = new Date().toISOString().slice(0, 10)
+    await db.doc(`funnel/${day}`).set({ [field]: admin.firestore.FieldValue.increment(1) }, { merge: true })
+  } catch (_) { /* analytics only */ }
+}
+exports.trackFunnel = functions.region('europe-west1').runWith({ timeoutSeconds: 10 }).https.onCall(async (data, context) => {
+  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
+  const ev = String(data?.event || '')
+  if (FUNNEL_EVENTS.has(ev)) await bumpFunnel(ev)
+  return { ok: true }
+})
+
+// ── Referral program ────────────────────────────────────────────────────────
+// Codes are deterministic (FX + first 6 of uid, uppercased) and registered in
+// the server-only `referralCodes/{code}` collection on first read; collisions
+// extend the code with more uid characters. Rewards are paid by
+// payments.processReferralReward from every successful-payment path.
+async function ensureReferralCode(uid) {
+  for (let len = 6; len <= 20; len += 2) {
+    const code = ('FX' + uid.slice(0, len).toUpperCase()).replace(/[^A-Z0-9]/g, '')
+    const ref = db.doc(`referralCodes/${code}`)
+    const snap = await ref.get()
+    if (!snap.exists) { await ref.set({ uid, clicks: 0, createdAt: Date.now() }); return code }
+    if (snap.data().uid === uid) return code
+    // extremely rare prefix collision → try a longer code
+  }
+  throw new Error('Could not allocate a referral code')
+}
+
+exports.getReferralInfo = plainFn.https.onCall(async (data, context) => {
+  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
+  const uid = context.auth.uid
+  const cfg = await payments.billingConfig(db)
+  const code = await ensureReferralCode(uid)
+  const [regSnap, userSnap] = await Promise.all([db.doc(`referralCodes/${code}`).get(), db.doc(`users/${uid}`).get()])
+  const stats = (userSnap.exists && userSnap.data().referralStats) || {}
+  return {
+    code,
+    link: `${cfg.frontendUrl.replace(/\/$/, '')}/?ref=${code}`,
+    rewardCredits: cfg.referral.rewardCredits,
+    enabled: cfg.referral.enabled !== false,
+    stats: {
+      clicks: (regSnap.exists && regSnap.data().clicks) || 0,
+      signups: stats.signups || 0,
+      paid: stats.paid || 0,
+      earnedCredits: stats.earnedCredits || 0,
+    },
+  }
+})
+
+// Public click counter for referral links (?ref=CODE → sendBeacon here).
+// Best-effort by design: no auth, cheap increment, invalid codes are no-ops.
+exports.refClick = functions.region('europe-west1').runWith({ timeoutSeconds: 10 }).https.onRequest(async (req, res) => {
+  res.set('Access-Control-Allow-Origin', '*')
+  if (req.method === 'OPTIONS') { res.set('Access-Control-Allow-Methods', 'POST, GET'); return res.status(204).send('') }
+  const code = String(req.query.code || (req.body && req.body.code) || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 22)
+  if (code.length >= 6) {
+    const ref = db.doc(`referralCodes/${code}`)
+    try { const s = await ref.get(); if (s.exists) await ref.set({ clicks: admin.firestore.FieldValue.increment(1) }, { merge: true }) } catch (_) {}
+  }
+  res.status(204).send('')
+})
+
+// Signup attribution: when a new user doc carries a referral code, count the
+// signup for the referrer (rewards wait for the first payment).
+exports.onUserCreated = functions.region('europe-west1')
+  .runWith({ timeoutSeconds: 30 })
+  .firestore.document('users/{uid}')
+  .onCreate(async (snap, context) => {
+    try {
+      const d = snap.data() || {}
+      const code = String(d.referredBy || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 22)
+      if (!code) return null
+      const reg = await db.doc(`referralCodes/${code}`).get()
+      const refUid = reg.exists ? reg.data().uid : null
+      if (!refUid || refUid === context.params.uid) return null
+      await db.doc(`users/${refUid}`).set({ referralStats: { signups: admin.firestore.FieldValue.increment(1) } }, { merge: true })
+    } catch (e) { console.warn('signup attribution failed:', e.message) }
+    return null
+  })
+
+// ── Stripe Checkout for a Pointer credit pack ($10 = 50 credits, one-time) ──
+exports.createCreditCheckout = billingFn.https.onCall(async (data, context) => {
+  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
+  const uid = context.auth.uid
+  const email = context.auth.token.email || undefined
+  const key = SECRET_STRIPE.value()
+  if (!key || key === 'REPLACE_ME') throw new functions.https.HttpsError('failed-precondition', 'Card payments are not configured yet — contact support to top up.')
+  const stripe = require('stripe')(key)
+  const cfg = await payments.billingConfig(db)
+  const pack = cfg.creditPack || { usd: 10, credits: 50 }
+  const usd = Math.max(1, parseInt(pack.usd) || 10)
+  const credits = Math.max(1, parseInt(pack.credits) || 50)
+  // Return the buyer to the app they came from (mobile PWA vs webapp), not a
+  // fixed domain. Only exact-host matches on our own origins are accepted so
+  // this can't become an open redirect; anything else falls back to frontendUrl.
+  let base = cfg.frontendUrl.replace(/\/$/, '')
+  try {
+    const ret = new URL(String(data?.returnUrl || ''))
+    const ALLOWED_RETURN_HOSTS = new Set([
+      'fxcrypt-app.web.app', 'fxcrypt-webapp.web.app', 'fxcrypt-app.firebaseapp.com', 'fxcrypt-webapp.firebaseapp.com',
+      'localhost', '127.0.0.1', new URL(cfg.frontendUrl).hostname,
+    ])
+    if (ALLOWED_RETURN_HOSTS.has(ret.hostname)) base = ret.origin
+  } catch (_) { /* no/invalid returnUrl → keep frontendUrl */ }
+  const session = await stripe.checkout.sessions.create({
+    mode: 'payment',
+    line_items: [{ price_data: { currency: 'usd', product_data: { name: `FXcrypt Pointer — ${credits} request credits` }, unit_amount: usd * 100 }, quantity: 1 }],
+    customer_email: email,
+    client_reference_id: uid,
+    metadata: { uid, kind: 'credits', credits: String(credits) },
+    success_url: `${base}/?credits=success`,
+    cancel_url: `${base}/?credits=cancel`,
   })
   return { url: session.url, sessionId: session.id }
 })
@@ -1891,12 +2656,21 @@ exports.stripeWebhook = billingFn.https.onRequest(async (req, res) => {
     if (event.type === 'checkout.session.completed') {
       const s = event.data.object
       const uid = (s.metadata && s.metadata.uid) || s.client_reference_id
-      const plan = (s.metadata && s.metadata.plan) || 'pro'
-      if (uid) {
+      if (uid && s.metadata && s.metadata.kind === 'credits') {
+        // Pointer credit top-up — add non-expiring credits to the user's balance.
+        const credits = parseInt(s.metadata.credits) || 0
+        if (credits > 0) await db.doc(`users/${uid}`).set({ pointerCredits: admin.firestore.FieldValue.increment(credits) }, { merge: true })
+        await db.doc(`users/${uid}/payments/stripe_${s.id}`).set({ provider: 'stripe', plan: 'credits', credits, mode: s.mode, amount: s.amount_total, amountUsd: (s.amount_total || 0) / 100, currency: s.currency, status: 'paid', at: Date.now(), paidAt: Date.now(), createdAt: Date.now() }, { merge: true })
+      } else if (uid) {
+        const plan = (s.metadata && s.metadata.plan) || 'pro'
         if (s.mode === 'subscription') await payments.grantPlan(db, uid, plan, { clearExpiry: true, subscription: { provider: 'stripe', status: 'active', type: 'subscription', stripeCustomerId: s.customer || null, stripeSubId: s.subscription || null } })
         else await payments.grantPlan(db, uid, plan, { durationDays: 30, subscription: { provider: 'stripe', status: 'active', type: 'onetime', stripeCustomerId: s.customer || null } })
-        await db.doc(`users/${uid}/payments/stripe_${s.id}`).set({ provider: 'stripe', plan, mode: s.mode, amount: s.amount_total, currency: s.currency, status: 'paid', at: Date.now() }, { merge: true })
+        await db.doc(`users/${uid}/payments/stripe_${s.id}`).set({ provider: 'stripe', plan, mode: s.mode, amount: s.amount_total, currency: s.currency, status: 'paid', at: Date.now(), createdAt: Date.now() }, { merge: true })
       }
+      // First successful payment of any kind triggers the referral reward
+      // (idempotent — the referee's `referralRewarded` latch survives retries).
+      if (uid) await payments.processReferralReward(db, uid, await payments.billingConfig(db))
+      await bumpFunnel('checkoutComplete')
     } else if (event.type === 'customer.subscription.deleted') {
       const sub = event.data.object
       const uid = sub.metadata && sub.metadata.uid
@@ -1945,6 +2719,8 @@ exports.verifyCryptoPayment = cryptoPayFn.https.onCall(async (data, context) => 
   if (result.paid) {
     await payments.grantPlan(db, uid, inv.plan, { durationDays: 30, subscription: { provider: 'crypto', status: 'active', type: 'onetime' } })
     await ref.set({ status: 'paid', txHash: result.txHash || null, paidAt: Date.now() }, { merge: true })
+    await payments.processReferralReward(db, uid, await payments.billingConfig(db))
+    await bumpFunnel('checkoutComplete')
     return { status: 'paid', plan: inv.plan, txHash: result.txHash || null }
   }
   return { status: 'pending' }
@@ -1965,15 +2741,44 @@ exports.adminStats = adminFn.https.onCall(async (data, context) => {
   const counts = { free: 0, pro: 0, elite: 0 }
   for (const p of ['pro', 'elite']) counts[p] = (await col.where('plan', '==', p).count().get()).data().count
   counts.free = Math.max(0, total - counts.pro - counts.elite)
-  return { totalUsers: total, byPlan: counts, premium: counts.pro + counts.elite, generatedAt: Date.now() }
+  // Month-to-date Pointer usage aggregate (bounded read; fine at this scale).
+  let pointerReqsMTD = 0, activeUsers = 0, creditsOutstanding = 0
+  try {
+    const period = metering.currentPeriod()
+    const cutoff = Date.now() - 30 * 86400000
+    const all = await col.limit(3000).get()
+    all.forEach((doc) => {
+      const x = doc.data()
+      if (x.pointerUsage && x.pointerUsage.period === period) pointerReqsMTD += (x.pointerUsage.used || 0)
+      if ((x.lastActiveAt || 0) >= cutoff) activeUsers++
+      creditsOutstanding += (x.pointerCredits || 0)
+    })
+  } catch (e) { /* aggregate is best-effort */ }
+  // 30-day paywall conversion funnel (global daily docs, webhook-stamped completes).
+  let funnel30d = { paywallView: 0, checkoutStart: 0, checkoutComplete: 0 }
+  try {
+    const since = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)
+    const fs = await db.collection('funnel').where(admin.firestore.FieldPath.documentId(), '>=', since).get()
+    fs.forEach((doc) => {
+      const x = doc.data()
+      funnel30d.paywallView += x.paywallView || 0
+      funnel30d.checkoutStart += x.checkoutStart || 0
+      funnel30d.checkoutComplete += x.checkoutComplete || 0
+    })
+  } catch (e) { /* best-effort */ }
+  return { totalUsers: total, byPlan: counts, premium: counts.pro + counts.elite, pointerReqsMTD, activeUsers, creditsOutstanding, funnel30d, period: metering.currentPeriod(), generatedAt: Date.now() }
 })
 
 exports.adminListUsers = adminFn.https.onCall(async (data, context) => {
   await requireAdmin(context)
+  const cfg = await payments.billingConfig(db)
   const res = await admin.auth().listUsers(200, data?.pageToken || undefined)
   const docs = await Promise.all(res.users.map((u) => db.doc(`users/${u.uid}`).get().catch(() => null)))
   const users = res.users.map((u, i) => {
     const d = (docs[i] && docs[i].exists) ? docs[i].data() : {}
+    const plan = ['free', 'pro', 'elite'].includes(d.plan) ? d.plan : 'free'
+    const pu = metering.readUsage(d, plan, cfg, 'pointer')
+    const flags = d.featureFlags || {}
     return {
       uid: u.uid, email: u.email || '', displayName: u.displayName || '',
       disabled: u.disabled, banned: !!d.banned,
@@ -1982,6 +2787,9 @@ exports.adminListUsers = adminFn.https.onCall(async (data, context) => {
       hasWallets: !!(d.wallets && Object.keys(d.wallets).length),
       telegram: !!(d.botSettings && d.botSettings.telegramChatId),
       discord: !!(d.botSettings && d.botSettings.discordUserId),
+      pointerUsed: pu.used, pointerQuota: pu.quota, pointerCredits: pu.credits,
+      lastActiveAt: d.lastActiveAt || null,
+      pointerOff: flags.pointer === false,
     }
   })
   return { users, nextPageToken: res.pageToken || null }
@@ -2008,7 +2816,54 @@ exports.adminGetUser = adminFn.https.onCall(async (data, context) => {
   // recent payments
   let pays = []
   try { const ps = await db.collection(`users/${uid}/payments`).orderBy('createdAt', 'desc').limit(10).get(); pays = ps.docs.map((x) => x.data()) } catch (e) {}
-  return { auth: authUser, doc: safe, payments: pays }
+  // Usage + controls (metering) for the admin panel.
+  const cfg = await payments.billingConfig(db)
+  const plan = ['free', 'pro', 'elite'].includes(d.plan) ? d.plan : 'free'
+  const usage = { pointer: metering.readUsage(d, plan, cfg, 'pointer'), gemScan: metering.readUsage(d, plan, cfg, 'gemScan') }
+  const featureFlags = d.featureFlags || {}
+  const userLimits = d.userLimits || {}
+  let daily = []
+  try {
+    const ds = await db.collection(`users/${uid}/usageDaily`).orderBy(admin.firestore.FieldPath.documentId(), 'desc').limit(30).get()
+    daily = ds.docs.map((x) => ({ day: x.id, ...x.data() }))
+  } catch (e) {}
+  return { auth: authUser, doc: safe, payments: pays, plan, usage, featureFlags, userLimits, daily }
+})
+
+// Admin: grant/deduct Pointer request credits on a user's account.
+exports.adminAddPointerCredits = adminFn.https.onCall(async (data, context) => {
+  await requireAdmin(context)
+  const uid = String(data?.uid || '')
+  const amount = parseInt(data?.amount)
+  if (!uid || !Number.isFinite(amount) || amount === 0) throw new functions.https.HttpsError('invalid-argument', 'uid and non-zero amount required')
+  await db.doc(`users/${uid}`).set({ pointerCredits: admin.firestore.FieldValue.increment(amount), adminNote: { action: 'addCredits', amount, by: context.auth.token.email, at: Date.now() } }, { merge: true })
+  const snap = await db.doc(`users/${uid}`).get()
+  return { ok: true, credits: (snap.exists ? snap.data().pointerCredits : 0) || 0 }
+})
+
+// Admin: set per-user feature flags and limit overrides. Only whitelisted keys.
+exports.adminSetUserLimits = adminFn.https.onCall(async (data, context) => {
+  await requireAdmin(context)
+  const uid = String(data?.uid || '')
+  if (!uid) throw new functions.https.HttpsError('invalid-argument', 'uid required')
+  const patch = {}
+  if (data.featureFlags && typeof data.featureFlags === 'object') {
+    const ff = {}
+    for (const k of ['pointer', 'deepResearch', 'scanner', 'signals', 'autoExecute']) if (data.featureFlags[k] !== undefined) ff[k] = !!data.featureFlags[k]
+    if (Object.keys(ff).length) patch.featureFlags = ff
+  }
+  if (data.userLimits && typeof data.userLimits === 'object') {
+    const ul = {}
+    const intOrNull = (v) => { if (v === null || v === '' || v === undefined) return null; const n = parseInt(v); return Number.isFinite(n) ? Math.max(0, n) : null }
+    const numOrNull = (v) => { if (v === null || v === '' || v === undefined) return null; const n = parseFloat(v); return Number.isFinite(n) ? Math.max(0, n) : null }
+    for (const k of ['pointerQuota', 'gemScanQuota', 'dailyTradeCap', 'priceAlertQuota', 'pointerTaskQuota']) if (data.userLimits[k] !== undefined) ul[k] = intOrNull(data.userLimits[k])
+    if (data.userLimits.maxBuyUsd !== undefined) ul.maxBuyUsd = numOrNull(data.userLimits.maxBuyUsd)
+    if (Object.keys(ul).length) patch.userLimits = ul
+  }
+  if (!Object.keys(patch).length) return { ok: true, note: 'nothing to update' }
+  patch.adminNote = { action: 'setLimits', by: context.auth.token.email, at: Date.now() }
+  await db.doc(`users/${uid}`).set(patch, { merge: true })
+  return { ok: true }
 })
 
 exports.adminSetPlan = adminFn.https.onCall(async (data, context) => {
@@ -2094,6 +2949,20 @@ exports.adminSetConfig = adminFn.https.onCall(async (data, context) => {
     aiProvider: c.aiProvider === 'openai' ? 'openai' : 'deepseek',
     adminEmails: Array.isArray(c.adminEmails) ? c.adminEmails.map((e) => String(e).toLowerCase().trim()).filter(Boolean) : [],
     updatedBy: context.auth.token.email, updatedAt: Date.now(),
+  }
+  // Usage metering + controls (optional blocks; only written when provided).
+  const qInt = (v, d) => { const n = parseInt(v); return Number.isFinite(n) && n >= 0 ? n : d }
+  if (c.pointerQuota) clean.pointerQuota = { free: qInt(c.pointerQuota.free, 10), pro: qInt(c.pointerQuota.pro, 50), elite: qInt(c.pointerQuota.elite, 200) }
+  if (c.gemScanQuota) clean.gemScanQuota = { free: qInt(c.gemScanQuota.free, 5), pro: qInt(c.gemScanQuota.pro, 50), elite: qInt(c.gemScanQuota.elite, 200) }
+  if (c.creditPack) clean.creditPack = { usd: Math.max(1, qInt(c.creditPack.usd, 10)), credits: Math.max(1, qInt(c.creditPack.credits, 50)) }
+  if (c.autoTrade) clean.autoTrade = {
+    globalEnabled: c.autoTrade.globalEnabled !== false,
+    defaultMaxBuyUsd: Math.max(0, parseFloat(c.autoTrade.defaultMaxBuyUsd) || 100),
+    defaultDailyTradeCap: qInt(c.autoTrade.defaultDailyTradeCap, 10),
+  }
+  if (c.referral) clean.referral = {
+    enabled: c.referral.enabled !== false,
+    rewardCredits: qInt(c.referral.rewardCredits, 25),
   }
   await db.doc('config/billing').set(clean, { merge: true })
   return { ok: true, config: clean }

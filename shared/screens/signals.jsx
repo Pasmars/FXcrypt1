@@ -65,6 +65,14 @@ function Signals({ go, onUpsell }) {
     setAuto(true);
     try { await window.FXAPI.saveSignalPrefs({ enabled: true, autoExecute: true }); } catch (e) { setAuto(false); }
   };
+  // Verified track record (server-resolved signal outcomes → win rate / avg R).
+  const [stats, setStats] = sgS(null);
+  sgE(() => {
+    let alive = true;
+    if (window.FXAPI.getSignalStats) window.FXAPI.getSignalStats().then((s) => { if (alive && s) setStats(s); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
   // Real market signal scan: runAgentScan analyses the broad market server-side
   // (setups are not tied to one exchange), then we reload from Firestore.
   const runScan = async () => {
@@ -131,6 +139,39 @@ function Signals({ go, onUpsell }) {
           </div>
         </div>
       )}
+      {/* Verified track record — every signal is resolved server-side against
+          its SL/TP using exchange candles; nothing here is self-reported. */}
+      {stats && stats.d90 && stats.d90.total > 0 && (() => {
+        const d = stats.d90;
+        const decided = d.wins + d.losses;
+        const seg = (n, color) => decided ? <div style={{ flex: n || 0.0001, height: 6, background: color }} /> : null;
+        return (
+          <div style={{ padding: '0 16px 12px' }}>
+            <div style={{ background: 'var(--surface)', borderRadius: 14, padding: '12px 14px', boxShadow: 'inset 0 0 0 1px var(--line)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 10 }}>
+                <Icon name="trophy" size={15} color="var(--accent)" />
+                <span style={{ fontSize: 13, fontWeight: 800, flex: 1 }}>Track record · last 90 days</span>
+                <Pill tone="muted">{d.total} signals</Pill>
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                {[['Win rate', d.winRate != null ? d.winRate + '%' : '—', d.winRate >= 50 ? 'var(--up)' : 'var(--text)'],
+                  ['Avg R', d.avgR != null ? (d.avgR >= 0 ? '+' : '') + d.avgR + 'R' : '—', d.avgR >= 0 ? 'var(--up)' : 'var(--down)'],
+                  ['W / L', `${d.wins} / ${d.losses}`, 'var(--text)']].map(([l, v, c]) => (
+                  <div key={l} style={{ flex: 1, textAlign: 'center' }}>
+                    <div style={{ fontSize: 16, fontWeight: 800, color: c }}>{v}</div>
+                    <div style={{ fontSize: 10.5, color: 'var(--muted)', fontWeight: 700 }}>{l}</div>
+                  </div>
+                ))}
+              </div>
+              {decided > 0 && (
+                <div style={{ display: 'flex', gap: 2, borderRadius: 4, overflow: 'hidden' }} title={`TP1 ${d.tp1} · TP2 ${d.tp2} · TP3 ${d.tp3} · SL ${d.losses}`}>
+                  {seg(d.tp1, 'var(--up)')}{seg(d.tp2, 'var(--up)')}{seg(d.tp3, 'var(--accent)')}{seg(d.losses, 'var(--down)')}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
       <div style={{ padding: '0 16px 10px', display: 'flex', gap: 7 }}>
         {['All', 'Futures', 'Spot'].map(t => <Chip key={t} active={type === t} onClick={() => setType(t)}>{t}</Chip>)}
       </div>

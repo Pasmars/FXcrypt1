@@ -38,7 +38,6 @@ export function ClientRoot({ children }: { children: React.ReactNode }) {
   const path = usePathname();
   const [ready, setReady] = useState(false);
   const [t, setT] = useState<any>(TWEAK_DEFAULTS);
-  const [model, setModel] = useState('DeepSeek');
   const [user, setUser] = useState<any>(undefined); // undefined = unknown, null = signed out
   const [, setDataVer] = useState(0);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -62,7 +61,7 @@ export function ClientRoot({ children }: { children: React.ReactNode }) {
     if (!ready) return;
     const ROUTES = ['/', '/markets', '/signals', '/wallet', '/token', '/trade', '/scanner',
       '/chat', '/profile', '/automation', '/alerts', '/paywall', '/bubble', '/execSignal',
-      '/signalChart', '/exchanges', '/signing', '/2fa', '/sessions', '/connect', '/referral'];
+      '/signalChart', '/exchanges', '/signing', '/2fa', '/sessions', '/connect', '/referral', '/portfolio', '/copytrade'];
     const id = setTimeout(() => { ROUTES.forEach((r) => { try { router.prefetch(r); } catch {} }); }, 0);
     return () => clearTimeout(id);
   }, [ready, router]);
@@ -91,6 +90,48 @@ export function ClientRoot({ children }: { children: React.ReactNode }) {
     if (ready && user && (window as any).FXLive) (window as any).FXLive.bootstrapUser?.();
   }, [ready, user]);
 
+  // Stripe credit-pack return (?credits=success|cancel) → toast the outcome.
+  useEffect(() => {
+    if (!ready) return;
+    const W: any = window;
+    const r = W.FXAPI?.consumeCreditsReturn?.();
+    if (r && W.FXToast) W.FXToast.show(r === 'success' ? '✅ Credits added to your account' : 'Checkout canceled — you were not charged');
+  }, [ready]);
+
+  // Push-notification deep link (?goto=portfolio|signals|…) → real route.
+  useEffect(() => {
+    if (!ready || !user) return;
+    try {
+      const url = new URL(window.location.href);
+      const target = url.searchParams.get('goto');
+      if (!target) return;
+      // Optional chat-session id (Pointer watch-task analyses deep-link here).
+      const session = url.searchParams.get('session');
+      if (session) (window as any).__fxOpenSession = session;
+      url.searchParams.delete('goto'); url.searchParams.delete('session');
+      window.history.replaceState({}, '', url.pathname + (url.searchParams.toString() ? '?' + url.searchParams.toString() : ''));
+      router.push(keyToPath(target));
+    } catch {}
+  }, [ready, user, router]);
+
+  // First-run onboarding (per account): show the shared carousel + connect-wallet
+  // intro once after the first sign-in, mirroring the mobile flow (minus Auth,
+  // which the /login & /signup routes already handled).
+  const [onboard, setOnboard] = useState<'unknown' | 'show' | 'done'>('unknown');
+  useEffect(() => {
+    if (!ready || !user) return;
+    let alive = true;
+    (window as any).FXAuth?.getProfile?.().then((p: any) => {
+      if (alive) setOnboard(p && p.webOnboarded ? 'done' : 'show');
+    }).catch(() => { if (alive) setOnboard('done'); });
+    return () => { alive = false; };
+  }, [ready, user]);
+  const finishOnboard = useCallback(() => {
+    setOnboard('done');
+    (window as any).FXAuth?.markOnboarded?.();
+    try { if (sessionStorage.getItem('fx_intent') === 'wallet') { sessionStorage.removeItem('fx_intent'); router.push('/wallet'); } } catch {}
+  }, [router]);
+
   const setTweak = useCallback((k: string, v: any) => {
     setT((prev: any) => { const n = { ...prev, [k]: v }; try { localStorage.setItem('fx_settings', JSON.stringify(n)); } catch {} return n; });
   }, []);
@@ -107,7 +148,7 @@ export function ClientRoot({ children }: { children: React.ReactNode }) {
   const authReady = user !== undefined;
 
   const value = {
-    ready, t, setTweak, model, setModel, plan, planLabel, user, authReady,
+    ready, t, setTweak, plan, planLabel, user, authReady,
     go, back, getPayload,
     openChat: (seed: any) => go('chat', { seed: typeof seed === 'string' ? seed : null }),
     onTrade: (token: any, side: any) => go('trade', { token, side }),
@@ -119,12 +160,17 @@ export function ClientRoot({ children }: { children: React.ReactNode }) {
   // content for signed-out users (AuthRedirector will bounce them to /login).
   const isPublic = PUBLIC_ROUTES.has(path);
   const gated = !ready || !authReady || (!user && !isPublic);
+  // First-run onboarding overlays the app until dismissed (signed-in users only).
+  const showOnboard = !gated && !isPublic && user && onboard === 'show';
+  const OnboardComp: any = ready ? (window as any).Onboarding : null;
 
   return (
     <div ref={rootRef} className="fx-root">
       <Ctx.Provider value={value}>
         {ready && authReady && <AuthRedirector />}
-        {gated ? <Splash /> : children}
+        {gated ? <Splash /> : showOnboard && OnboardComp
+          ? <OnboardComp postAuth dark={t.dark} onDone={finishOnboard} />
+          : children}
       </Ctx.Provider>
     </div>
   );

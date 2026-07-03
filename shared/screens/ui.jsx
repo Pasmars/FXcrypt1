@@ -356,6 +356,24 @@ function ScanModal({ open, onClose, accent = 'var(--accent)', title, steps = [],
   );
 }
 
+// Global imperative toast — for app-level events (payment returns, background
+// task results) that fire outside any single screen's local toast state. DOM-
+// based so it works before/without any React mount point; fixed colors so it
+// reads on both themes.
+window.FXToast = {
+  show(msg, opts = {}) {
+    try {
+      const el = document.createElement('div');
+      el.textContent = String(msg);
+      el.setAttribute('role', 'status');
+      el.style.cssText = 'position:fixed;left:50%;bottom:calc(96px + env(safe-area-inset-bottom));transform:translateX(-50%);background:#1C232E;color:#F2F5F9;padding:11px 18px;border-radius:12px;font-size:13.5px;font-weight:600;box-shadow:0 8px 28px rgba(0,0,0,.45);z-index:10000;opacity:0;transition:opacity .25s;max-width:86vw;text-align:center;pointer-events:none';
+      document.body.appendChild(el);
+      requestAnimationFrame(() => { el.style.opacity = '1'; });
+      setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 300); }, opts.duration || 2600);
+    } catch (e) { /* toast is never critical */ }
+  },
+};
+
 Object.assign(window, {
   fmtUsd, pct, Logo, Sparkline, Btn, Chip, Segmented, Card, Pill, Change,
   Sheet, SecHead, TopBar, IconBtn, Wordmark, Mark, ScanModal,

@@ -1,5 +1,5 @@
 // paywall.jsx — subscription tiers Free/Pro/Elite with real Stripe + crypto checkout
-const { useState: pwS } = React;
+const { useState: pwS, useEffect: pwE } = React;
 
 const PAY_CHAINS = [
   { id: 'eth', label: 'Ethereum', assets: ['usdt', 'usdc', 'native'], native: 'ETH' },
@@ -14,6 +14,16 @@ function Paywall({ go, onDone }) {
   const [sel, setSel] = pwS('pro');
   const [annual, setAnnual] = pwS(true);
   const [stage, setStage] = pwS('plans'); // plans | method | crypto
+  // Live, server-verified signal win rate — the strongest upgrade argument we
+  // have, so surface it under the hero when there's real data behind it.
+  const [stats, setStats] = pwS(null);
+  pwE(() => {
+    let alive = true;
+    if (window.FXAPI && window.FXAPI.getSignalStats) window.FXAPI.getSignalStats().then((s) => { if (alive && s) setStats(s); }).catch(() => {});
+    if (window.FXAPI && window.FXAPI.trackFunnel) window.FXAPI.trackFunnel('paywallView'); // conversion funnel
+    return () => { alive = false; };
+  }, []);
+  const d90 = stats && stats.d90;
 
   const planName = (FX.tiers.find(t => t.id === sel) || {}).name || 'Pro';
   const signedIn = !!(window.FXAuth && window.FXAuth.currentUser());
@@ -29,6 +39,11 @@ function Paywall({ go, onDone }) {
           <div style={{ width: 60, height: 60, borderRadius: 18, background: 'var(--accent)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 10px 30px var(--glow)', marginBottom: 12 }}><Icon name="crown" size={32} color="var(--on-accent)" /></div>
           <div style={{ fontSize: 25, fontWeight: 800, letterSpacing: -0.5 }}>Unlock FXcrypt Pro</div>
           <div style={{ fontSize: 14.5, color: 'var(--muted)', marginTop: 5, lineHeight: 1.45 }}>Lower fees, full automation, unlimited AI. Pay by card or crypto.</div>
+          {d90 && d90.winRate != null && d90.total >= 10 && (
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 11, background: 'var(--up-bg)', color: 'var(--up)', borderRadius: 10, padding: '7px 12px', fontSize: 12.5, fontWeight: 700 }}>
+              <Icon name="trophy" size={14} /> Signals hit take-profit {d90.winRate}% of the time — last 90 days, verified on-exchange
+            </div>
+          )}
         </div>
         <div style={{ padding: '0 16px', display: 'flex', flexDirection: 'column', gap: 11 }}>
           {FX.tiers.map(t => {
@@ -96,6 +111,7 @@ function CheckoutMethod({ plan, planName, signedIn, onBack, onCrypto, onDone, go
       {!signedIn && <div style={{ background: 'var(--down-bg)', borderRadius: 12, padding: 12, marginBottom: 14, fontSize: 13, color: 'var(--down)', fontWeight: 600 }}>Sign in to your account first to upgrade.</div>}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
         {[
+          ['crown', 'Card · Annual (2 months free)', '12 months for the price of 10 · auto-renews yearly', () => stripe('annual'), 'annual'],
           ['card', 'Card · Monthly subscription', 'Auto-renews monthly · cancel anytime', () => stripe('subscription'), 'subscription'],
           ['dollar', 'Card · One-time (30 days)', 'Single payment, 30 days of access', () => stripe('onetime'), 'onetime'],
           ['wallet', 'Pay with crypto', 'USDT / USDC / native on ETH, BSC, Base, SOL', onCrypto, 'crypto'],
