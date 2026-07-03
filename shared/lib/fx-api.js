@@ -707,6 +707,10 @@ window.FXChats = {
       role: m.role || 'ai', text: m.text || '',
       proposal: m.proposal ? JSON.parse(JSON.stringify(m.proposal)) : null,
       token: m.token || null,
+      // Reference links Pointer cited (web_search sources) so they survive reload.
+      sources: Array.isArray(m.sources) && m.sources.length
+        ? m.sources.slice(0, 6).map((s) => ({ label: s.label || '', title: s.title || '', url: s.url || '' })).filter((s) => s.url)
+        : null,
     }));
     try {
       await setDoc(doc(db, 'users', u.uid, 'pointerChats', chatId), {

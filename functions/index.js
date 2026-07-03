@@ -597,28 +597,37 @@ exports.executeTrade = fn.https.onCall(async (data, context) => {
 
   const heliusKey = SECRET_HELIUS.value() || null
 
+  // Platform trading fee — % by plan (admin-set), sent to the admin's per-chain
+  // wallet. Null when the fee is off or no receiving wallet is configured.
+  const feeCfgBilling = await payments.billingConfig(db)
+  const userPlan = ['free', 'pro', 'elite'].includes(userSnap.data().plan) ? userSnap.data().plan : 'free'
+  const feeCfg = payments.resolveTradeFee(feeCfgBilling, userPlan, chain)
+
   let result
   try {
     if (action === 'buy') {
       const amt = validateAmount(amount)
       result = chain === 'sol'
-        ? await trader.buyTokenSOL(pk, tokenAddress, amt, slip, settings.solRpc, heliusKey)
-        : await trader.buyTokenEVM(chain, pk, tokenAddress, amt, slip, settings[chain + 'Rpc'], gasX)
+        ? await trader.buyTokenSOL(pk, tokenAddress, amt, slip, settings.solRpc, heliusKey, feeCfg)
+        : await trader.buyTokenEVM(chain, pk, tokenAddress, amt, slip, settings[chain + 'Rpc'], gasX, feeCfg)
     } else {
       const pct = validatePercent(percent)
       result = chain === 'sol'
-        ? await trader.sellTokenSOL(pk, tokenAddress, pct, slip, settings.solRpc, heliusKey)
-        : await trader.sellTokenEVM(chain, pk, tokenAddress, pct, slip, settings[chain + 'Rpc'], gasX)
+        ? await trader.sellTokenSOL(pk, tokenAddress, pct, slip, settings.solRpc, heliusKey, feeCfg)
+        : await trader.sellTokenEVM(chain, pk, tokenAddress, pct, slip, settings[chain + 'Rpc'], gasX, feeCfg)
     }
 
     await db.collection(`users/${uid}/trades`).add({
       chain, tokenAddress, type: action,
       amountIn: amount || null, percentSold: percent || null,
       txHash: result.txHash, status: result.status, source: 'manual',
+      feePct: feeCfg ? feeCfg.pct : 0,
+      feeNative: result.feeNative || null,
+      feeTxHash: result.feeTxHash || null,
       timestamp: admin.firestore.FieldValue.serverTimestamp()
     })
 
-    return result
+    return { ...result, feePct: feeCfg ? feeCfg.pct : 0 }
   } catch (err) {
     if (err instanceof functions.https.HttpsError) throw err
     await db.collection(`users/${uid}/trades`).add({
@@ -2465,10 +2474,10 @@ exports.chatPointer = functions
       masterSecret: MASTER_SECRET(), heliusKey: SECRET_HELIUS.value() || null, moralisKey: SECRET_MORALIS.value() || null,
     }
     try {
-      const { text, proposal, history: newHistory, model } = await agentLib.runAgent({ prompt, history, ctx, provider: prov, apiKey, surface: 'pointer', deep, deepModel })
+      const { text, proposal, history: newHistory, model, sources } = await agentLib.runAgent({ prompt, history, ctx, provider: prov, apiKey, surface: 'pointer', deep, deepModel })
       await metering.track(db, uid, { pointerReqs: 1, ...(deep ? { deepReqs: 1 } : {}) })
       const usage = { used: spent.used, remaining: spent.remaining, credits: spent.credits, quota: spent.quota, resetsAt: spent.resetsAt }
-      return { text, proposal: proposal || null, history: newHistory, provider: prov, deep, model, usage }
+      return { text, proposal: proposal || null, history: newHistory, provider: prov, deep, model, usage, sources: sources || [] }
     } catch (e) {
       // Infra failure — refund the metered unit so a failed call isn't charged.
       await metering.refund(db, uid, { kind: 'pointer', ...spent })
@@ -2551,7 +2560,7 @@ exports.getPointerUsage = plainFn.https.onCall(async (data, context) => {
 // Prices aren't sensitive, so no auth — the paywall can render before sign-in.
 exports.getPlans = functions.region('europe-west1').runWith({ timeoutSeconds: 10 }).https.onCall(async () => {
   const cfg = await payments.billingConfig(db)
-  return { prices: { free: 0, pro: cfg.prices.pro, elite: cfg.prices.elite }, creditPack: cfg.creditPack }
+  return { prices: { free: 0, pro: cfg.prices.pro, elite: cfg.prices.elite }, creditPack: cfg.creditPack, tradingFee: cfg.tradingFee }
 })
 
 // ── Paywall conversion funnel (roadmap 4.3) ────────────────────────────────
@@ -2997,6 +3006,13 @@ exports.adminSetConfig = adminFn.https.onCall(async (data, context) => {
     enabled: c.referral.enabled !== false,
     rewardCredits: qInt(c.referral.rewardCredits, 25),
   }
+  // Trading fees: % per plan (0–5, clamped) + the wallet that receives them per
+  // chain. Fees only apply where both the % > 0 and a valid wallet are set.
+  const feePct = (v, d) => { const n = parseFloat(v); return Number.isFinite(n) ? Math.max(0, Math.min(n, 5)) : d }
+  const evmAddr = (v) => { const s = String(v || '').trim(); return /^0x[0-9a-fA-F]{40}$/.test(s) ? s : '' }
+  const solAddr = (v) => { const s = String(v || '').trim(); return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(s) ? s : '' }
+  if (c.tradingFee) clean.tradingFee = { free: feePct(c.tradingFee.free, 1.0), pro: feePct(c.tradingFee.pro, 0.5), elite: feePct(c.tradingFee.elite, 0.2) }
+  if (c.feeWallets) clean.feeWallets = { bsc: evmAddr(c.feeWallets.bsc), eth: evmAddr(c.feeWallets.eth), base: evmAddr(c.feeWallets.base), sol: solAddr(c.feeWallets.sol) }
   await db.doc('config/billing').set(clean, { merge: true })
   return { ok: true, config: clean }
 })

@@ -36,8 +36,24 @@ async function billingConfig(db) {
     creditPack: { usd: 10, credits: 50, ...(c.creditPack || {}) },
     autoTrade: { globalEnabled: true, defaultMaxBuyUsd: 100, defaultDailyTradeCap: 10, ...(c.autoTrade || {}) },
     referral: { enabled: true, rewardCredits: 25, ...(c.referral || {}) },
+    // Per-plan trading fee % + the wallet that receives it on each chain. A
+    // trade only gets charged when both the plan's % > 0 AND the chain wallet
+    // is set (so fees stay off until the admin configures a receiving wallet).
+    tradingFee: { free: 1.0, pro: 0.5, elite: 0.2, ...(c.tradingFee || {}) },
+    feeWallets: { bsc: '', eth: '', base: '', sol: '', ...(c.feeWallets || {}) },
     raw: c,
   }
+}
+
+// Resolve the fee for a user's plan on a chain → { pct, bps, wallet } or null.
+// Null means "no fee" (unset wallet, zero %, or bad config) — the trade runs
+// normally without a fee leg.
+function resolveTradeFee(cfg, plan, chain) {
+  const p = ['free', 'pro', 'elite'].includes(plan) ? plan : 'free'
+  const pct = Math.max(0, Math.min(parseFloat((cfg.tradingFee || {})[p]) || 0, 5)) // hard cap 5%
+  const wallet = String((cfg.feeWallets || {})[chain] || '').trim()
+  if (!wallet || pct <= 0) return null
+  return { pct, bps: Math.round(pct * 100), wallet }
 }
 
 // ── Referral reward — called from EVERY successful-payment path ──
@@ -172,6 +188,6 @@ async function verifyPayment(ctx, invoice) {
 
 module.exports = {
   billingConfig, isAdminEmail, grantPlan, computeCryptoAmount, verifyPayment,
-  processReferralReward,
+  processReferralReward, resolveTradeFee,
   STABLECOINS, DEFAULT_PRICES, isStable,
 }

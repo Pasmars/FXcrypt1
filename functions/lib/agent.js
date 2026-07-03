@@ -123,7 +123,7 @@ Finding tokens: when the owner names a token ("info on WIF", "track PEPE"), sear
 
 STANDING WATCH-TASKS: when the owner asks to be pinged/alerted/notified when something happens ("watch BTC and ping me if it breaks $150k", "tell me if PEPE dumps 20%"), call create_watch_task — the app monitors it 24/7 and you'll automatically analyze and notify them when it fires. Confirm what you armed. Manage tasks with list_watch_tasks / cancel_watch_task.
 
-Research: you DO have live internet access through web_search — NEVER tell the user you can't browse or lack real-time data. For anything current (prices aside) — news, trends, narratives, regulation/government policy, project updates — call web_search first, then summarize and cite the source names and dates. Be clear about what's confirmed news vs. opinion/rumor.
+Research: you DO have live internet access through web_search — NEVER tell the user you can't browse or lack real-time data. For anything current (prices aside) — news, trends, narratives, regulation/government policy, project updates — call web_search first, then summarize and cite the source names and dates. Be clear about what's confirmed news vs. opinion/rumor. The app AUTOMATICALLY shows clickable source links (shortened) below your reply for everything you found via web_search, so reference sources by name/date in your text but do NOT paste raw URLs — they're added for you.
 
 Style: concise, mobile-friendly markdown. Lead with the answer. Use compact numbers ($12.3K). Be direct about risk — these are high-risk speculative tokens. When unsure, say so and use a tool rather than guessing.`
 
@@ -651,6 +651,18 @@ async function runAgent({ prompt, history = [], ctx, provider = 'deepseek', apiK
     { role: 'user', content: prompt },
   ]
   let proposal = null
+  // Real reference links the agent actually consulted (web_search articles) —
+  // surfaced to the client as clickable, shortened source chips. Deduped by URL.
+  const sources = []
+  const addSources = (results) => {
+    for (const r of results || []) {
+      if (!r || !r.link || sources.some((s) => s.url === r.link)) continue
+      let host = ''
+      try { host = new URL(r.link).hostname.replace(/^www\./, '') } catch (_) {}
+      sources.push({ label: r.source || host || 'source', title: r.title || '', url: r.link })
+      if (sources.length >= 6) break
+    }
+  }
 
   for (let i = 0; i < maxLoops; i++) {
     let resp
@@ -686,7 +698,7 @@ async function runAgent({ prompt, history = [], ctx, provider = 'deepseek', apiK
     if (calls.length === 0) {
       const text = (msg.content || '').trim()
       const newHistory = [...history, { role: 'user', content: prompt }, { role: 'assistant', content: text || '(no response)' }]
-      return { text: text || 'Done.', proposal, history: newHistory.slice(-12), model: activeModel }
+      return { text: text || 'Done.', proposal, history: newHistory.slice(-12), model: activeModel, sources }
     }
 
     messages.push(msg) // assistant turn carrying tool_calls
@@ -722,6 +734,7 @@ async function runAgent({ prompt, history = [], ctx, provider = 'deepseek', apiK
       }
       try {
         const result = await runTool(fname, args, toolCtx)
+        if (fname === 'web_search' && result && Array.isArray(result.results)) addSources(result.results)
         messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify(result).slice(0, 8000) })
       } catch (e) {
         messages.push({ role: 'tool', tool_call_id: tc.id, content: 'Error: ' + (e.message || 'tool failed') })
@@ -729,7 +742,7 @@ async function runAgent({ prompt, history = [], ctx, provider = 'deepseek', apiK
     }
   }
 
-  return { text: 'Reached step limit. Try a more specific request.', proposal, history, model: activeModel }
+  return { text: 'Reached step limit. Try a more specific request.', proposal, history, model: activeModel, sources }
 }
 
 // ── Execute an approved trade (called by the approve-button handler ONLY) ───

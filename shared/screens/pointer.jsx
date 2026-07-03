@@ -209,12 +209,13 @@ function PointerChat({ go, seed, style, onProposalTrade }) {
 
   // Reveal an AI reply one keystroke at a time (typewriter effect). Resolves
   // once the full text is on screen so the caller can append any proposal after.
-  function streamReply(full, token) {
+  function streamReply(full, token, sources) {
     return new Promise((resolve) => {
       const text = String(full == null ? '' : full);
+      const src = (sources && sources.length) ? sources : null;
       streaming.current = true;
       setTyping(false); // swap the "thinking" dots for live text
-      setMsgs(m => [...m, { role: 'ai', text: '', token, streaming: true }]);
+      setMsgs(m => [...m, { role: 'ai', text: '', token, sources: src, streaming: true }]);
       if (!text) { streaming.current = false; resolve(); return; }
       let i = 0;
       // Scale the stride so long replies still finish in a few seconds while
@@ -267,7 +268,7 @@ function PointerChat({ go, seed, style, onProposalTrade }) {
       const reply = res.text || res.reply || '…';
       history.current.push({ role: 'assistant', content: reply });
       if (res.usage) setUsage((u) => ({ ...(u || {}), ...res.usage }));
-      await streamReply(reply, res.proposal ? (res.proposal.tokenSymbol || res.proposal.tokenAddress) : undefined);
+      await streamReply(reply, res.proposal ? (res.proposal.tokenSymbol || res.proposal.tokenAddress) : undefined, res.sources);
       if (res.proposal) setMsgs(m => [...m, { role: 'proposal', proposal: res.proposal }]);
     } catch (e) {
       // Out of Pointer requests → show a buy-credits paywall card instead of an error.
@@ -490,6 +491,7 @@ function Msg({ m, style, go, onTrade }) {
       {m.tool && <Pill tone="accent" style={{ marginBottom: 7 }}><Icon name="sliders" size={12} /> {m.tool}</Pill>}
       <div>{mdRender(m.text)}{m.streaming && <span style={{ display: 'inline-block', width: 2, height: '1em', marginLeft: 1, verticalAlign: '-0.15em', background: 'var(--accent)', animation: 'fxblink 1s step-end infinite' }} />}</div>
       {!m.streaming && m.token && <TokenInline sym={m.token} go={go} />}
+      {!m.streaming && m.sources && m.sources.length > 0 && <SourceChips sources={m.sources} />}
       {!m.streaming && m.text && <div style={{ marginTop: 6, marginLeft: -3 }}><CopyBtn text={m.text} /></div>}
     </div>
   );
@@ -513,6 +515,32 @@ function Msg({ m, style, go, onTrade }) {
     <div style={{ width: 28, height: 28, borderRadius: 9, background: 'var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="spark" size={15} color="var(--on-accent)" /></div>
     <div style={{ background: 'var(--surface)', padding: '11px 14px', borderRadius: '16px 16px 16px 4px', boxShadow: 'inset 0 0 0 1px var(--line)', minWidth: 0 }}>{body}</div>
   </div>;
+}
+
+// Clickable, shortened reference links for sources Pointer consulted via
+// web_search. Shows the publisher name (or domain) as a compact chip; the full
+// article title is the hover tooltip, and the chip opens the article.
+function SourceChips({ sources }) {
+  const short = (s) => {
+    let label = s.label || '';
+    if (!label) { try { label = new URL(s.url).hostname.replace(/^www\./, ''); } catch (_) { label = 'source'; } }
+    return label.length > 24 ? label.slice(0, 22) + '…' : label;
+  };
+  return (
+    <div style={{ marginTop: 9 }}>
+      <div style={{ fontSize: 10.5, fontWeight: 800, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 5 }}>Sources</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {sources.map((s, i) => (
+          <a key={i} href={s.url} target="_blank" rel="noreferrer" title={s.title || s.url}
+            onClick={(e) => e.stopPropagation()}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 4, maxWidth: 170, background: 'var(--surface2)', color: 'var(--accent)', fontSize: 11, fontWeight: 700, padding: '4px 9px', borderRadius: 8, textDecoration: 'none', border: '1px solid var(--line)' }}>
+            <Icon name="link" size={11} />
+            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{short(s)}</span>
+          </a>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function TokenInline({ sym, go }) {

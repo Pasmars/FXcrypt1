@@ -268,6 +268,7 @@ async function showConfig(){
   try{ const r = await call('adminGetConfig'); cfg = r.config||{}; }catch(e){ toast(e.message,true); return; }
   const ra = cfg.receivingAddresses||{}, pp = cfg.planPricesUsd||{}, sp = cfg.stripePriceIds||{};
   const pq = cfg.pointerQuota||{}, gq = cfg.gemScanQuota||{}, cpk = cfg.creditPack||{}, at = cfg.autoTrade||{};
+  const tf = cfg.tradingFee||{}, fw = cfg.feeWallets||{};
   const bg = document.createElement('div'); bg.className='modal-bg';
   const fld = (id,label,val,ph)=>`<label style="display:block;margin-bottom:10px"><div class="muted" style="font-size:12px;margin-bottom:4px">${label}</div><input id="${id}" value="${esc(val||'')}" placeholder="${ph||''}" style="width:100%"/></label>`;
   bg.innerHTML = `<div class="modal">
@@ -300,6 +301,16 @@ async function showConfig(){
     <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:10px"><input type="checkbox" id="at_on" ${at.globalEnabled!==false?'checked':''}/> Global auto-execute enabled (kill-switch)</label>
     <div style="display:flex;gap:10px">${fld('at_mb','Default max auto-buy (USD)',at.defaultMaxBuyUsd!=null?at.defaultMaxBuyUsd:100)}${fld('at_dc','Default daily auto-trades',at.defaultDailyTradeCap!=null?at.defaultDailyTradeCap:10)}</div>
 
+    <div style="font-weight:700;margin:16px 0 8px">Trading fees (% per plan)</div>
+    <div class="muted" style="font-size:12px;margin:0 0 8px">Charged on every DEX trade and sent to the fee wallet for that chain. Set 0 to disable. Max 5%.</div>
+    <div style="display:flex;gap:10px">${fld('tf_free','Free %',tf.free!=null?tf.free:1.0)}${fld('tf_pro','Basic (Pro) %',tf.pro!=null?tf.pro:0.5)}${fld('tf_elite','Elite %',tf.elite!=null?tf.elite:0.2)}</div>
+    <div style="font-weight:700;margin:8px 0 8px">Fee receiving wallets (per chain)</div>
+    <div class="muted" style="font-size:12px;margin:0 0 8px">Fees only apply on a chain once its wallet is set. EVM addresses (0x…) for BSC/ETH/Base; base58 for Solana.</div>
+    ${fld('fw_bsc','BSC fee wallet',fw.bsc||'','0x…')}
+    ${fld('fw_eth','Ethereum fee wallet',fw.eth||'','0x…')}
+    ${fld('fw_base','Base fee wallet',fw.base||'','0x…')}
+    ${fld('fw_sol','Solana fee wallet',fw.sol||'','Sol address')}
+
     <div class="muted" style="font-size:12px;margin:10px 0">Note: Stripe API keys & webhook secret are set via <span class="mono">firebase functions:secrets:set</span>, not here.</div>
     <button class="btn" id="csave" style="width:100%">Save settings</button>
   </div>`;
@@ -317,6 +328,8 @@ async function showConfig(){
         gemScanQuota:{free:parseInt(v('q_gf'))||5,pro:parseInt(v('q_gp'))||50,elite:parseInt(v('q_ge'))||200},
         creditPack:{usd:parseInt(v('cp_usd'))||10,credits:parseInt(v('cp_cr'))||50},
         autoTrade:{globalEnabled:document.getElementById('at_on').checked,defaultMaxBuyUsd:parseFloat(v('at_mb'))||100,defaultDailyTradeCap:parseInt(v('at_dc'))||10},
+        tradingFee:{free:parseFloat(v('tf_free'))||0,pro:parseFloat(v('tf_pro'))||0,elite:parseFloat(v('tf_elite'))||0},
+        feeWallets:{bsc:v('fw_bsc'),eth:v('fw_eth'),base:v('fw_base'),sol:v('fw_sol')},
       }});
       bg.remove(); toast('Settings saved');
     }catch(e){ toast(e.message,true); }

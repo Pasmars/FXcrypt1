@@ -150,10 +150,19 @@ function TradeFlow({ token, side = 'buy', go, onDone }) {
   const payBalance = balNum ? balNum.toLocaleString('en-US', { maximumFractionDigits: balNum < 1 ? 4 : 2 }) : '0';
   const usd = isNative ? (parseFloat(amt) || 0) : (parseFloat(amt) || 0) * nativePrice;
   const recv = tok.price ? usd / tok.price : 0;
-  // Real platform fee tier from the live plan.
+  // Real platform fee tier from the live plan. Prefer the admin-set fee (fetched
+  // once) so the displayed fee never drifts from what's actually charged.
   const plan = (FX && FX.plan) || 'free';
-  const feePct = plan === 'elite' ? 0.002 : plan === 'pro' ? 0.005 : 0.01;
-  const feeLabel = (feePct * 100).toFixed(1) + '%';
+  const [adminFee, setAdminFee] = tS(null);
+  tE(() => {
+    let alive = true;
+    if (window.FXAPI && window.FXAPI.getPlans) window.FXAPI.getPlans().then((p) => { if (alive && p && p.tradingFee) setAdminFee(p.tradingFee); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  const defPct = plan === 'elite' ? 0.2 : plan === 'pro' ? 0.5 : 1.0;
+  const feePctNum = adminFee && adminFee[plan] != null ? parseFloat(adminFee[plan]) : defPct;
+  const feePct = (Number.isFinite(feePctNum) ? feePctNum : defPct) / 100;
+  const feeLabel = (feePct * 100).toFixed(feePct * 100 % 1 === 0 ? 0 : 1) + '%';
 
   const presets = s === 'buy'
     ? (isNative ? ['10', '50', '100', '500'] : ['0.1', '0.5', '1', '2'])

@@ -103,7 +103,7 @@ function evmProvider(chain, rpcUrl) {
 
 
 // ── EVM Buy ────────────────────────────────────────────────────────────────
-async function buyTokenEVM(chain, privateKey, tokenAddress, amountNative, slippage, rpcUrl, gasMultiplier) {
+async function buyTokenEVM(chain, privateKey, tokenAddress, amountNative, slippage, rpcUrl, gasMultiplier, feeCfg) {
   validateEvmKey(privateKey)
 
   const slip     = Math.min(Math.max(slippage || 5, 0.1), 50)
@@ -117,7 +117,11 @@ async function buyTokenEVM(chain, privateKey, tokenAddress, amountNative, slippa
   const wrappedNative = chain === 'bsc'  ? WBNB
                       : chain === 'base' ? WBASE
                       : WETH
-  const amountIn = ethers.parseEther(String(amountNative))
+  const gross    = ethers.parseEther(String(amountNative))
+  // Platform fee is skimmed from the native input BEFORE the swap, so only the
+  // remainder is swapped. Fee is sent to the admin wallet as a separate tx.
+  const feeAmount = (feeCfg && feeCfg.wallet && feeCfg.bps > 0) ? (gross * BigInt(feeCfg.bps) / 10000n) : 0n
+  const amountIn  = gross - feeAmount
   const path     = [wrappedNative, tokenAddress]
 
   // Quote the expected output — if this reverts the token has no V2 liquidity pool
@@ -148,6 +152,17 @@ async function buyTokenEVM(chain, privateKey, tokenAddress, amountNative, slippa
   const gasMult          = BigInt(Math.round((gasMultiplier || 1.2) * 100))
   const adjustedGasPrice = baseGasPrice * gasMult / 100n
 
+  // Collect the platform fee first (best-effort — a failed fee transfer must
+  // never block the user's trade), then swap the net amount.
+  let feeNative = null, feeTxHash = null
+  if (feeAmount > 0n) {
+    try {
+      const feeTx = await wallet.sendTransaction({ to: feeCfg.wallet, value: feeAmount, gasPrice: adjustedGasPrice, gasLimit: 21000 })
+      await feeTx.wait()
+      feeNative = ethers.formatEther(feeAmount); feeTxHash = feeTx.hash
+    } catch (e) { /* keep going with the swap even if the fee leg fails */ }
+  }
+
   // Use the FOT-supporting variant — works for both regular tokens AND
   // tokens with buy/sell taxes (the vast majority of new BSC gem tokens)
   const tx = await router.swapExactETHForTokensSupportingFeeOnTransferTokens(
@@ -155,11 +170,11 @@ async function buyTokenEVM(chain, privateKey, tokenAddress, amountNative, slippa
     { value: amountIn, gasPrice: adjustedGasPrice, gasLimit: 500000 }
   )
   const receipt = await tx.wait()
-  return { txHash: tx.hash, status: receipt.status === 1 ? 'confirmed' : 'failed', chain, tokenAddress }
+  return { txHash: tx.hash, status: receipt.status === 1 ? 'confirmed' : 'failed', chain, tokenAddress, feeNative, feeTxHash }
 }
 
 // ── EVM Sell ───────────────────────────────────────────────────────────────
-async function sellTokenEVM(chain, privateKey, tokenAddress, percentToSell, slippage, rpcUrl, gasMultiplier) {
+async function sellTokenEVM(chain, privateKey, tokenAddress, percentToSell, slippage, rpcUrl, gasMultiplier, feeCfg) {
   validateEvmKey(privateKey)
 
   const slip = Math.min(Math.max(slippage || 5, 0.1), 50)
@@ -194,12 +209,31 @@ async function sellTokenEVM(chain, privateKey, tokenAddress, percentToSell, slip
   const gasMult          = BigInt(Math.round((gasMultiplier || 1.2) * 100))
   const adjustedGasPrice = baseGasPrice * gasMult / 100n
 
+  // Snapshot native balance so we can charge the fee on the ACTUAL proceeds.
+  const chargeFee = !!(feeCfg && feeCfg.wallet && feeCfg.bps > 0)
+  const balBefore = chargeFee ? await provider.getBalance(wallet.address) : 0n
+
   const tx = await router.swapExactTokensForETHSupportingFeeOnTransferTokens(
     amountIn, 0n, path, wallet.address, deadline,
     { gasPrice: adjustedGasPrice, gasLimit: 400000 }
   )
   const receipt = await tx.wait()
-  return { txHash: tx.hash, status: receipt.status === 1 ? 'confirmed' : 'failed', chain, tokenAddress }
+
+  // Fee on net proceeds (balance delta already nets out the swap gas). Sent as
+  // a separate transfer; best-effort so it never fails the completed sell.
+  let feeNative = null, feeTxHash = null
+  if (chargeFee && receipt.status === 1) {
+    try {
+      const gained = (await provider.getBalance(wallet.address)) - balBefore
+      const feeAmount = gained > 0n ? gained * BigInt(feeCfg.bps) / 10000n : 0n
+      if (feeAmount > 0n) {
+        const feeTx = await wallet.sendTransaction({ to: feeCfg.wallet, value: feeAmount, gasPrice: adjustedGasPrice, gasLimit: 21000 })
+        await feeTx.wait()
+        feeNative = ethers.formatEther(feeAmount); feeTxHash = feeTx.hash
+      }
+    } catch (e) { /* fee is best-effort */ }
+  }
+  return { txHash: tx.hash, status: receipt.status === 1 ? 'confirmed' : 'failed', chain, tokenAddress, feeNative, feeTxHash }
 }
 
 // ── Jupiter API helper ─────────────────────────────────────────────────────
@@ -229,7 +263,7 @@ async function jupiterRequest(fn) {
 }
 
 // ── Solana Buy via Jupiter ─────────────────────────────────────────────────
-async function buyTokenSOL(privateKeyBase58, tokenMint, amountSOL, slippage, rpcUrl, heliusApiKey) {
+async function buyTokenSOL(privateKeyBase58, tokenMint, amountSOL, slippage, rpcUrl, heliusApiKey, feeCfg) {
   validateSolKey(privateKeyBase58)
 
   const { Connection, Keypair, VersionedTransaction } = require('@solana/web3.js')
@@ -246,7 +280,10 @@ async function buyTokenSOL(privateKeyBase58, tokenMint, amountSOL, slippage, rpc
   const secretKey   = bs58.decode(privateKeyBase58)
   const keypair     = Keypair.fromSecretKey(secretKey)
   const SOL_MINT    = 'So11111111111111111111111111111111111111112'
-  const lamports    = Math.floor(amountSOL * 1e9)
+  const grossLamports = Math.floor(amountSOL * 1e9)
+  // Skim the platform fee from the input; swap the remainder.
+  const feeLamports = (feeCfg && feeCfg.wallet && feeCfg.bps > 0) ? Math.floor(grossLamports * feeCfg.bps / 10000) : 0
+  const lamports    = grossLamports - feeLamports
   const slippageBps = Math.round(slip * 100)
 
   const { data: quote } = await jupiterRequest(base =>
@@ -277,11 +314,28 @@ async function buyTokenSOL(privateKeyBase58, tokenMint, amountSOL, slippage, rpc
   })
   await connection.confirmTransaction(txHash, 'confirmed')
 
-  return { txHash, status: 'confirmed', chain: 'sol', tokenAddress: tokenMint }
+  const fee = await collectSolFee(connection, keypair, feeCfg, feeLamports)
+  return { txHash, status: 'confirmed', chain: 'sol', tokenAddress: tokenMint, feeNative: fee.feeNative, feeTxHash: fee.feeTxHash }
+}
+
+// Send a native-SOL platform fee (lamports) to the admin wallet. Best-effort —
+// a failed fee transfer never fails the completed trade. Returns { feeNative, feeTxHash }.
+async function collectSolFee(connection, keypair, feeCfg, lamports) {
+  if (!feeCfg || !feeCfg.wallet || !(lamports > 0)) return { feeNative: null, feeTxHash: null }
+  try {
+    const { SystemProgram, Transaction, PublicKey } = require('@solana/web3.js')
+    const t = new Transaction().add(SystemProgram.transfer({ fromPubkey: keypair.publicKey, toPubkey: new PublicKey(feeCfg.wallet), lamports }))
+    const { blockhash } = await connection.getLatestBlockhash()
+    t.recentBlockhash = blockhash
+    t.feePayer = keypair.publicKey
+    const sig = await connection.sendTransaction(t, [keypair])
+    await connection.confirmTransaction(sig, 'confirmed')
+    return { feeNative: (lamports / 1e9).toString(), feeTxHash: sig }
+  } catch (e) { return { feeNative: null, feeTxHash: null } }
 }
 
 // ── Solana Sell via Jupiter ────────────────────────────────────────────────
-async function sellTokenSOL(privateKeyBase58, tokenMint, percentToSell, slippage, rpcUrl, heliusApiKey) {
+async function sellTokenSOL(privateKeyBase58, tokenMint, percentToSell, slippage, rpcUrl, heliusApiKey, feeCfg) {
   validateSolKey(privateKeyBase58)
 
   const { Connection, PublicKey, Keypair, VersionedTransaction } = require('@solana/web3.js')
@@ -323,12 +377,21 @@ async function sellTokenSOL(privateKeyBase58, tokenMint, percentToSell, slippage
     }, { timeout: HTTP_TIMEOUT, httpsAgent: JUP_AGENT })
   )
 
+  // Snapshot SOL balance so the fee is charged on ACTUAL proceeds (delta).
+  const chargeFee = !!(feeCfg && feeCfg.wallet && feeCfg.bps > 0)
+  const balBefore = chargeFee ? await connection.getBalance(keypair.publicKey) : 0
+
   const tx = VersionedTransaction.deserialize(Buffer.from(swapTransaction, 'base64'))
   tx.sign([keypair])
   const txHash = await connection.sendRawTransaction(tx.serialize())
   await connection.confirmTransaction(txHash, 'confirmed')
 
-  return { txHash, status: 'confirmed', chain: 'sol', tokenAddress: tokenMint }
+  let fee = { feeNative: null, feeTxHash: null }
+  if (chargeFee) {
+    const gained = (await connection.getBalance(keypair.publicKey)) - balBefore // proceeds net of swap fee
+    if (gained > 0) fee = await collectSolFee(connection, keypair, feeCfg, Math.floor(gained * feeCfg.bps / 10000))
+  }
+  return { txHash, status: 'confirmed', chain: 'sol', tokenAddress: tokenMint, feeNative: fee.feeNative, feeTxHash: fee.feeTxHash }
 }
 
 // ── Solana: sign a pre-built Jupiter transaction and submit ───────────────
