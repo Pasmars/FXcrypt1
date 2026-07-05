@@ -91,6 +91,7 @@ async function renderDashboard(){
       <div class="grow"></div>
       <div class="muted" style="font-size:13px">${esc(currentUser.email)}</div>
       <button class="btn ghost sm" id="settings">Billing settings</button>
+      <button class="btn ghost sm" id="mcpbtn">MCP · Glassnode</button>
       <button class="btn ghost sm" id="signout">Sign out</button>
     </div>
     <div class="wrap">
@@ -110,6 +111,7 @@ async function renderDashboard(){
     </div>`;
   document.getElementById('signout').onclick = ()=>auth.signOut();
   document.getElementById('settings').onclick = showConfig;
+  document.getElementById('mcpbtn').onclick = showMcp;
   document.getElementById('refresh').onclick = ()=>{USERS=[];nextPageToken=null;loadUsers(true);loadStats()};
   document.getElementById('search').oninput = renderRows;
   document.getElementById('more').onclick = ()=>loadUsers(false);
@@ -332,6 +334,77 @@ async function showConfig(){
         feeWallets:{bsc:v('fw_bsc'),eth:v('fw_eth'),base:v('fw_base'),sol:v('fw_sol')},
       }});
       bg.remove(); toast('Settings saved');
+    }catch(e){ toast(e.message,true); }
+  };
+}
+
+// ── MCP / Glassnode integration: config + monitoring + control ──
+async function showMcp(){
+  let m = {};
+  try{ m = await call('adminGetMcpConfig'); }catch(e){ toast(e.message,true); return; }
+  const u = m.usage||{};
+  let discovered = []; // tools from the last successful test
+  let allow = new Set(m.allowTools||[]);
+  const fmtDate = (ms)=> ms ? new Date(ms).toLocaleString() : '—';
+  const bg = document.createElement('div'); bg.className='modal-bg';
+  bg.innerHTML = `<div class="modal">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px"><div style="flex:1;font-weight:800;font-size:16px">MCP · Glassnode integration</div><button class="btn ghost sm" id="mclose">Close</button></div>
+    <div class="muted" style="font-size:12px;margin-bottom:14px">Connects Pointer to an external MCP analytics server (Glassnode). The API token is stored server-side and never shown in full. Tools are only exposed to Pointer once you enable the connection and (optionally) allowlist them.</div>
+
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:12px"><input type="checkbox" id="m_en" ${m.enabled?'checked':''}/> <b>Enabled</b> — expose Glassnode tools to Pointer</label>
+
+    <label style="display:block;margin-bottom:10px"><div class="muted" style="font-size:12px;margin-bottom:4px">MCP server URL (https)</div><input id="m_url" value="${esc(m.url||'')}" placeholder="https://mcp.glassnode.com/..." style="width:100%"/></label>
+    <label style="display:block;margin-bottom:10px"><div class="muted" style="font-size:12px;margin-bottom:4px">API token ${m.tokenSet?`<span style="color:var(--up)">· set (${esc(m.tokenMasked)})</span>`:'<span style="color:var(--down)">· not set</span>'}</div><input id="m_tok" value="" placeholder="${m.tokenSet?'Leave blank to keep current token':'Paste Glassnode API token'}" style="width:100%"/></label>
+    <div style="display:flex;gap:10px">
+      <label style="flex:1"><div class="muted" style="font-size:12px;margin-bottom:4px">Auth header</div><input id="m_hdr" value="${esc(m.authHeader||'Authorization')}" style="width:100%"/></label>
+      <label style="flex:1;display:flex;align-items:flex-end;padding-bottom:8px"><span style="font-size:13px"><input type="checkbox" id="m_bearer" ${m.bearer!==false?'checked':''}/> Send as "Bearer &lt;token&gt;"</span></label>
+    </div>
+    <div style="display:flex;gap:10px">
+      <label style="flex:1"><div class="muted" style="font-size:12px;margin-bottom:4px">Max tools</div><input id="m_lim" type="number" value="${m.toolLimit||24}" style="width:100%"/></label>
+      <label style="flex:1"><div class="muted" style="font-size:12px;margin-bottom:4px">Max calls / message</div><input id="m_cap" type="number" value="${m.maxCallsPerTurn||6}" style="width:100%"/></label>
+    </div>
+
+    <div style="display:flex;gap:8px;margin:6px 0 12px"><button class="btn ghost sm" id="m_test">Test connection</button><span id="m_status" class="muted" style="font-size:12px;align-self:center"></span></div>
+    <div id="m_tools"></div>
+
+    <div style="font-weight:700;margin:14px 0 8px">Monitoring</div>
+    <div class="stats" style="margin-bottom:6px">
+      <div class="stat"><div class="n">${u.calls||0}</div><div class="l">Total calls</div></div>
+      <div class="stat"><div class="n" style="color:${(u.errors||0)>0?'var(--down)':'var(--up)'}">${u.errors||0}</div><div class="l">Errors</div></div>
+      <div class="stat"><div class="n" style="font-size:14px">${esc(fmtDate(u.lastCallAt))}</div><div class="l">Last call</div></div>
+    </div>
+    <div class="muted" style="font-size:12px">Last tool: ${esc(u.lastTool||'—')}${u.lastError?` · last error: <span style="color:var(--down)">${esc(u.lastError)}</span>`:''}</div>
+
+    <button class="btn" id="m_save" style="width:100%;margin-top:14px">Save MCP settings</button>
+  </div>`;
+  bg.onclick = e=>{ if(e.target===bg||e.target.id==='mclose') bg.remove(); };
+  document.body.appendChild(bg);
+  const g = id=>document.getElementById(id);
+  const renderTools = ()=>{
+    if(!discovered.length){ g('m_tools').innerHTML=''; return; }
+    g('m_tools').innerHTML = `<div class="muted" style="font-size:12px;margin:0 0 6px">Allowlist (${allow.size?allow.size+' selected':'none = allow all'}) — tick the tools Pointer may call:</div>`+
+      `<div style="max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:8px">`+
+      discovered.map(t=>`<label style="display:block;font-size:12.5px;margin-bottom:5px" title="${esc(t.description||'')}"><input type="checkbox" class="m_at" data-n="${esc(t.name)}" ${allow.has(t.name)?'checked':''}/> <b>${esc(t.name)}</b> <span class="muted">${esc((t.description||'').slice(0,60))}</span></label>`).join('')+
+      `</div>`;
+    g('m_tools').querySelectorAll('.m_at').forEach(cb=>cb.onchange=()=>{ const n=cb.getAttribute('data-n'); if(cb.checked) allow.add(n); else allow.delete(n); renderToolsHeader(); });
+  };
+  const renderToolsHeader = ()=>{ const h=g('m_tools').querySelector('.muted'); if(h) h.textContent=`Allowlist (${allow.size?allow.size+' selected':'none = allow all'}) — tick the tools Pointer may call:`; };
+  g('m_test').onclick = async ()=>{
+    g('m_status').textContent='Testing…';
+    try{
+      const r = await call('adminTestMcp',{ url:g('m_url').value.trim(), token:g('m_tok').value.trim(), authHeader:g('m_hdr').value.trim(), bearer:g('m_bearer').checked });
+      if(r.ok){ discovered=r.tools||[]; g('m_status').innerHTML=`<span style="color:var(--up)">✓ Connected · ${r.toolCount} tools</span>`; renderTools(); }
+      else { g('m_status').innerHTML=`<span style="color:var(--down)">✗ ${esc(r.error||'failed')}</span>`; }
+    }catch(e){ g('m_status').innerHTML=`<span style="color:var(--down)">✗ ${esc(e.message)}</span>`; }
+  };
+  g('m_save').onclick = async ()=>{
+    try{
+      await call('adminSetMcpConfig',{
+        enabled:g('m_en').checked, url:g('m_url').value.trim(), token:g('m_tok').value.trim(),
+        authHeader:g('m_hdr').value.trim(), bearer:g('m_bearer').checked,
+        allowTools:[...allow], toolLimit:parseInt(g('m_lim').value)||24, maxCallsPerTurn:parseInt(g('m_cap').value)||6,
+      });
+      bg.remove(); toast('MCP settings saved');
     }catch(e){ toast(e.message,true); }
   };
 }

@@ -23,6 +23,7 @@ const signalTracker  = require('./lib/signal-tracker')
 const gemTracker     = require('./lib/gem-tracker')
 const notify         = require('./lib/notify')
 const copytrader     = require('./lib/copytrader')
+const mcpLib         = require('./lib/mcp')
 const crypto2        = require('crypto')
 
 const DISCORD_TOPIC = 'fxcrypt-discord-jobs'
@@ -2473,8 +2474,39 @@ exports.chatPointer = functions
       uid, db, admin, trader, gemscanner, encryption,
       masterSecret: MASTER_SECRET(), heliusKey: SECRET_HELIUS.value() || null, moralisKey: SECRET_MORALIS.value() || null,
     }
+
+    // Optional MCP bridge (Glassnode on-chain analytics). Built here so a slow
+    // or down MCP server can't affect Pointer beyond a short timeout; a per-turn
+    // call cap + allowlist are enforced. Any failure → Pointer runs without it.
+    let mcp = null
     try {
-      const { text, proposal, history: newHistory, model, sources } = await agentLib.runAgent({ prompt, history, ctx, provider: prov, apiKey, surface: 'pointer', deep, deepModel })
+      const mcpCfg = await mcpLib.loadConfig(db)
+      if (mcpCfg.enabled && mcpCfg.url && mcpCfg.token) {
+        const built = await mcpLib.buildAgentTools(mcpCfg)
+        if (built && built.openaiTools.length) {
+          let calls = 0
+          mcp = {
+            tools: built.openaiTools,
+            call: async (fnName, args) => {
+              if (calls >= (mcpCfg.maxCallsPerTurn || 6)) return 'Glassnode call limit reached for this message.'
+              calls++
+              const realName = built.nameMap[fnName]
+              try {
+                const out = await mcpLib.callTool(mcpCfg, built.sessionId, realName, args)
+                mcpLib.trackUsage(db, admin, { tool: realName, ok: !out.isError, error: out.isError ? out.text : null })
+                return out.text
+              } catch (e) {
+                mcpLib.trackUsage(db, admin, { tool: realName, ok: false, error: e.message })
+                throw e
+              }
+            },
+          }
+        }
+      }
+    } catch (e) { /* MCP is optional — Pointer works without it */ }
+
+    try {
+      const { text, proposal, history: newHistory, model, sources } = await agentLib.runAgent({ prompt, history, ctx, provider: prov, apiKey, surface: 'pointer', deep, deepModel, mcp })
       await metering.track(db, uid, { pointerReqs: 1, ...(deep ? { deepReqs: 1 } : {}) })
       const usage = { used: spent.used, remaining: spent.remaining, credits: spent.credits, quota: spent.quota, resetsAt: spent.resetsAt }
       return { text, proposal: proposal || null, history: newHistory, provider: prov, deep, model, usage, sources: sources || [] }
@@ -3015,4 +3047,58 @@ exports.adminSetConfig = adminFn.https.onCall(async (data, context) => {
   if (c.feeWallets) clean.feeWallets = { bsc: evmAddr(c.feeWallets.bsc), eth: evmAddr(c.feeWallets.eth), base: evmAddr(c.feeWallets.base), sol: solAddr(c.feeWallets.sol) }
   await db.doc('config/billing').set(clean, { merge: true })
   return { ok: true, config: clean }
+})
+
+// ── MCP (Glassnode) integration: admin config + monitoring + control ────────
+// The API token is server-only: it's write-only from the admin panel and NEVER
+// returned (only a masked version), so it can't leak back to any client.
+exports.adminGetMcpConfig = adminFn.https.onCall(async (data, context) => {
+  await requireAdmin(context)
+  const c = await mcpLib.loadConfig(db)
+  const u = c.usage || {}
+  return {
+    enabled: !!c.enabled, provider: c.provider || 'glassnode', url: c.url || '',
+    authHeader: c.authHeader || 'Authorization', bearer: c.bearer !== false,
+    tokenSet: !!c.token, tokenMasked: mcpLib.maskToken(c.token),
+    allowTools: Array.isArray(c.allowTools) ? c.allowTools : [],
+    toolLimit: c.toolLimit || 24, maxCallsPerTurn: c.maxCallsPerTurn || 6,
+    usage: { calls: u.calls || 0, errors: u.errors || 0, lastCallAt: u.lastCallAt || null, lastTool: u.lastTool || null, lastError: u.lastError || null },
+  }
+})
+
+exports.adminSetMcpConfig = adminFn.https.onCall(async (data, context) => {
+  await requireAdmin(context)
+  const c = data || {}
+  const patch = {
+    enabled: !!c.enabled,
+    provider: String(c.provider || 'glassnode').slice(0, 40),
+    url: String(c.url || '').trim().slice(0, 400),
+    authHeader: String(c.authHeader || 'Authorization').trim().slice(0, 60) || 'Authorization',
+    bearer: c.bearer !== false,
+    allowTools: Array.isArray(c.allowTools) ? c.allowTools.map((t) => String(t).slice(0, 80)).slice(0, 60) : [],
+    toolLimit: Math.max(1, Math.min(parseInt(c.toolLimit) || 24, 60)),
+    maxCallsPerTurn: Math.max(1, Math.min(parseInt(c.maxCallsPerTurn) || 6, 20)),
+    updatedBy: context.auth.token.email, updatedAt: Date.now(),
+  }
+  if (patch.url && !/^https:\/\//i.test(patch.url)) throw new functions.https.HttpsError('invalid-argument', 'MCP server URL must be https://')
+  // Token is only overwritten when a new, non-masked value is supplied — sending
+  // the masked placeholder back leaves the stored token untouched.
+  const tok = String(c.token || '').trim()
+  if (tok && !tok.includes('••')) patch.token = tok
+  else if (c.clearToken) patch.token = ''
+  await db.doc('config/mcp').set(patch, { merge: true })
+  return { ok: true }
+})
+
+// Live connection test — initialize + tools/list against the configured server.
+exports.adminTestMcp = adminFn.https.onCall(async (data, context) => {
+  await requireAdmin(context)
+  const cfg = await mcpLib.loadConfig(db)
+  // Allow testing a URL/token the admin just typed but hasn't saved yet.
+  if (data && data.url) cfg.url = String(data.url).trim()
+  if (data && data.token && !String(data.token).includes('••')) cfg.token = String(data.token).trim()
+  if (data && data.authHeader) cfg.authHeader = String(data.authHeader).trim()
+  if (data && data.bearer !== undefined) cfg.bearer = !!data.bearer
+  const res = await mcpLib.healthCheck(cfg)
+  return res
 })

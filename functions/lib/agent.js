@@ -634,7 +634,7 @@ async function runTool(name, input, ctx) {
 
 // ── Main agent loop ────────────────────────────────────────────────────────
 // history: prior [{role,content(text)}] turns. Returns { text, proposal|null, history }.
-async function runAgent({ prompt, history = [], ctx, provider = 'deepseek', apiKey, surface = 'discord', deep = false, deepModel = null }) {
+async function runAgent({ prompt, history = [], ctx, provider = 'deepseek', apiKey, surface = 'discord', deep = false, deepModel = null, mcp = null }) {
   const isPointer = surface === 'pointer'
   const cfg = PROVIDERS[provider] || PROVIDERS.deepseek
   // Deep research → the provider's top-tier model (admin override wins), more
@@ -643,10 +643,17 @@ async function runAgent({ prompt, history = [], ctx, provider = 'deepseek', apiK
   const maxLoops = deep ? DEEP_MAX_LOOPS : MAX_LOOPS
   const maxTokens = deep ? 8000 : 4096
   const client = new OpenAI({ apiKey, baseURL: cfg.baseURL })
-  const tools = isPointer ? TOOLS_POINTER : TOOLS
+  // MCP tools (e.g. Glassnode on-chain analytics) are bridged in for Pointer
+  // only, when an admin has enabled the connection. They're proxied to the
+  // external MCP server by mcp.call() and namespaced (gn_*), so a failure or
+  // absence of MCP never affects the built-in tools.
+  const mcpTools = (isPointer && mcp && Array.isArray(mcp.tools)) ? mcp.tools : []
+  const mcpNames = new Set(mcpTools.map((t) => t.function && t.function.name))
+  const tools = isPointer ? [...TOOLS_POINTER, ...mcpTools] : TOOLS
+  const mcpDirective = mcpTools.length ? `\n\nGLASSNODE ON-CHAIN ANALYTICS: you also have Glassnode tools (named gn_*) for institutional on-chain metrics — SOPR, MVRV, realized cap, exchange in/outflows, active/new addresses, supply distribution, HODL waves, miner data and more. Use them for deep on-chain questions on major assets (BTC, ETH, etc.), and attribute the data to Glassnode.` : ''
   const toolCtx = { ...ctx, surface }
   const messages = [
-    { role: 'system', content: (isPointer ? SYSTEM_POINTER : SYSTEM) + (deep ? DEEP_DIRECTIVE : '') },
+    { role: 'system', content: (isPointer ? SYSTEM_POINTER : SYSTEM) + (deep ? DEEP_DIRECTIVE : '') + mcpDirective },
     ...history.map(h => ({ role: h.role, content: h.content })),
     { role: 'user', content: prompt },
   ]
@@ -730,6 +737,16 @@ async function runAgent({ prompt, history = [], ctx, provider = 'deepseek', apiK
         }
         const place = isPointer ? 'right here in the app' : 'in Discord'
         messages.push({ role: 'tool', tool_call_id: tc.id, content: `Verified on-chain: ${verified.tokenSymbol} at ${verified.tokenAddress} (${verified.chain}), slippage ${slippage}%. An Approve/Reject card is now shown to the owner ${place}. Do not propose again. Briefly summarize what you proposed and why (use the verified symbol), and tell the owner to approve or reject the card ${isPointer ? 'here in the app' : 'in Discord'} — do not mention any other place.` })
+        continue
+      }
+      // Bridged MCP (Glassnode) tool call → proxy to the external server.
+      if (mcpNames.has(fname)) {
+        try {
+          const text = await mcp.call(fname, args)
+          messages.push({ role: 'tool', tool_call_id: tc.id, content: String(text || '(no data)').slice(0, 8000) })
+        } catch (e) {
+          messages.push({ role: 'tool', tool_call_id: tc.id, content: 'Glassnode error: ' + (e.message || 'call failed') })
+        }
         continue
       }
       try {
