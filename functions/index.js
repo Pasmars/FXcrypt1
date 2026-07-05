@@ -2481,7 +2481,9 @@ exports.chatPointer = functions
     let mcp = null
     try {
       const mcpCfg = await mcpLib.loadConfig(db)
-      if (mcpCfg.enabled && mcpCfg.url && mcpCfg.token) {
+      // Public access (no token) is allowed when the admin opts in — lets Pointer
+      // use Glassnode's public 30-day data before an API key is provisioned.
+      if (mcpCfg.enabled && mcpCfg.url && (mcpCfg.token || mcpCfg.publicAccess)) {
         const built = await mcpLib.buildAgentTools(mcpCfg)
         if (built && built.openaiTools.length) {
           let calls = 0
@@ -3058,7 +3060,8 @@ exports.adminGetMcpConfig = adminFn.https.onCall(async (data, context) => {
   const u = c.usage || {}
   return {
     enabled: !!c.enabled, provider: c.provider || 'glassnode', url: c.url || '',
-    authHeader: c.authHeader || 'Authorization', bearer: c.bearer !== false,
+    authHeader: c.authHeader || 'X-Api-Key', bearer: c.bearer === true,
+    publicAccess: !!c.publicAccess,
     tokenSet: !!c.token, tokenMasked: mcpLib.maskToken(c.token),
     allowTools: Array.isArray(c.allowTools) ? c.allowTools : [],
     toolLimit: c.toolLimit || 24, maxCallsPerTurn: c.maxCallsPerTurn || 6,
@@ -3073,8 +3076,9 @@ exports.adminSetMcpConfig = adminFn.https.onCall(async (data, context) => {
     enabled: !!c.enabled,
     provider: String(c.provider || 'glassnode').slice(0, 40),
     url: String(c.url || '').trim().slice(0, 400),
-    authHeader: String(c.authHeader || 'Authorization').trim().slice(0, 60) || 'Authorization',
-    bearer: c.bearer !== false,
+    authHeader: String(c.authHeader || 'X-Api-Key').trim().slice(0, 60) || 'X-Api-Key',
+    bearer: c.bearer === true,
+    publicAccess: !!c.publicAccess,
     allowTools: Array.isArray(c.allowTools) ? c.allowTools.map((t) => String(t).slice(0, 80)).slice(0, 60) : [],
     toolLimit: Math.max(1, Math.min(parseInt(c.toolLimit) || 24, 60)),
     maxCallsPerTurn: Math.max(1, Math.min(parseInt(c.maxCallsPerTurn) || 6, 20)),
@@ -3099,6 +3103,7 @@ exports.adminTestMcp = adminFn.https.onCall(async (data, context) => {
   if (data && data.token && !String(data.token).includes('••')) cfg.token = String(data.token).trim()
   if (data && data.authHeader) cfg.authHeader = String(data.authHeader).trim()
   if (data && data.bearer !== undefined) cfg.bearer = !!data.bearer
+  if (data && data.publicAccess !== undefined) cfg.publicAccess = !!data.publicAccess
   const res = await mcpLib.healthCheck(cfg)
   return res
 })

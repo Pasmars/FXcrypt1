@@ -20,10 +20,13 @@ const DEFAULT_TIMEOUT = 15000
 const DEFAULTS = {
   enabled: false,
   provider: 'glassnode',
-  url: '',
+  // Glassnode's MCP server. Public access works with NO token (30-day history
+  // limit); adding an X-Api-Key removes the limit. Same URL either way.
+  url: 'https://mcp.glassnode.com',
   token: '',
-  authHeader: 'Authorization', // header the token is sent in
-  bearer: true,                // prefix the value with "Bearer "
+  authHeader: 'X-Api-Key',     // header the token is sent in (Glassnode uses X-Api-Key)
+  bearer: false,               // Glassnode wants the raw key, no "Bearer " prefix
+  publicAccess: false,         // allow enabling WITHOUT a token (public 30-day access)
   allowTools: [],              // [] = allow all discovered tools (capped)
   toolLimit: 24,
   maxCallsPerTurn: 6,
@@ -133,7 +136,7 @@ async function callTool(cfg, sessionId, name, args) {
 // Live connection test for the admin panel.
 async function healthCheck(cfg) {
   if (!cfg.url) return { ok: false, error: 'No server URL set' }
-  if (!cfg.token) return { ok: false, error: 'No API token set' }
+  if (!cfg.token && !cfg.publicAccess) return { ok: false, error: 'Set an API token, or enable public access' }
   try {
     const { sessionId, serverInfo } = await connect(cfg)
     const tools = await listTools(cfg, sessionId)

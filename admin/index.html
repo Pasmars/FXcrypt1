@@ -353,11 +353,15 @@ async function showMcp(){
 
     <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:12px"><input type="checkbox" id="m_en" ${m.enabled?'checked':''}/> <b>Enabled</b> — expose Glassnode tools to Pointer</label>
 
-    <label style="display:block;margin-bottom:10px"><div class="muted" style="font-size:12px;margin-bottom:4px">MCP server URL (https)</div><input id="m_url" value="${esc(m.url||'')}" placeholder="https://mcp.glassnode.com/..." style="width:100%"/></label>
-    <label style="display:block;margin-bottom:10px"><div class="muted" style="font-size:12px;margin-bottom:4px">API token ${m.tokenSet?`<span style="color:var(--up)">· set (${esc(m.tokenMasked)})</span>`:'<span style="color:var(--down)">· not set</span>'}</div><input id="m_tok" value="" placeholder="${m.tokenSet?'Leave blank to keep current token':'Paste Glassnode API token'}" style="width:100%"/></label>
+    <label style="display:block;margin-bottom:10px"><div class="muted" style="font-size:12px;margin-bottom:4px">MCP server URL (https)</div><input id="m_url" value="${esc(m.url||'https://mcp.glassnode.com')}" placeholder="https://mcp.glassnode.com" style="width:100%"/></label>
+
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:6px"><input type="checkbox" id="m_pub" ${m.publicAccess?'checked':''}/> <b>Public access</b> — connect without an API key</label>
+    <div class="muted" style="font-size:11.5px;margin:0 0 10px">Use Glassnode's public MCP now (30-day history limit). Add an API key below any time to remove the limit — the key is used automatically once set.</div>
+
+    <label style="display:block;margin-bottom:10px"><div class="muted" style="font-size:12px;margin-bottom:4px">API token ${m.tokenSet?`<span style="color:var(--up)">· set (${esc(m.tokenMasked)})</span>`:'<span style="color:var(--muted)">· optional in public mode</span>'}</div><input id="m_tok" value="" placeholder="${m.tokenSet?'Leave blank to keep current key':'Glassnode API key (optional — leave blank for public access)'}" style="width:100%"/></label>
     <div style="display:flex;gap:10px">
-      <label style="flex:1"><div class="muted" style="font-size:12px;margin-bottom:4px">Auth header</div><input id="m_hdr" value="${esc(m.authHeader||'Authorization')}" style="width:100%"/></label>
-      <label style="flex:1;display:flex;align-items:flex-end;padding-bottom:8px"><span style="font-size:13px"><input type="checkbox" id="m_bearer" ${m.bearer!==false?'checked':''}/> Send as "Bearer &lt;token&gt;"</span></label>
+      <label style="flex:1"><div class="muted" style="font-size:12px;margin-bottom:4px">Auth header</div><input id="m_hdr" value="${esc(m.authHeader||'X-Api-Key')}" style="width:100%"/></label>
+      <label style="flex:1;display:flex;align-items:flex-end;padding-bottom:8px"><span style="font-size:13px"><input type="checkbox" id="m_bearer" ${m.bearer===true?'checked':''}/> Send as "Bearer &lt;token&gt;"</span></label>
     </div>
     <div style="display:flex;gap:10px">
       <label style="flex:1"><div class="muted" style="font-size:12px;margin-bottom:4px">Max tools</div><input id="m_lim" type="number" value="${m.toolLimit||24}" style="width:100%"/></label>
@@ -392,7 +396,7 @@ async function showMcp(){
   g('m_test').onclick = async ()=>{
     g('m_status').textContent='Testing…';
     try{
-      const r = await call('adminTestMcp',{ url:g('m_url').value.trim(), token:g('m_tok').value.trim(), authHeader:g('m_hdr').value.trim(), bearer:g('m_bearer').checked });
+      const r = await call('adminTestMcp',{ url:g('m_url').value.trim(), token:g('m_tok').value.trim(), authHeader:g('m_hdr').value.trim(), bearer:g('m_bearer').checked, publicAccess:g('m_pub').checked });
       if(r.ok){ discovered=r.tools||[]; g('m_status').innerHTML=`<span style="color:var(--up)">✓ Connected · ${r.toolCount} tools</span>`; renderTools(); }
       else { g('m_status').innerHTML=`<span style="color:var(--down)">✗ ${esc(r.error||'failed')}</span>`; }
     }catch(e){ g('m_status').innerHTML=`<span style="color:var(--down)">✗ ${esc(e.message)}</span>`; }
@@ -401,7 +405,7 @@ async function showMcp(){
     try{
       await call('adminSetMcpConfig',{
         enabled:g('m_en').checked, url:g('m_url').value.trim(), token:g('m_tok').value.trim(),
-        authHeader:g('m_hdr').value.trim(), bearer:g('m_bearer').checked,
+        authHeader:g('m_hdr').value.trim(), bearer:g('m_bearer').checked, publicAccess:g('m_pub').checked,
         allowTools:[...allow], toolLimit:parseInt(g('m_lim').value)||24, maxCallsPerTurn:parseInt(g('m_cap').value)||6,
       });
       bg.remove(); toast('MCP settings saved');
