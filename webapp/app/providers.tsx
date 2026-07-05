@@ -61,7 +61,7 @@ export function ClientRoot({ children }: { children: React.ReactNode }) {
     if (!ready) return;
     const ROUTES = ['/', '/markets', '/signals', '/wallet', '/token', '/trade', '/scanner',
       '/chat', '/profile', '/automation', '/alerts', '/paywall', '/bubble', '/execSignal',
-      '/signalChart', '/exchanges', '/signing', '/2fa', '/sessions', '/connect', '/referral', '/portfolio', '/copytrade'];
+      '/signalChart', '/signalTrackRecord', '/gemTrackRecord', '/exchanges', '/signing', '/2fa', '/sessions', '/connect', '/referral', '/portfolio', '/copytrade'];
     const id = setTimeout(() => { ROUTES.forEach((r) => { try { router.prefetch(r); } catch {} }); }, 0);
     return () => clearTimeout(id);
   }, [ready, router]);

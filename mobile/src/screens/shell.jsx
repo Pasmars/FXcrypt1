@@ -152,6 +152,8 @@ function App() {
     else if (key === 'trade') { header = head('Manual Trade', <Pill tone="muted">{plan === 'free' ? '1.0%' : plan === 'pro' ? '0.5%' : '0.2%'} fee</Pill>); inner = <TradeFlow token={props.token} side={props.side} go={go} onDone={back} />; }
     else if (key === 'execSignal') { header = head('Execute Signal'); inner = <ExecSignal signal={props.signal} go={go} onDone={back} />; }
     else if (key === 'signalChart') { header = head(props.signal.pair, <Pill tone="accent">{props.signal.conf}%</Pill>); inner = <SignalChart signal={props.signal} go={go} onExec={() => go('execSignal', { signal: props.signal })} />; }
+    else if (key === 'signalTrackRecord') { header = head('Signal track record'); inner = <SignalTrackRecord go={go} />; }
+    else if (key === 'gemTrackRecord') { header = head('Gem track record'); inner = <GemTrackRecord go={go} />; }
     else if (key === 'scanner') { custom = true; inner = <GemScanner go={go} onTrade={openTrade} locked={plan === 'free'} onUpsell={upsell} />; }
     else if (key === 'paywall') { custom = true; inner = <Paywall go={go} onDone={back} />; }
     else if (key === 'profile') { header = head('Profile'); inner = <Profile go={go} t={t} setTweak={setTweak} plan={plan} planLabel={planLabel} onSignOut={() => { if (window.FXAuth) window.FXAuth.signOut(); setStack([]); setPhase('onboard'); }} />; }

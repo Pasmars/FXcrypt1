@@ -22,7 +22,9 @@ import {
   callVerifyCryptoPayment,
   callGetPointerUsage,
   callGetSignalStats,
+  callGetSignalOutcomes,
   callGetGemStats,
+  callGetGemOutcomes,
   callSavePriceAlert,
   callGetReferralInfo,
   callGetCopyFeed,
@@ -611,6 +613,16 @@ window.FXAPI = {
     };
   })(),
 
+  // Individual won/lost signals behind the track-record card (90d). Cached 5 min.
+  getSignalOutcomes: (() => {
+    let cache = null, at = 0;
+    return async () => {
+      if (cache && Date.now() - at < 300000) return cache;
+      try { cache = (await callGetSignalOutcomes({})).data; at = Date.now(); return cache; }
+      catch (e) { return cache; }
+    };
+  })(),
+
   // ── Gem hindsight stats ──
   // Median/best 24h & 7d performance of gems the scanner surfaced (30d window,
   // server-computed). Cached 5 min; the Gem Scanner reads it.
@@ -619,6 +631,16 @@ window.FXAPI = {
     return async () => {
       if (cache && Date.now() - at < 300000) return cache;
       try { cache = (await callGetGemStats({})).data; at = Date.now(); return cache; }
+      catch (e) { return cache; }
+    };
+  })(),
+
+  // Individual won/lost gems behind the track-record card (90d). Cached 5 min.
+  getGemOutcomes: (() => {
+    let cache = null, at = 0;
+    return async () => {
+      if (cache && Date.now() - at < 300000) return cache;
+      try { cache = (await callGetGemOutcomes({})).data; at = Date.now(); return cache; }
       catch (e) { return cache; }
     };
   })(),

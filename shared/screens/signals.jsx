@@ -147,11 +147,13 @@ function Signals({ go, onUpsell }) {
         const seg = (n, color) => decided ? <div style={{ flex: n || 0.0001, height: 6, background: color }} /> : null;
         return (
           <div style={{ padding: '0 16px 12px' }}>
-            <div style={{ background: 'var(--surface)', borderRadius: 14, padding: '12px 14px', boxShadow: 'inset 0 0 0 1px var(--line)' }}>
+            {/* Tap to drill into the individual won/lost signals behind these numbers. */}
+            <div onClick={() => go('signalTrackRecord')} style={{ cursor: 'pointer', background: 'var(--surface)', borderRadius: 14, padding: '12px 14px', boxShadow: 'inset 0 0 0 1px var(--line)' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 10 }}>
                 <Icon name="trophy" size={15} color="var(--accent)" />
                 <span style={{ fontSize: 13, fontWeight: 800, flex: 1 }}>Track record · last 90 days</span>
                 <Pill tone="muted">{d.total} signals</Pill>
+                <Icon name="chevR" size={16} color="var(--faint)" />
               </div>
               <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
                 {[['Win rate', d.winRate != null ? d.winRate + '%' : '—', d.winRate >= 50 ? 'var(--up)' : 'var(--text)'],
@@ -164,10 +166,13 @@ function Signals({ go, onUpsell }) {
                 ))}
               </div>
               {decided > 0 && (
-                <div style={{ display: 'flex', gap: 2, borderRadius: 4, overflow: 'hidden' }} title={`TP1 ${d.tp1} · TP2 ${d.tp2} · TP3 ${d.tp3} · SL ${d.losses}`}>
+                <div style={{ display: 'flex', gap: 2, borderRadius: 4, overflow: 'hidden', marginBottom: 8 }} title={`TP1 ${d.tp1} · TP2 ${d.tp2} · TP3 ${d.tp3} · SL ${d.losses}`}>
                   {seg(d.tp1, 'var(--up)')}{seg(d.tp2, 'var(--up)')}{seg(d.tp3, 'var(--accent)')}{seg(d.losses, 'var(--down)')}
                 </div>
               )}
+              <div style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 4 }}>
+                <Icon name="list" size={12} /> View every won & lost signal
+              </div>
             </div>
           </div>
         );
@@ -589,4 +594,75 @@ function ExecProcessing({ s, margin, onComplete }) {
   );
 }
 
-Object.assign(window, { Signals, ExecSignal, SignalChart });
+// ─── Signal track record — the won/lost list behind the summary card ───
+// Every row is a real, server-resolved signal (TP hit or SL) from the last 90
+// days. Nothing self-reported: outcomes come from exchange candles.
+const OUTCOME_LABEL = { tp1: 'TP1 hit', tp2: 'TP2 hit', tp3: 'TP3 hit', sl: 'Stopped out' };
+function SignalTrackRecord({ go }) {
+  const [data, setData] = sgS(null);
+  const [filter, setFilter] = sgS('All');
+  sgE(() => {
+    let alive = true;
+    if (window.FXAPI && window.FXAPI.getSignalOutcomes) {
+      window.FXAPI.getSignalOutcomes().then((r) => { if (alive) setData(r || { outcomes: [] }); }).catch(() => { if (alive) setData({ outcomes: [] }); });
+    } else setData({ outcomes: [] });
+    return () => { alive = false; };
+  }, []);
+  const all = (data && data.outcomes) || [];
+  const wins = all.filter((o) => o.won).length;
+  const losses = all.length - wins;
+  const list = filter === 'All' ? all : filter === 'Won' ? all.filter((o) => o.won) : all.filter((o) => !o.won);
+
+  if (!data) return <div style={{ padding: '60px 20px', textAlign: 'center', color: 'var(--muted)' }}><span style={{ display: 'inline-block', width: 22, height: 22, border: '3px solid var(--line2)', borderTopColor: 'var(--accent)', borderRadius: '50%', animation: 'fxspin .7s linear infinite' }} /></div>;
+
+  return (
+    <div style={{ padding: '4px 16px 24px' }}>
+      {/* summary strip */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+        {[['Resolved', all.length, 'var(--text)'], ['Won', wins, 'var(--up)'], ['Lost', losses, 'var(--down)']].map(([l, v, c]) => (
+          <div key={l} style={{ flex: 1, background: 'var(--surface)', borderRadius: 12, padding: '12px 8px', textAlign: 'center', boxShadow: 'inset 0 0 0 1px var(--line)' }}>
+            <div style={{ fontSize: 19, fontWeight: 800, color: c }}>{v}</div>
+            <div style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 700 }}>{l}</div>
+          </div>
+        ))}
+      </div>
+      {/* filter chips */}
+      <div style={{ display: 'flex', gap: 7, marginBottom: 14 }}>
+        {['All', 'Won', 'Lost'].map((t) => <Chip key={t} active={filter === t} onClick={() => setFilter(t)}>{t}{t === 'Won' ? ` (${wins})` : t === 'Lost' ? ` (${losses})` : ''}</Chip>)}
+      </div>
+      {/* rows */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+        {list.map((o, i) => {
+          const long = (o.bias || 'long') === 'long';
+          const pair = o.symbol ? o.symbol.replace(/USDT$/, '/USDT') : '—';
+          const when = o.generatedAt ? new Date(o.generatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
+          return (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 11, background: 'var(--surface)', borderRadius: 12, padding: '11px 13px', boxShadow: 'inset 0 0 0 1px var(--line)' }}>
+              <div style={{ width: 34, height: 34, borderRadius: '50%', flexShrink: 0, background: o.won ? 'var(--up-bg)' : 'var(--down-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: o.won ? 'var(--up)' : 'var(--down)' }}><Icon name={o.won ? 'check' : 'x'} size={17} stroke={3} /></div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 14.5, fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{pair}</span>
+                  <span style={{ fontSize: 10, fontWeight: 800, color: long ? 'var(--up)' : 'var(--down)', background: long ? 'var(--up-bg)' : 'var(--down-bg)', padding: '1px 6px', borderRadius: 5 }}>{long ? 'LONG' : 'SHORT'}</span>
+                </div>
+                <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 1 }}>{OUTCOME_LABEL[o.outcome] || o.outcome}{when ? ' · ' + when : ''}</div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontSize: 15, fontWeight: 800, color: o.won ? 'var(--up)' : 'var(--down)', fontVariantNumeric: 'tabular-nums' }}>{o.outcomeR != null ? (o.outcomeR >= 0 ? '+' : '') + o.outcomeR + 'R' : (o.won ? 'Win' : 'Loss')}</div>
+              </div>
+            </div>
+          );
+        })}
+        {list.length === 0 && (
+          <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--muted)' }}>
+            <Icon name="trophy" size={26} color="var(--faint)" style={{ marginBottom: 10 }} />
+            <div style={{ fontSize: 14, fontWeight: 600 }}>{all.length === 0 ? 'No resolved signals yet' : `No ${filter.toLowerCase()} signals`}</div>
+            <div style={{ fontSize: 12.5, marginTop: 3 }}>{all.length === 0 ? 'Outcomes appear here as published signals hit TP or SL.' : 'Switch the filter to see the rest.'}</div>
+          </div>
+        )}
+      </div>
+      <div style={{ fontSize: 11, color: 'var(--faint)', textAlign: 'center', marginTop: 16, lineHeight: 1.5 }}>Every signal is resolved server-side against its SL/TP using exchange candles. Expired (never-filled) setups are excluded. Not financial advice.</div>
+    </div>
+  );
+}
+
+Object.assign(window, { Signals, ExecSignal, SignalChart, SignalTrackRecord });

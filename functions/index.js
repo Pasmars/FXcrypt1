@@ -1648,6 +1648,12 @@ exports.getSignalStats = functions.region('europe-west1').runWith({ timeoutSecon
   return signalTracker.readStats(db)
 })
 
+// Individual won/lost signals behind the track-record card (90-day drill-down).
+exports.getSignalOutcomes = functions.region('europe-west1').runWith({ timeoutSeconds: 60 }).https.onCall(async (data, context) => {
+  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
+  return signalTracker.readOutcomes(db)
+})
+
 // ── Gem Hindsight Tracker (runs hourly) ────────────────────────────────────
 // Re-prices surfaced gems at their +24h / +7d marks so the scanner can show
 // honest median/best performance of the gems it found.
@@ -1660,10 +1666,16 @@ exports.processGemOutcomes = functions.region('europe-west1')
     return null
   })
 
-// Hindsight stats for the Gem Scanner screen (median/best 24h & 7d).
+// Hindsight stats for the Gem Scanner screen (median/best 24h & 7d + 90d record).
 exports.getGemStats = functions.region('europe-west1').runWith({ timeoutSeconds: 60 }).https.onCall(async (data, context) => {
   if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
   return gemTracker.readStats(db)
+})
+
+// Individual won/lost gems behind the track-record card (90-day drill-down).
+exports.getGemOutcomes = functions.region('europe-west1').runWith({ timeoutSeconds: 60 }).https.onCall(async (data, context) => {
+  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
+  return gemTracker.readOutcomes(db)
 })
 
 // ── Snipe Queue Processor (runs every 1 minute) ───────────────────────────

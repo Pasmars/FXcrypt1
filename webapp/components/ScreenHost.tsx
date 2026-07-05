@@ -7,7 +7,8 @@ import { useApp } from '@/app/providers';
 const COMPONENT: Record<string, string> = {
   pointer: 'PointerHome', markets: 'Markets', signals: 'Signals', wallet: 'Wallet',
   chat: 'PointerChat', token: 'TokenDetail', bubble: 'BubbleMap', trade: 'TradeFlow',
-  execSignal: 'ExecSignal', signalChart: 'SignalChart', scanner: 'GemScanner',
+  execSignal: 'ExecSignal', signalChart: 'SignalChart', signalTrackRecord: 'SignalTrackRecord',
+  gemTrackRecord: 'GemTrackRecord', scanner: 'GemScanner',
   paywall: 'Paywall', profile: 'Profile', automation: 'Automation', alerts: 'Alerts',
   exchanges: 'ProfileExchanges', signing: 'ProfileSigning', '2fa': 'Profile2FA',
   sessions: 'ProfileSessions', connect: 'ProfileConnect', referral: 'ProfileReferral',

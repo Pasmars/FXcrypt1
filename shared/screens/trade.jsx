@@ -586,6 +586,48 @@ function GemScanner({ go, onTrade, locked, onUpsell }) {
           </div>
         )}
       </div>
+      {/* Verified 90-day track record — win rate / avg return / W-L of the gems
+          this scanner surfaced, resolved server-side against live prices. Tap to
+          drill into every won & lost gem. Mirrors the CEX signal bot's card.
+          Always shown (even while the sample is still building) so the feature
+          is discoverable; the numbers fill in as gems hit their 24h/7d marks. */}
+      {stats && stats.d90 && (() => {
+        const d = stats.d90;
+        const has = d.total >= 1;
+        const seg = (n, color) => has ? <div style={{ flex: n || 0.0001, height: 6, background: color }} /> : null;
+        return (
+          <div style={{ padding: '0 16px 12px' }}>
+            <div onClick={() => go('gemTrackRecord')} style={{ cursor: 'pointer', background: 'var(--surface)', borderRadius: 14, padding: '12px 14px', boxShadow: 'inset 0 0 0 1px var(--line)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 10 }}>
+                <Icon name="trophy" size={15} color="var(--accent)" />
+                <span style={{ fontSize: 13, fontWeight: 800, flex: 1 }}>Gem track record · last 90 days</span>
+                <Pill tone="muted">{has ? d.total + ' gems' : 'building'}</Pill>
+                <Icon name="chevR" size={16} color="var(--faint)" />
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                {[['Win rate', d.winRate != null ? d.winRate + '%' : '—', d.winRate >= 50 ? 'var(--up)' : 'var(--text)'],
+                  ['Avg return', d.avgReturn != null ? (d.avgReturn >= 0 ? '+' : '') + d.avgReturn + '%' : '—', d.avgReturn >= 0 ? 'var(--up)' : 'var(--down)'],
+                  ['W / L', `${d.wins} / ${d.losses}`, 'var(--text)']].map(([l, v, c]) => (
+                  <div key={l} style={{ flex: 1, textAlign: 'center' }}>
+                    <div style={{ fontSize: 16, fontWeight: 800, color: c }}>{v}</div>
+                    <div style={{ fontSize: 10.5, color: 'var(--muted)', fontWeight: 700 }}>{l}</div>
+                  </div>
+                ))}
+              </div>
+              {has ? (
+                <div style={{ display: 'flex', gap: 2, borderRadius: 4, overflow: 'hidden', marginBottom: 8 }} title={`2x+ ${d.moon} · up ${d.up} · down ${d.down}`}>
+                  {seg(d.moon, 'var(--accent)')}{seg(d.up, 'var(--up)')}{seg(d.down, 'var(--down)')}
+                </div>
+              ) : (
+                <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 8, lineHeight: 1.4 }}>Scanned gems are re-priced at their 24h &amp; 7d marks — win rate and returns fill in as they resolve.</div>
+              )}
+              <div style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 4 }}>
+                <Icon name="list" size={12} /> {has ? 'View every won & lost gem' : 'Open track record'}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
       {/* Hindsight stats — how gems the scanner surfaced actually performed.
           Only shown once there's a meaningful sample (≥10 resolved). */}
       {stats && stats.d1 && stats.d1.count >= 10 && (
@@ -617,7 +659,7 @@ function GemScanner({ go, onTrade, locked, onUpsell }) {
                 </div>
               ))}
             </div>
-            <div style={{ fontSize: 10.5, color: 'var(--faint)', marginTop: 9, lineHeight: 1.4 }}>Median/best price change of gems this scanner surfaced, measured from when they were found. Last 30 days — not a prediction of future results.</div>
+            <div style={{ fontSize: 10.5, color: 'var(--faint)', marginTop: 9, lineHeight: 1.4 }}>Median/best price change of gems this scanner surfaced, measured from when they were found. Last 90 days — not a prediction of future results.</div>
           </div>
         </div>
       )}
@@ -916,4 +958,76 @@ function ScanButton({ on, onClick, label, busy, detail }) {
   );
 }
 
-Object.assign(window, { TradeFlow, GemScanner, Toggle, ScoreRing, ScanButton, Row });
+// ─── Gem track record — the won/lost list behind the summary card ───
+// Individual resolved gems from the last 90 days. Each token's outcome is its
+// realized return (7d, or 24h while the 7d mark is still pending), re-priced
+// server-side from when the scanner first surfaced it. Nothing self-reported.
+const GEM_CHAIN_LABEL = { sol: 'SOL', eth: 'ETH', bsc: 'BSC', base: 'BASE' };
+function GemTrackRecord({ go }) {
+  const [data, setData] = tS(null);
+  const [filter, setFilter] = tS('All');
+  tE(() => {
+    let alive = true;
+    if (window.FXAPI && window.FXAPI.getGemOutcomes) {
+      window.FXAPI.getGemOutcomes().then((r) => { if (alive) setData(r || { outcomes: [] }); }).catch(() => { if (alive) setData({ outcomes: [] }); });
+    } else setData({ outcomes: [] });
+    return () => { alive = false; };
+  }, []);
+  const all = (data && data.outcomes) || [];
+  const wins = all.filter((o) => o.won).length;
+  const losses = all.length - wins;
+  const list = filter === 'All' ? all : filter === 'Won' ? all.filter((o) => o.won) : all.filter((o) => !o.won);
+
+  if (!data) return <div style={{ padding: '60px 20px', textAlign: 'center', color: 'var(--muted)' }}><span style={{ display: 'inline-block', width: 22, height: 22, border: '3px solid var(--line2)', borderTopColor: 'var(--accent)', borderRadius: '50%', animation: 'fxspin .7s linear infinite' }} /></div>;
+
+  return (
+    <div style={{ padding: '4px 16px 24px' }}>
+      {/* summary strip */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+        {[['Tracked', all.length, 'var(--text)'], ['Up', wins, 'var(--up)'], ['Down', losses, 'var(--down)']].map(([l, v, c]) => (
+          <div key={l} style={{ flex: 1, background: 'var(--surface)', borderRadius: 12, padding: '12px 8px', textAlign: 'center', boxShadow: 'inset 0 0 0 1px var(--line)' }}>
+            <div style={{ fontSize: 19, fontWeight: 800, color: c }}>{v}</div>
+            <div style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 700 }}>{l}</div>
+          </div>
+        ))}
+      </div>
+      {/* filter chips */}
+      <div style={{ display: 'flex', gap: 7, marginBottom: 14 }}>
+        {['All', 'Won', 'Lost'].map((t) => <Chip key={t} active={filter === t} onClick={() => setFilter(t)}>{t}{t === 'Won' ? ` (${wins})` : t === 'Lost' ? ` (${losses})` : ''}</Chip>)}
+      </div>
+      {/* rows */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+        {list.map((o, i) => {
+          const when = o.firstSeenAt ? new Date(o.firstSeenAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
+          const window7 = o.perf7d != null;
+          return (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 11, background: 'var(--surface)', borderRadius: 12, padding: '11px 13px', boxShadow: 'inset 0 0 0 1px var(--line)' }}>
+              <Logo color={'#' + (((o.sym || '?').charCodeAt(0) * 4321) % 0xffffff).toString(16).padStart(6, '0')} sym={o.sym || '?'} chain={o.chain} address={o.address} size={34} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 14.5, fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>${o.sym || '—'}</span>
+                  <span style={{ fontSize: 10, fontWeight: 800, color: 'var(--muted)', background: 'var(--chip)', padding: '1px 6px', borderRadius: 5 }}>{GEM_CHAIN_LABEL[o.chain] || (o.chain || '').toUpperCase()}</span>
+                </div>
+                <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 1 }}>Found {when || '—'} · {window7 ? '7d' : '24h'} return</div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontSize: 15, fontWeight: 800, color: o.won ? 'var(--up)' : 'var(--down)', fontVariantNumeric: 'tabular-nums' }}>{o.ret != null ? (o.ret >= 0 ? '+' : '') + o.ret + '%' : '—'}</div>
+                {o.perf24h != null && o.perf7d != null && <div style={{ fontSize: 10.5, color: 'var(--faint)' }}>24h {o.perf24h >= 0 ? '+' : ''}{o.perf24h}%</div>}
+              </div>
+            </div>
+          );
+        })}
+        {list.length === 0 && (
+          <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--muted)' }}>
+            <Icon name="trophy" size={26} color="var(--faint)" style={{ marginBottom: 10 }} />
+            <div style={{ fontSize: 14, fontWeight: 600 }}>{all.length === 0 ? 'No tracked gems yet' : `No ${filter.toLowerCase()} gems`}</div>
+            <div style={{ fontSize: 12.5, marginTop: 3 }}>{all.length === 0 ? 'Gems appear here once their 24h / 7d marks are priced.' : 'Switch the filter to see the rest.'}</div>
+          </div>
+        )}
+      </div>
+      <div style={{ fontSize: 11, color: 'var(--faint)', textAlign: 'center', marginTop: 16, lineHeight: 1.5 }}>Realized price change of each gem this scanner surfaced, measured from when it was found. Last 90 days — not a prediction of future results.</div>
+    </div>
+  );
+}
+
+Object.assign(window, { TradeFlow, GemScanner, GemTrackRecord, Toggle, ScoreRing, ScanButton, Row });

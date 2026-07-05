@@ -7,6 +7,7 @@ import ScreenHost from './ScreenHost';
 const TITLE: Record<string, (p: any) => string> = {
   chat: () => 'Pointer', token: (p) => p.token?.sym || 'Token', bubble: () => 'Bubble Map',
   trade: () => 'Manual Trade', execSignal: () => 'Execute Signal', signalChart: (p) => p.signal?.pair || 'Signal',
+  signalTrackRecord: () => 'Signal track record', gemTrackRecord: () => 'Gem track record',
   profile: () => 'Profile', exchanges: () => 'Exchanges', signing: () => 'Signing', '2fa': () => 'Security',
   sessions: () => 'Sessions', connect: (p) => (p.kind === 'telegram' ? 'Telegram' : 'Discord'), referral: () => 'Referrals',
   portfolio: () => 'Portfolio',

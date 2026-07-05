@@ -166,4 +166,26 @@ async function readStats(db) {
   return { d30: finish(w30), d90: finish(w90), updatedAt: Date.now() }
 }
 
-module.exports = { resolveSignals, resolveOutcome, readStats, fetchCandles }
+// The drill-down list behind the track-record card: individual resolved signals
+// from the last 90 days (most recent first). Only terminal outcomes (a TP hit or
+// an SL) are won/lost; 'expired' (never filled) is excluded — it was neither.
+async function readOutcomes(db) {
+  const cutoff = Date.now() - 90 * 24 * 3600000
+  const snap = await db.collectionGroup('signals')
+    .where('generatedAt', '>', cutoff)
+    .orderBy('generatedAt', 'desc').limit(400).get()
+  const list = []
+  snap.forEach((doc) => {
+    const s = doc.data()
+    if (!s.outcome || s.outcome === 'expired') return
+    const won = s.outcome.startsWith('tp')
+    list.push({
+      symbol: s.symbol || '', bias: s.bias || 'long',
+      outcome: s.outcome, outcomeR: s.outcomeR != null ? s.outcomeR : null,
+      generatedAt: s.generatedAt, entry: s.entry != null ? s.entry : null, won,
+    })
+  })
+  return { outcomes: list.slice(0, 200), updatedAt: Date.now() }
+}
+
+module.exports = { resolveSignals, resolveOutcome, readStats, readOutcomes, fetchCandles }

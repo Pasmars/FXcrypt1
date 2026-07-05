@@ -65,13 +65,28 @@ async function resolveGemOutcomes(db) {
   return { checked: snap.size, resolved }
 }
 
-// Median / best / win-rate over resolved sightings in the last 30 days.
-async function readStats(db) {
+const D90_MS = 90 * 86400000
+
+// Pull the resolved-or-tracked sightings for the public track record. One query,
+// shared by readStats (aggregates) and readOutcomes (the drill-down list).
+async function fetchRecent(db) {
   const snap = await db.collection('gemSightings')
-    .where('firstSeenAt', '>', Date.now() - 30 * 86400000)
-    .orderBy('firstSeenAt', 'desc').limit(600).get()
+    .where('firstSeenAt', '>', Date.now() - D90_MS)
+    .orderBy('firstSeenAt', 'desc').limit(1000).get()
+  return snap.docs.map((d) => d.data())
+}
+
+// A gem's realized outcome is its 7-day return (falling back to 24h while the
+// 7d mark is still pending), so a token is "resolved" once either mark is set.
+const gemReturn = (x) => (x.perf7d != null ? x.perf7d : x.perf24h)
+const isResolved = (x) => gemReturn(x) != null
+
+// Median / best / win-rate (24h & 7d) + a 90-day win/loss track record that
+// mirrors the CEX signal bot: win rate, avg return, W/L and outcome buckets.
+async function readStats(db) {
+  const rows = await fetchRecent(db)
   const p24 = [], p7 = []
-  snap.forEach((d) => { const x = d.data(); if (x.perf24h != null) p24.push(x.perf24h); if (x.perf7d != null) p7.push(x.perf7d) })
+  rows.forEach((x) => { if (x.perf24h != null) p24.push(x.perf24h); if (x.perf7d != null) p7.push(x.perf7d) })
   const stat = (arr) => {
     if (!arr.length) return null
     const s = [...arr].sort((a, b) => a - b)
@@ -82,7 +97,42 @@ async function readStats(db) {
       winRate: +(100 * arr.filter((v) => v > 0).length / arr.length).toFixed(0),
     }
   }
-  return { d1: stat(p24), d7: stat(p7), tracked: snap.size, updatedAt: Date.now() }
+
+  // 90-day track record over resolved gems. Buckets (by realized return):
+  //   moon ≥ +100% (2x+) · up 0–100% · down ≤ 0%.  wins = moon + up.
+  const resolved = rows.filter(isResolved).map(gemReturn)
+  let moon = 0, up = 0, down = 0, sumR = 0
+  for (const r of resolved) {
+    sumR += r
+    if (r >= 100) moon++
+    else if (r > 0) up++
+    else down++
+  }
+  const wins = moon + up, total = resolved.length
+  const d90 = {
+    total, wins, losses: down, moon, up, down,
+    winRate: total ? +(100 * wins / total).toFixed(1) : null,
+    avgReturn: total ? +(sumR / total).toFixed(1) : null,
+  }
+
+  return { d1: stat(p24), d7: stat(p7), d90, tracked: rows.length, updatedAt: Date.now() }
 }
 
-module.exports = { recordSightings, resolveGemOutcomes, readStats, sightingId }
+// The drill-down list behind the track-record card: individual resolved gems in
+// the last 90 days (most recent first), each stamped won/lost by realized return.
+async function readOutcomes(db) {
+  const rows = await fetchRecent(db)
+  const list = rows.filter(isResolved).map((x) => {
+    const ret = gemReturn(x)
+    return {
+      chain: x.chain, address: x.address, sym: x.sym || '', name: x.name || '',
+      firstSeenAt: x.firstSeenAt, score: x.score != null ? x.score : null,
+      perf24h: x.perf24h != null ? x.perf24h : null,
+      perf7d: x.perf7d != null ? x.perf7d : null,
+      ret, won: ret > 0,
+    }
+  }).slice(0, 200)
+  return { outcomes: list, updatedAt: Date.now() }
+}
+
+module.exports = { recordSightings, resolveGemOutcomes, readStats, readOutcomes, sightingId }
