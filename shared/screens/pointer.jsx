@@ -434,21 +434,28 @@ function mdRender(text) {
   const out = []; let lst = null;
   const flush = () => {
     if (!lst) return;
-    const items = lst.items.map((it, i) => <li key={i} style={{ marginBottom: 2 }}>{mdInline(it)}</li>);
+    // Ordered items carry their source number so the displayed ordinal always
+    // matches the model's text — robust even if items end up split apart. (A
+    // blank line between numbered items no longer restarts the count at 1.)
+    const items = lst.items.map((it, i) => (
+      <li key={i} value={lst.type === 'ol' ? it.num : undefined} style={{ marginBottom: 2 }}>{mdInline(it.text)}</li>
+    ));
     out.push(lst.type === 'ol'
-      ? <ol key={'l' + out.length} style={{ margin: '4px 0 8px', paddingLeft: 20 }}>{items}</ol>
+      ? <ol key={'l' + out.length} start={lst.items[0].num} style={{ margin: '4px 0 8px', paddingLeft: 20 }}>{items}</ol>
       : <ul key={'l' + out.length} style={{ margin: '4px 0 8px', paddingLeft: 18 }}>{items}</ul>);
     lst = null;
   };
   for (const raw of lines) {
     const line = raw.replace(/\s+$/, '');
-    if (!line.trim()) { flush(); continue; }
+    // A blank line doesn't end a list on its own — keep it open so "loose"
+    // lists (a blank line between items) stay a single, correctly-numbered list.
+    if (!line.trim()) { if (!lst) flush(); continue; }
     const h = line.match(/^(#{1,3})\s+(.*)/);
     const ul = line.match(/^\s*(?:[-*•])\s+(.*)/);
-    const ol = line.match(/^\s*\d+[.)]\s+(.*)/);
+    const ol = line.match(/^\s*(\d+)[.)]\s+(.*)/);
     if (h) { flush(); const lvl = h[1].length; out.push(<div key={'h' + out.length} style={{ fontWeight: 800, color: 'var(--text)', fontSize: lvl === 1 ? 16 : lvl === 2 ? 15 : 14.5, margin: out.length ? '9px 0 4px' : '0 0 4px' }}>{mdInline(h[2])}</div>); }
-    else if (ul) { if (!lst || lst.type !== 'ul') { flush(); lst = { type: 'ul', items: [] }; } lst.items.push(ul[1]); }
-    else if (ol) { if (!lst || lst.type !== 'ol') { flush(); lst = { type: 'ol', items: [] }; } lst.items.push(ol[1]); }
+    else if (ul) { if (!lst || lst.type !== 'ul') { flush(); lst = { type: 'ul', items: [] }; } lst.items.push({ text: ul[1] }); }
+    else if (ol) { if (!lst || lst.type !== 'ol') { flush(); lst = { type: 'ol', items: [] }; } lst.items.push({ num: parseInt(ol[1], 10), text: ol[2] }); }
     else { flush(); out.push(<div key={'p' + out.length} style={{ margin: '0 0 6px' }}>{mdInline(line)}</div>); }
   }
   flush();
