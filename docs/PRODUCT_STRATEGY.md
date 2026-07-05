@@ -1,5 +1,32 @@
 # FXcrypt — Product Strategy Document
 *Prepared from a senior product management lens: current state, gaps, and a path to profitability.*
+*Last updated 2026-07-03 to reflect the monetization + trading-loop build-out (see §0).*
+
+---
+
+## 0. Status Update — the strategy in this doc has largely been executed (2026-07)
+
+When this doc was first written the product was **pre-monetization** with most revenue and retention features "proposed." **Those proposals are now built, deployed, and live in production.** Highlights:
+
+**Monetization is live (crypto-only):**
+- **Entitlements + tiers** (Free/Pro/Elite) fully server-enforced; **AI metering & credits** (monthly Pointer + gem-scan quotas, non-expiring credit packs); **configurable platform trading fee** (admin sets % per plan + a receiving wallet per chain, charged natively on each manual DEX trade); **crypto checkout** (USDT/USDC/native on ETH/BSC/Base/SOL) with **annual billing** (12-for-10); **admin-priced plan cards** (cards read the admin's prices so they never drift from checkout); **paywall conversion funnel** analytics.
+- Card/Stripe checkout was **removed from the app** (backend dormant, reversible) — the product is deliberately crypto-native.
+
+**The trading loop is closed** (was the biggest gap — "the bot buys but never sells"):
+- **Position Manager** (server-bookkept positions, live PnL), **automated exits** (take-profit / stop-loss / trailing / max-hold via a 1-min monitor), **auto-buy exit defaults**, **trade journal + CSV export**.
+
+**Proof, retention & growth loops shipped:**
+- **Verified signal track record** (every signal resolved on-exchange → public win-rate/avg-R, surfaced on the paywall) and **gem hindsight stats** (how surfaced gems actually performed).
+- **Paper trading mode** (the full autonomous loop simulated; the free-tier on-ramp).
+- **Web push** (FCM, both apps, per-category, deep links), **real price alerts**, **Pointer proactive watch-tasks** ("watch X and ping me"), **daily portfolio digest**.
+- **Referral program** (server codes, attribution, reward on referee's first payment) and **smart-money copy trading** (follow wallets → safety-checked buy alerts → Elite auto-copy with exits armed → wallet leaderboard).
+
+**AI depth:**
+- **Pointer** now has usage metering, a **deep-research** top-tier-model toggle, streaming replies, copy buttons, **clickable shortened source links** (from live web_search), **proactive monitors**, and a **safe MCP connection to Glassnode** (on-chain analytics tools, public or API-key access, admin-configured + monitored).
+
+**Still open (the honest gaps):** WalletConnect / hardware-wallet / external signing (the #1 trust/liability item — keys are still custodial), a security audit, exchange affiliate links, backtesting, multi-language/accessibility, chart-image & voice input, a status/health page, and full tax reporting (raw CSV export exists). These are the priorities for the next phase.
+
+Sections 4/6/7/10 below are annotated with **[LIVE]** where a proposal has shipped.
 
 ---
 
@@ -12,7 +39,7 @@ It sits at the intersection of three hot categories:
 2. **Token analytics/scanners** (DEXScreener, DexTools, Bubblemaps)
 3. **AI trading copilots** (an emerging category)
 
-The product is feature-rich and technically mature, but it is currently **pre-monetization**. The single biggest opportunity is to convert its existing trading and AI infrastructure into recurring and volume-based revenue. This document inventories what exists, proposes high-impact additions, and lays out a phased monetization plan.
+The product is feature-rich and technically mature, and — as of the 2026-07 build-out — **monetized and feature-complete against its original strategy** (see §0). The core infrastructure now earns via trading fees + subscriptions + AI credits, closes the full find→enter→manage→exit→prove→notify→convert→refer loop, and differentiates on AI depth (Pointer + Glassnode MCP). The next frontier is **trust/custody (WalletConnect + audit)** and **scale (growth loops, reliability)**.
 
 ---
 
@@ -48,21 +75,34 @@ The product is feature-rich and technically mature, but it is currently **pre-mo
 
 ### 4.1 Pointer — AI Chat & Agent (post-login landing page)
 - Conversational chatbot **and** autonomous research/ops agent.
-- **Switchable models**: DeepSeek (open-source) and ChatGPT (OpenAI), selectable in-prompt.
-- **19 tools** spanning the whole app; gated trade proposals (Approve/Reject).
+- **Admin-selected model** (DeepSeek / OpenAI, set centrally — users no longer switch) plus a **[LIVE] deep-research toggle** that runs the provider's top-tier model with more reasoning headroom (Pro-gated).
+- **20+ tools** spanning the whole app + **[LIVE] Glassnode MCP tools** (`gn_*`, on-chain analytics) when the admin enables the connection; gated trade proposals (Approve/Reject) with **on-chain address verification** (no hallucinated contracts).
+- **[LIVE] Usage metering & credits**, **streaming replies** + copy buttons, **clickable shortened source links** (real web_search citations), and **proactive watch-tasks** ("watch BTC, ping me if it breaks $150k" → 24/7 monitor → metered analysis + push).
 - Runs server-side (always-on Cloud Function); excludes Wallet & PnL by design.
 
 ### 4.2 DEX Bot
-- **Manual Trade**: buy/sell tokens across **BSC, ETH, SOL, Base, Polygon** (PancakeSwap, Uniswap, Jupiter, etc.), slippage/gas controls, USD-equivalent sizing.
-- **Gem Scanner**: narrative search (Dog/Cat/Frog/AI), market-cap/volume/age/score/liquidity filters, **Default mode**, trend & sort that drives discovery; sources stacked (DexScreener + GeckoTerminal + DexTools); auto-scan every 5 min -> Telegram alerts; honeypot/safety gating.
+- **Manual Trade**: buy/sell tokens across **BSC, ETH, SOL, Base** (PancakeSwap, Uniswap, Jupiter, etc.), slippage/gas controls, USD-equivalent sizing. **[LIVE] Token picker** — search any tradable token by name, ticker, or contract address (DexScreener live search, liquidity-ranked). **[LIVE] Configurable platform fee** skimmed natively per trade; real pool-liquidity readout; tx links to explorers. No more mock fills — non-tradable assets error honestly.
+- **Gem Scanner**: narrative search, market-cap/volume/age/score/liquidity filters, trend & sort; sources stacked (DexScreener + GeckoTerminal + DexTools); auto-scan every 5 min → Telegram alerts; honeypot/safety gating. **[LIVE] Per-chain Telegram-alert selector** (choose which chains the auto-bot scans), **auto-execute (auto-buy)** with per-chain size/slippage + **armed exit defaults (TP/SL/trailing/max-hold)**, and **hindsight stats** (median/best 24h & 7d performance of surfaced gems).
 - **Bot Wallets**: encrypted key storage per chain (two-tier, PBKDF2 600k).
 - **Telegram & Discord AI** integration tabs.
+
+### 4.2a [LIVE] Portfolio & the closed trading loop
+- **Position Manager**: every buy/sell (manual, Pointer-approved, gem auto-buy, copy, exit) is server-bookkept into positions with volume-weighted entry, live unrealized/realized PnL, and auto-close.
+- **Automated exits**: a 1-minute monitor prices every armed position and executes **take-profit / stop-loss / trailing-stop / max-hold** sells from the bot wallet — gated by an admin kill-switch, per-user flag, and daily trade cap; retries then alerts on failure.
+- **Portfolio screen** (both apps): open positions with 30s live PnL, exit-rule editing, partial sells, closed history, and a **trade journal with CSV export**.
+
+### 4.2b [LIVE] Paper trading mode
+- Account-level toggle; the **entire loop is simulated server-side** (manual, Pointer, gem auto-buy, exits) at live prices — enforced *before* any key/chain access, so it provably moves no funds and needs no wallet. Paper and real positions/trades are fully segregated. This is the **free-tier on-ramp** (experience everything, then upgrade — a paper-profit banner prompts the switch).
+
+### 4.2c [LIVE] Copy trading (Elite flagship)
+- Follow any wallet (BSC/ETH/Base/SOL); a 2-min monitor detects its DEX buys (Moralis/Helius), **safety-checks the token**, and pushes an alert. **Auto-copy** (Elite, or paper for anyone) buys through the same guardrails as gem auto-buy with exits armed; a **wallet leaderboard** ranks followed wallets by tracked performance.
 
 ### 4.3 CEX Bot (formerly "AI Agent")
 - **Signal engine**: technical analysis (EMA, RSI, MACD, Bollinger, ATR, volume), market-structure detection (swings, FVGs, order blocks), TradingView merge, fundamental scoring -> scored long/short setups with entry/SL/TP1-3/R:R.
 - **Exchanges**: connect Binance, MEXC, Bybit, KuCoin (encrypted API keys); spot + futures balances.
 - **Auto-execution** (optional) with risk-% sizing; signal history; Telegram delivery with approve buttons.
 - Scheduled scans every 15 min.
+- **[LIVE] Verified track record**: every published signal is resolved against its SL/TP using exchange candles → 30/90-day win-rate + avg R-multiple, shown on the Signals screen and used as the **paywall's proof point** ("signals hit take-profit X% of the time — verified on-exchange").
 
 ### 4.4 Tracker
 - **Token tab**: search by name/ticker/contract; full token card (price, MCap, volume, liquidity, 24h, **holder count**); personal **watchlist** with live auto-refresh.
@@ -76,13 +116,21 @@ The product is feature-rich and technically mature, but it is currently **pre-mo
 - Live prices & watchlist; PnL calculator (entry/exit, fees, leverage); per-token detail pages.
 
 ### 4.7 Cross-surface & platform
-- **Telegram bot**: prices, watchlist, wallet tracker, arbitrage, gem alerts, trade execution, CEX key mgmt, settings, profile.
+- **Telegram bot**: prices, watchlist, wallet tracker, arbitrage, gem alerts (per-chain configurable), trade execution, CEX key mgmt, settings, profile.
 - **Discord agent**: free-text conversational agent (same brain as Pointer) with gated trades.
 - **Arbitrage scanner**: cross-DEX spread detection.
-- **Light/Dark theming**, PWA install, signed Android APK.
+- **[LIVE] Web push notifications** (FCM, mobile PWA + webapp): per-category mutes (trades, gems, signals, alerts, tasks, copy, system), opt-in only, deep-linked taps; also fixed the previously-unregistered service worker (PWA offline cache now active).
+- **[LIVE] Real price alerts** (above/below/±% on any token/coin, plan-capped) and **[LIVE] daily portfolio digest** (opt-in, Pointer-composed morning brief via push + Telegram).
+- **Light/Dark theming**, PWA install, signed Android APK; **[LIVE] CI guard** (builds both apps + syntax-checks functions on every push).
 
-### 4.8 The 19 AI tools (shared by Pointer + Discord)
-Balances, bot settings, recent trades, gem alerts, live gem scan, cross-chain token search, prices, token safety, holder counts, bubble map, arbitrage scan, CEX/futures signals, recent signals, CEX balances, token info, watchlist read, track/untrack tokens, and gated trade proposals. (No Wallet/PnL access by design.)
+### 4.8 The AI tool suite (shared by Pointer + Discord)
+Balances, bot settings, recent trades, gem alerts, live gem scan, cross-chain token search, market browse, prices, **live web/news search (with cited sources)**, token safety, holder counts, bubble map, arbitrage scan, CEX/futures signals, recent signals, CEX balances, token info, full watchlist read, track/untrack tokens, **standing watch-tasks (create/list/cancel)**, gated trade proposals, and — when enabled — **Glassnode on-chain analytics (`gn_*`) via MCP**. (No Wallet/PnL access by design.)
+
+### 4.9 [LIVE] Referral program & growth
+- Server-issued referral codes, permanent signup attribution, and a reward (Pointer credits) paid on the referee's **first payment** (anti-abuse, idempotent). Real Referral screen shows the click → signup → paid funnel; admin can adjust balances.
+
+### 4.10 [LIVE] Glassnode MCP integration (AI × on-chain data)
+- The Cloud Function acts as a standards-compliant **MCP client** to `mcp.glassnode.com`, discovering its tools and bridging them into Pointer (namespaced `gn_*`, allowlisted, capped, timed-out). **Public access works with no API key** (30-day history); adding a key removes the limit. Fully **admin-configured & monitored** (enable/URL/token/allowlist + live test + usage/error counters); token is server-only and never returned to the client. Verified end-to-end against the live Glassnode server (11 tools, real data).
 
 ---
 
@@ -96,42 +144,41 @@ Next.js web app on Firebase Hosting -> authenticated **Cloud Functions** (europe
 
 Prioritized by **Impact x Effort** (a lightweight RICE view). [STAR] = highest leverage.
 
-### 6.1 Revenue-enabling (build these to monetize)
-| Feature | Why | Effort |
-|---|---|---|
-| [STAR] **Subscription/entitlement system** (tiers, feature gating, usage quotas) | Prerequisite for all SaaS revenue | M |
-| [STAR] **Platform trading fee** on DEX swaps (auto fee-transfer per trade) | The dominant revenue model for trading bots | M |
-| **AI usage metering / credits** (Pointer & Discord) | Recovers DeepSeek/OpenAI cost; upsell | S |
-| **Exchange referral links** (Binance/Bybit/KuCoin/MEXC) | Passive commission on signups | S |
-| **Billing** (Stripe for fiat + crypto/USDT pay) | Collect money | M |
+### 6.1 Revenue-enabling — **all shipped**
+| Feature | Status |
+|---|---|
+| **Subscription/entitlement system** (tiers, feature gating, usage quotas) | **[LIVE]** server-enforced Free/Pro/Elite |
+| **Platform trading fee** on DEX swaps (auto fee-transfer per trade) | **[LIVE]** admin % per plan + per-chain fee wallet, native skim per trade |
+| **AI usage metering / credits** (Pointer & gem scans) | **[LIVE]** monthly quotas + non-expiring credit packs |
+| **Billing** (crypto/USDT pay + annual) | **[LIVE]** crypto-only checkout, annual 12-for-10; Stripe removed from app |
+| Exchange referral links (Binance/Bybit/KuCoin/MEXC) | **Open** — user referral shipped, exchange affiliate not yet |
 
 ### 6.2 Productivity / "make it stickier"
-| Feature | Why |
+| Feature | Status |
 |---|---|
-| [STAR] **Auto-trade automation**: limit orders, DCA, stop-loss/take-profit, trailing stop, anti-rug auto-sell | Turns a tool into a 24/7 product; premium tier driver |
-| [STAR] **Copy-trading / wallet mirroring** (watch a wallet -> auto-copy) | High-demand, viral, monetizable |
-| **Real PnL** auto-computed from on-chain holdings (link Wallet to PnL) | Closes the loop; removes manual entry |
-| **Custom alert builder** (price, %move, liquidity, whale buys, new pairs) + native push | Retention engine |
-| **Backtesting** for signals/strategies | Trust + power users |
-| **Pre-trade simulation** (honeypot/tax/slippage preview before buy) | Safety = trust |
-| **Tax / CSV export & reporting** | Recurring seasonal value |
+| **Auto-trade automation**: SL/TP, trailing stop, max-hold, auto-buy | **[LIVE]** exit monitor + gem auto-buy with armed exits |
+| **Copy-trading / wallet mirroring** | **[LIVE]** follow → alert → Elite auto-copy + leaderboard |
+| **Real PnL** auto-computed | **[LIVE]** Position Manager (from executed trades) — *full on-chain-holdings link still open* |
+| **Custom alert builder** + push | **[LIVE]** price alerts + FCM push |
+| **Tax / CSV export** | **[LIVE]** trade-journal CSV (full tax reporting still open) |
+| Backtesting for signals/strategies | **Open** |
+| Pre-trade simulation (honeypot/tax/slippage preview) | **Partial** — pool liquidity + on-chain slippage shown; full tax/honeypot preview open |
+| Limit orders / DCA | **Open** (routed to "soon" in the automation chooser) |
 
 ### 6.3 UX & trust
-| Feature | Why |
+| Feature | Status |
 |---|---|
-| **Onboarding wizard** + guided first trade + empty-state coaching | Activation/conversion |
-| [STAR] **WalletConnect / hardware-wallet / external-wallet signing** | Removes the biggest trust blocker (custody of keys) |
-| **2FA, session management, withdrawal allowlists** | Security posture for paid users |
-| **Native mobile push** (currently web only) | Engagement |
-| **Multi-language**, accessibility pass | Reach |
-| **Shareable trade/PnL cards + referral program** | Viral growth loop |
-| **Status/health page & better error states** | Reliability perception |
+| **Onboarding wizard** + empty-state coaching | **[LIVE]** both apps (honest empty states throughout) |
+| **Shareable trade/PnL cards + referral program** | **[LIVE]** referral program (shareable cards still open) |
+| **Native/web push** | **[LIVE]** FCM web push (native APK push still to validate) |
+| **WalletConnect / hardware-wallet / external signing** | **OPEN — #1 priority** (keys remain custodial) |
+| 2FA, session management, withdrawal allowlists | Partial (2FA/sessions screens exist) |
+| Multi-language, accessibility pass | **Open** |
+| Status/health page & better error states | **Open** |
 
 ### 6.4 AI depth (your differentiator)
-- **Pointer memory** across sessions (persistent context, saved research).
-- **Chart/image upload analysis**, voice input, scheduled "daily brief" digests.
-- **Strategy agent**: "watch this token and alert/act when X" (autonomous monitors).
-- **Per-message model routing** (cheap model for chat, strong model for analysis) to cut cost.
+- **[LIVE] Scheduled "daily brief" digests**, **[LIVE] strategy/watch-task agent** ("watch X and alert/act when Y"), **[LIVE] cited web sources**, **[LIVE] Glassnode on-chain analytics via MCP**, **[LIVE] deep-research model routing** (top-tier model on demand).
+- **Still open:** cross-session Pointer memory (persistent research), chart/image upload & voice input.
 
 ---
 
@@ -180,10 +227,11 @@ You have **real variable costs** - price every tier to cover them with margin:
 - Rule of thumb: target **>=70% gross margin** per paid user after AI+data+infra. Meter AI to prevent a single Elite user from burning margin.
 - North-star for trading-fee revenue = **total swap volume routed**. Drive it via free-tier trading (no paywall on the act of trading - paywall the edge).
 
-### 7.4 Phased rollout
-- **Phase 1 (4-6 wks):** Entitlements + Stripe/crypto billing -> launch Pro/Elite subscriptions + trading fee + exchange referrals. (Fastest cash, uses existing features.)
-- **Phase 2 (6-10 wks):** AI credits/metering; automation suite (SL/TP/DCA) as the Elite hook; referral program.
-- **Phase 3 (Q2+):** Copy-trading (flagship paid feature), API/white-label, mobile push, performance fees.
+### 7.4 Phased rollout — **Phases 1–3 delivered**
+- **Phase 1 [DONE]:** Entitlements + crypto billing → Pro/Elite subscriptions + configurable trading fee. *(Exchange affiliate links still open.)*
+- **Phase 2 [DONE]:** AI credits/metering; automation suite (SL/TP/trailing/max-hold + auto-buy); referral program.
+- **Phase 3 [DONE]:** Copy-trading (flagship), web push. *(API/white-label + performance fees on copy-trading still open.)*
+- **Phase 4 (next):** WalletConnect + security audit (unlock trust / de-risk custody); exchange affiliate; backtesting; reliability/status page; shareable cards; native APK push validation.
 
 ### 7.5 Indicative scenario (illustrative, not a forecast)
 If 2,000 active traders route **$3M/mo** swap volume at a blended **0.5%** -> **$15k/mo** fee revenue; plus 150 Pro + 30 Elite subs -> **~$7.3k/mo** recurring; plus referrals. Revenue scales with volume and activation, which is why the free tier should maximize trading, not block it.
@@ -206,17 +254,22 @@ If 2,000 active traders route **$3M/mo** swap volume at a blended **0.5%** -> **
 
 ---
 
-## 10. Suggested 90-Day Roadmap
-1. **Weeks 1-3:** Entitlement/quota system + billing (Stripe + USDT) + trading-fee mechanism + exchange referral links.
-2. **Weeks 4-6:** Launch Pro/Elite; AI metering; onboarding wizard; security/status page.
-3. **Weeks 7-10:** Automation suite (SL/TP/DCA/trailing, anti-rug auto-sell) as Elite driver; custom alerts + native push.
-4. **Weeks 11-13:** Copy-trading MVP + referral program; WalletConnect integration kickoff.
+## 10. Roadmap — original 90-day plan **complete**; next 90 days below
+
+**Done (original plan):** entitlements + quotas, crypto billing + annual, trading-fee mechanism, Pro/Elite launch, AI metering, onboarding, automation suite (SL/TP/trailing/max-hold + auto-buy), custom price alerts + web push, copy-trading + referral program.
+
+**Next 90 days (the remaining high-leverage work):**
+1. **WalletConnect / external signing + security audit** — the #1 trust and liability item; keys are still custodial. Do this before scaling spend.
+2. **Reliability**: RPC/endpoint redundancy + a public status/health page (paying users now expect uptime).
+3. **Growth**: exchange affiliate links, shareable trade/PnL cards, validate native APK push.
+4. **Depth**: backtesting, cross-session Pointer memory, chart-image/voice input; activate Glassnode MCP (public toggle) and lead marketing with the AI × on-chain-analytics differentiator.
+5. **Compliance**: Terms/disclaimers, geo-restriction review, and counsel on the now-live trading fee + auto-execution.
 
 ---
 
-## Top 5 things to do first (PM recommendation)
-1. **Ship trading fees + subscription tiers** - you already have the features; you are leaving money on the table.
-2. **Add automation (SL/TP/DCA + copy-trade)** - the single biggest retention/upsell lever.
-3. **Meter AI usage** - protect margins on Pointer/Discord.
-4. **WalletConnect + security audit** - unlock trust and reduce liability before scaling.
-5. **Referral + shareable cards** - cheapest growth loop for this audience.
+## Top 5 things to do next (PM recommendation, updated 2026-07)
+1. **WalletConnect + security audit** — now the single biggest unlock; monetization is live but custody risk caps how far you can scale.
+2. **Turn on Glassnode MCP + market the AI edge** — the public toggle needs zero credentials; "AI that reads on-chain analytics" is a category-defining wedge.
+3. **Reliability + status page** — you're charging money; protect the perception and the churn.
+4. **Growth loops** — exchange affiliate + shareable PnL cards on top of the live referral program.
+5. **Watch the numbers** — the funnel counters, signal track record, and gem hindsight stats are now live; use them to price tiers and drive the paywall. Confirm the trading-fee wallets are set in admin so fee revenue actually accrues.
