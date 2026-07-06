@@ -92,6 +92,9 @@ function TradeFlow({ token, side = 'buy', go, onDone }) {
   const [s, setSide] = tS(side);
   const [tok, setTok] = tS(token || FX.tokens[4] || FX.tokens[0] || null);
   const [amt, setAmt] = tS('0.5');
+  // How the "You pay" amount is entered when buying a token with the native
+  // coin: 'native' = amount in the coin (e.g. BNB), 'usd' = its dollar worth.
+  const [payMode, setPayMode] = tS('native');
   const [slip, setSlip] = tS(12);
   const [slipEdit, setSlipEdit] = tS(false);
   const [slipInput, setSlipInput] = tS('');
@@ -114,7 +117,9 @@ function TradeFlow({ token, side = 'buy', go, onDone }) {
     if (!window.FXAPI) { setTradeErr('Trading engine not loaded — refresh and try again.'); return; }
     txRef.current = window.FXAPI.executeTrade({
       chain: tok.chain, tokenAddress: tok.tokenAddress, action: s,
-      amount: s === 'buy' ? String(amt) : undefined,
+      // Buys always execute in native units. When paying by dollar value we
+      // convert USD → native here so the DEX router gets the coin amount.
+      amount: s === 'buy' ? String(isNative ? amt : +nativePay.toFixed(8)) : undefined,
       percent: s === 'sell' ? parseFloat(amt) : undefined,
       slippage: slip,
     });
@@ -127,9 +132,9 @@ function TradeFlow({ token, side = 'buy', go, onDone }) {
   };
   // When buying the chain native token (e.g. SOL on Solana), switch pay side to USDT
   const isNative = !!tok && tok.sym === chain.sym;
-  // Reset default amount when switching between native and non-native
+  // Reset default amount + denomination when switching between native and non-native
   const { useEffect: uEffect } = React;
-  uEffect(() => { setAmt(isNative ? '100' : '0.5'); }, [isNative]);
+  uEffect(() => { setAmt(isNative ? '100' : '0.5'); setPayMode('native'); }, [isNative]);
   // No token to trade yet (live market list still loading) — honest placeholder.
   if (!tok) return (
     <div style={{ padding: '60px 24px', textAlign: 'center', color: 'var(--muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
@@ -148,8 +153,23 @@ function TradeFlow({ token, side = 'buy', go, onDone }) {
   const payHolding = (FX.holdings || []).find((h) => h.sym === payUnit && (isNative || h.chain === tok.chain));
   const balNum = payHolding ? parseAmt(payHolding.amount) : 0;
   const payBalance = balNum ? balNum.toLocaleString('en-US', { maximumFractionDigits: balNum < 1 ? 4 : 2 }) : '0';
-  const usd = isNative ? (parseFloat(amt) || 0) : (parseFloat(amt) || 0) * nativePrice;
+  // Denomination-aware amounts. usdMode = buying a token but entering the pay
+  // amount as its dollar value instead of native coin units.
+  const inputNum = parseFloat(amt) || 0;
+  const usdMode = !isNative && payMode === 'usd';
+  const usd = isNative ? inputNum : (usdMode ? inputNum : inputNum * nativePrice);
+  const nativePay = isNative ? 0 : (usdMode ? (nativePrice > 0 ? inputNum / nativePrice : 0) : inputNum);
   const recv = tok.price ? usd / tok.price : 0;
+  // Native-coin units actually spent (what the confirm/receipt shows).
+  const paidUnits = isNative ? inputNum : nativePay;
+  const paidUnitsStr = paidUnits ? paidUnits.toLocaleString('en-US', { maximumFractionDigits: paidUnits < 1 ? 6 : 4 }) : '0';
+  // Toggle the pay input between the native coin and its USD value, converting
+  // the current amount so the trade value stays the same across the switch.
+  const togglePayMode = () => {
+    if (isNative || nativePrice <= 0) return;
+    if (payMode === 'native') { const v = inputNum * nativePrice; setAmt(v ? String(+v.toFixed(2)) : ''); setPayMode('usd'); }
+    else { const v = nativePrice > 0 ? inputNum / nativePrice : 0; setAmt(v ? String(+v.toFixed(6)) : ''); setPayMode('native'); }
+  };
   // Real platform fee tier from the live plan. Prefer the admin-set fee (fetched
   // once) so the displayed fee never drifts from what's actually charged.
   const plan = (FX && FX.plan) || 'free';
@@ -165,12 +185,12 @@ function TradeFlow({ token, side = 'buy', go, onDone }) {
   const feeLabel = (feePct * 100).toFixed(feePct * 100 % 1 === 0 ? 0 : 1) + '%';
 
   const presets = s === 'buy'
-    ? (isNative ? ['10', '50', '100', '500'] : ['0.1', '0.5', '1', '2'])
+    ? ((isNative || usdMode) ? ['10', '50', '100', '500'] : ['0.1', '0.5', '1', '2'])
     : ['25%', '50%', '75%', '100%'];
-  const presetPrefix = (isNative && s === 'buy') ? '$' : '';
+  const presetPrefix = ((isNative || usdMode) && s === 'buy') ? '$' : '';
 
   if (stage === 'processing') {
-    return <TradeProcessing s={s} tok={tok} amt={amt} payUnit={payUnit} recv={recv} chain={chain} onComplete={finishTrade} />;
+    return <TradeProcessing s={s} tok={tok} amt={s === 'buy' ? paidUnitsStr : amt} payUnit={payUnit} recv={recv} chain={chain} onComplete={finishTrade} />;
   }
   if (stage === 'success') {
     return (
@@ -181,7 +201,7 @@ function TradeFlow({ token, side = 'buy', go, onDone }) {
         <div style={{ fontSize: 22, fontWeight: 800 }}>{wasPaper ? 'Paper trade filled' : 'Trade filled'}</div>
         {wasPaper && <Pill tone="accent" style={{ marginTop: 8 }}>📝 SIMULATED — no real funds moved</Pill>}
         <div style={{ fontSize: 14.5, color: 'var(--muted)', marginTop: 6, lineHeight: 1.5 }}>
-          {s === 'buy' ? 'Bought' : 'Sold'} <b style={{ color: 'var(--text)' }}>{recv.toLocaleString('en-US', { maximumFractionDigits: 4 })} {tok.sym}</b><br />for {amt} {payUnit} on {chain.dex}
+          {s === 'buy' ? 'Bought' : 'Sold'} <b style={{ color: 'var(--text)' }}>{recv.toLocaleString('en-US', { maximumFractionDigits: 4 })} {tok.sym}</b><br />for {s === 'buy' ? paidUnitsStr : amt} {payUnit} on {chain.dex}
         </div>
         <div style={{ width: '100%', marginTop: 22, background: 'var(--surface)', borderRadius: 14, padding: 16, boxShadow: 'inset 0 0 0 1px var(--line)' }}>
           {[['Price', fmtUsd(tok.price)], ['Network fee (est.)', '~0.004 ' + chain.sym], ['Platform fee', feeLabel + ' · $' + (usd * feePct).toFixed(2)]].map(([k, v]) => (
@@ -236,13 +256,22 @@ function TradeFlow({ token, side = 'buy', go, onDone }) {
           <span style={{ fontSize: 12.5, color: 'var(--muted)' }}>Balance: {payBalance} {payUnit}</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {usdMode && <span style={{ fontSize: 30, fontWeight: 800, color: 'var(--muted)' }}>$</span>}
           <input value={amt} onChange={e => setAmt(e.target.value.replace(/[^0-9.]/g, ''))} inputMode="decimal"
             style={{ flex: 1, border: 'none', background: 'transparent', outline: 'none', color: 'var(--text)', fontSize: 30, fontWeight: 800, fontFamily: 'inherit', minWidth: 0 }} />
-          <div style={{ display: 'flex', alignItems: 'center', gap: 7, background: 'var(--chip)', borderRadius: 10, padding: '7px 11px', fontWeight: 700, flexShrink: 0 }}>
-            <span style={{ width: 18, height: 18, borderRadius: '50%', background: payColor }} /> {payUnit}
-          </div>
+          {(!isNative && nativePrice > 0) ? (
+            <button onClick={togglePayMode} title="Switch between coin amount and dollar value" style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'var(--chip)', borderRadius: 10, padding: '7px 10px', fontWeight: 700, flexShrink: 0, border: 'none', cursor: 'pointer', color: 'var(--text)', fontFamily: 'inherit', fontSize: 14 }}>
+              {usdMode ? <span style={{ width: 18, height: 18, borderRadius: '50%', background: '#26A17B', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 12, fontWeight: 800 }}>$</span> : <span style={{ width: 18, height: 18, borderRadius: '50%', background: payColor }} />}
+              {usdMode ? 'USD' : payUnit}
+              <Icon name="swap" size={13} color="var(--muted)" />
+            </button>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, background: 'var(--chip)', borderRadius: 10, padding: '7px 11px', fontWeight: 700, flexShrink: 0 }}>
+              <span style={{ width: 18, height: 18, borderRadius: '50%', background: payColor }} /> {payUnit}
+            </div>
+          )}
         </div>
-        <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>≈ ${usd.toFixed(2)}</div>
+        <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>{usdMode ? `≈ ${paidUnitsStr} ${payUnit}` : `≈ $${usd.toFixed(2)}`}</div>
       </div>
       <div style={{ display: 'flex', gap: 7, margin: '10px 0 14px' }}>
         {presets.map(p => <Chip key={p} onClick={() => setAmt(p.includes('%') ? (parseFloat(p) / 100 * balNum).toFixed(isNative ? 0 : 4) : p)} style={{ flex: 1, justifyContent: 'center' }}>{presetPrefix}{p}</Chip>)}
@@ -298,7 +327,7 @@ function TradeFlow({ token, side = 'buy', go, onDone }) {
               <div style={{ fontSize: 17, fontWeight: 800 }}>{s === 'buy' ? 'Buy' : 'Sell'} {tok.sym}</div>
               <div style={{ fontSize: 13, color: 'var(--muted)' }}>{chain.dex} · {chain.name}</div>
             </div>
-            <div style={{ textAlign: 'right' }}><div style={{ fontSize: 17, fontWeight: 800 }}>{amt} {payUnit}</div><div style={{ fontSize: 12.5, color: 'var(--muted)' }}>${usd.toFixed(2)}</div></div>
+            <div style={{ textAlign: 'right' }}><div style={{ fontSize: 17, fontWeight: 800 }}>{s === 'buy' ? paidUnitsStr : amt} {payUnit}</div><div style={{ fontSize: 12.5, color: 'var(--muted)' }}>${usd.toFixed(2)}</div></div>
           </div>
           <div style={{ background: 'var(--surface)', borderRadius: 13, padding: '6px 14px', boxShadow: 'inset 0 0 0 1px var(--line)', margin: '6px 0 16px' }}>
             <Row k="Receive (est.)" v={recv.toLocaleString('en-US', { maximumFractionDigits: 4 }) + ' ' + tok.sym} />
