@@ -171,9 +171,11 @@ async function readStats(db) {
 // an SL) are won/lost; 'expired' (never filled) is excluded — it was neither.
 async function readOutcomes(db) {
   const cutoff = Date.now() - 90 * 24 * 3600000
+  // Where-only (no server-side orderBy): a collection-group query ordered by
+  // generatedAt needs a COLLECTION_GROUP_DESC index we don't provision. Mirror
+  // resolveSignals' proven pattern and sort in memory instead.
   const snap = await db.collectionGroup('signals')
-    .where('generatedAt', '>', cutoff)
-    .orderBy('generatedAt', 'desc').limit(400).get()
+    .where('generatedAt', '>', cutoff).limit(600).get()
   const list = []
   snap.forEach((doc) => {
     const s = doc.data()
@@ -185,6 +187,7 @@ async function readOutcomes(db) {
       generatedAt: s.generatedAt, entry: s.entry != null ? s.entry : null, won,
     })
   })
+  list.sort((a, b) => (b.generatedAt || 0) - (a.generatedAt || 0))
   return { outcomes: list.slice(0, 200), updatedAt: Date.now() }
 }
 
