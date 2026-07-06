@@ -23,8 +23,15 @@ import {
   encryptData, decryptData, buildAuthCheck, verifyAuthCheck,
   createWallet, importWallet, getBalanceNum, getTokenBalanceNum,
   getTxs, fetchTokenPrices, chainMeta, isValidAddress, send as sendImpl,
-  initTonWeb, CHAINS,
+  initTonWeb, CHAINS, getTokenMeta,
 } from './wallet-crypto';
+
+// Chains where custom tokens are supported today (EVM read/send + Solana read).
+const TOKEN_CHAINS = ['eth', 'bsc', 'base', 'matic', 'sol'];
+// EVM contract addresses are case-insensitive (store lowercased); Solana mints
+// are base58 and case-sensitive (store verbatim). Used for dedupe + lookups.
+const normTokenAddr = (chain, a) => (chain === 'sol' ? String(a || '').trim() : String(a || '').trim().toLowerCase());
+const MIN_PW_LEN = 8;
 
 const CG = 'https://api.coingecko.com/api/v3';
 
@@ -114,7 +121,7 @@ async function unlock(password) {
 
 // First-time password (no wallets yet): just establish the auth-check.
 async function setInitialPassword(password) {
-  if (!password || password.length < 6) throw new Error('Use at least 6 characters');
+  if (!password || password.length < MIN_PW_LEN) throw new Error('Use at least ' + MIN_PW_LEN + ' characters');
   await setAuthCheck(password);
   sessionPwd = password;
   emit();
@@ -169,6 +176,51 @@ async function removeWallet(chain) {
   emit(); refreshPortfolio();
 }
 
+// ── Custom tokens (per chain, stored under wallets.{chain}.tokens) ──
+// Detection is read-only (an RPC eth_call / getTokenSupply against the contract),
+// so it needs no password and touches no keys.
+async function detectToken(chain, address) {
+  await ensureLibs();
+  if (!TOKEN_CHAINS.includes(chain)) throw new Error('Custom tokens are not supported on ' + chain.toUpperCase() + ' yet');
+  const addr = String(address || '').trim();
+  if (!isValidAddress(chain, addr)) throw new Error('That is not a valid ' + chain.toUpperCase() + ' token address');
+  const meta = await getTokenMeta(chain, addr).catch((e) => { throw new Error((e && e.message) || 'Could not read this token'); });
+  return { address: addr, symbol: meta.symbol || '', decimals: Number.isFinite(meta.decimals) ? meta.decimals : 18 };
+}
+
+async function addToken(chain, { address, symbol, decimals } = {}) {
+  const id = uid(); if (!id) throw new Error('Sign in required');
+  if (!TOKEN_CHAINS.includes(chain)) throw new Error('Custom tokens are not supported on ' + chain.toUpperCase() + ' yet');
+  const w = wallets[chain];
+  if (!w) throw new Error('Add a ' + chain.toUpperCase() + ' wallet before importing tokens for it');
+  const addr = String(address || '').trim();
+  if (!isValidAddress(chain, addr)) throw new Error('Enter a valid token contract address');
+  const sym = String(symbol || '').trim().slice(0, 12) || '???';
+  let dec = Number(decimals); if (!Number.isFinite(dec) || dec < 0 || dec > 30) dec = 18;
+  const store = chain === 'sol' ? addr : addr.toLowerCase();
+  const existing = (w.tokens || []);
+  if (existing.some((t) => normTokenAddr(chain, t.address) === normTokenAddr(chain, addr))) {
+    throw new Error('That token is already in your ' + chain.toUpperCase() + ' wallet');
+  }
+  const tokens = [...existing, { address: store, symbol: sym, decimals: dec }];
+  await setDoc(doc(db, 'users', id), { wallets: { [chain]: { ...w, tokens } } }, { merge: true });
+  wallets = { ...wallets, [chain]: { ...w, tokens } };
+  emit();
+  refreshPortfolio();
+  return { address: store, symbol: sym, decimals: dec };
+}
+
+async function removeToken(chain, address) {
+  const id = uid(); if (!id) throw new Error('Sign in required');
+  const w = wallets[chain];
+  if (!w) return;
+  const tokens = (w.tokens || []).filter((t) => normTokenAddr(chain, t.address) !== normTokenAddr(chain, address));
+  await setDoc(doc(db, 'users', id), { wallets: { [chain]: { ...w, tokens } } }, { merge: true });
+  wallets = { ...wallets, [chain]: { ...w, tokens } };
+  emit();
+  refreshPortfolio();
+}
+
 // ── Reveal secrets (password-gated) ──
 async function reveal(chain, type, password) {
   const pwd = password || sessionPwd;
@@ -203,7 +255,7 @@ async function sendAsset({ chain, to, amount, token }) {
 // ── Change password (re-encrypt every secret + the auth check) ──
 async function changePassword(oldPw, newPw) {
   const id = uid(); if (!id) throw new Error('Sign in required');
-  if (!newPw || newPw.length < 6) throw new Error('New password must be at least 6 characters');
+  if (!newPw || newPw.length < MIN_PW_LEN) throw new Error('New password must be at least ' + MIN_PW_LEN + ' characters');
   if (!(await unlockable(oldPw))) throw new Error('Current password is wrong');
   const nextWallets = {};
   for (const [chain, w] of Object.entries(wallets)) {
@@ -286,13 +338,15 @@ async function refreshPortfolio() {
         price, value: bal * price, ch24: q.usd_24h_change != null ? +q.usd_24h_change.toFixed(2) : 0,
         native: true,
       });
-      // Saved custom tokens (EVM only)
+      // Saved custom tokens (EVM + Solana SPL). Native-case address for the
+      // price query (Solana mints are case-sensitive); lowercase for the lookup.
+      const tokPlatform = meta.cgPlatform || (chain === 'sol' ? 'solana' : null);
       for (const tk of (w.tokens || [])) {
         try {
           const tb = await getTokenBalanceNum(chain, w.address, tk.address, tk.decimals ?? 18);
           if (tb <= 0) continue;
-          const prices = await fetchTokenPrices(meta.cgPlatform, [tk.address.toLowerCase()]);
-          const p = prices[tk.address.toLowerCase()] || {};
+          const prices = tokPlatform ? await fetchTokenPrices(tokPlatform, [tk.address]) : {};
+          const p = prices[String(tk.address).toLowerCase()] || {};
           rows.push({ sym: tk.symbol, name: tk.symbol, chain, logo: meta.color, address: tk.address, decimals: tk.decimals ?? 18, amount: tb < 1 ? tb.toFixed(5) : tb.toFixed(4), price: p.usd || 0, value: tb * (p.usd || 0), ch24: p.change != null ? +p.change.toFixed(2) : 0 });
         } catch (e) {}
       }
@@ -314,7 +368,7 @@ function txHistory(chain) {
 function walletList() {
   return Object.entries(wallets).map(([chain, w]) => {
     const meta = chainMeta(chain) || {};
-    return { chain, address: w.address, label: meta.label, symbol: meta.symbol, color: meta.color, hasMnemonic: !!w.encMnemonic };
+    return { chain, address: w.address, label: meta.label, symbol: meta.symbol, color: meta.color, hasMnemonic: !!w.encMnemonic, tokens: Array.isArray(w.tokens) ? w.tokens : [], tokensSupported: TOKEN_CHAINS.includes(chain) };
   });
 }
 function addresses() { const out = {}; for (const [c, w] of Object.entries(wallets)) out[c] = w.address; return out; }
@@ -343,6 +397,8 @@ window.FXWallet = {
   unlock, setInitialPassword, lock, changePassword,
   // wallets
   createAndSave, importAndSave, removeWallet, reveal,
+  // custom tokens
+  detectToken, addToken, removeToken, tokenChains: () => [...TOKEN_CHAINS],
   // money
   send: sendAsset, refreshPortfolio, txHistory,
   // settings

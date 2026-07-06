@@ -372,8 +372,46 @@ export function getBalanceNum(chain: string, address: string): Promise<number> {
   return getEvmBalanceNum(address, chain);
 }
 export async function getTokenBalanceNum(chain: string, walletAddr: string, contract: string, decimals: number): Promise<number> {
-  const raw = await getEvmTokenBalance(walletAddr, contract, CHAIN_CFG[chain].rpcs);
+  if (chain === 'sol') return getSplTokenBalanceNum(walletAddr, contract);
+  const cfg = CHAIN_CFG[chain];
+  if (!cfg) return 0; // non-EVM chains without custom-token support
+  const raw = await getEvmTokenBalance(walletAddr, contract, cfg.rpcs);
   return raw !== null ? Number(raw) / Math.pow(10, decimals) : 0;
+}
+
+// ── Solana SPL token support (metadata + balance) ──
+// decimals come from on-chain supply (authoritative); symbol is best-effort from
+// the Jupiter token list, so the user can still add a token that isn't listed.
+export async function getSplTokenMeta(mint: string): Promise<{ symbol: string; decimals: number }> {
+  let decimals = 0;
+  const supply = await _raceRpc(SOL_RPCS, 'getTokenSupply', [mint], { valid: (r: any) => r && r.value && r.value.decimals != null });
+  if (supply && supply.value && supply.value.decimals != null) decimals = Number(supply.value.decimals) || 0;
+  if (!supply) throw new Error('Not a valid SPL token mint on Solana');
+  let symbol: string | null = null;
+  try {
+    // Symbol only — on-chain getTokenSupply above is the authoritative source
+    // for decimals; never let an external list override it.
+    const r = await fetch(`https://tokens.jup.ag/token/${mint}`);
+    if (r.ok) { const d = await r.json(); if (d && d.symbol) symbol = String(d.symbol).slice(0, 12); }
+  } catch { /* offline / unlisted — user provides the symbol */ }
+  return { symbol: symbol || '', decimals };
+}
+export async function getSplTokenBalanceNum(owner: string, mint: string): Promise<number> {
+  const res = await _raceRpc(SOL_RPCS, 'getTokenAccountsByOwner', [owner, { mint }, { encoding: 'jsonParsed' }], { valid: (r: any) => r && Array.isArray(r.value) });
+  if (!res || !Array.isArray(res.value)) return 0;
+  let total = 0;
+  for (const acc of res.value) { const amt = acc?.account?.data?.parsed?.info?.tokenAmount?.uiAmount; if (typeof amt === 'number') total += amt; }
+  return total;
+}
+
+// Resolve a token contract/mint to { symbol, decimals } for the add-token flow.
+export async function getTokenMeta(chain: string, address: string): Promise<{ symbol: string; decimals: number }> {
+  if (chain === 'sol') return getSplTokenMeta(address);
+  const cfg = CHAIN_CFG[chain];
+  if (!cfg) throw new Error('Custom tokens are not supported on ' + chain.toUpperCase() + ' yet');
+  const meta = await getEvmTokenMeta(address, cfg.rpcs);
+  if (!meta || meta.symbol === '???') { /* keep — user can still confirm */ }
+  return { symbol: meta.symbol === '???' ? '' : meta.symbol, decimals: meta.decimals };
 }
 
 export const send = {

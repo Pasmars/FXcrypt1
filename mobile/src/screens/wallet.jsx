@@ -456,6 +456,7 @@ function WalletManage({ onClose, go }) {
   const W = useFXW();
   const [view, setView] = wS('menu');
   const [copied, setCopied] = wS('');
+  const [tokChain, setTokChain] = wS(null);
   const wallets = W.wallets;
   const copy = (addr) => { try { navigator.clipboard.writeText(addr); setCopied(addr); setTimeout(() => setCopied(''), 1400); } catch (e) {} };
 
@@ -506,22 +507,43 @@ function WalletManage({ onClose, go }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {wallets.map((w) => {
             const h = W.allHoldings.filter((x) => x.chain === w.chain).reduce((a, x) => a + x.value, 0);
+            const toks = w.tokens || [];
             return (
-              <div key={w.chain} style={{ display: 'flex', alignItems: 'center', gap: 12, background: 'var(--surface)', borderRadius: 14, padding: 14, boxShadow: 'inset 0 0 0 1px var(--line)' }}>
-                <div style={{ width: 38, height: 38, borderRadius: '50%', background: w.color, flexShrink: 0 }} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ fontSize: 14.5, fontWeight: 700 }}>{w.label}</span><Pill tone="muted">{w.symbol}</Pill></div>
-                  <button onClick={() => copy(w.address)} style={{ fontSize: 12, color: copied === w.address ? 'var(--up)' : 'var(--muted)', fontFamily: 'ui-monospace, monospace', marginTop: 1, background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', gap: 5 }}>{truncAddr(w.address)} <Icon name={copied === w.address ? 'check' : 'copy'} size={12} /></button>
+              <div key={w.chain} style={{ background: 'var(--surface)', borderRadius: 14, padding: 14, boxShadow: 'inset 0 0 0 1px var(--line)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ width: 38, height: 38, borderRadius: '50%', background: w.color, flexShrink: 0 }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ fontSize: 14.5, fontWeight: 700 }}>{w.label}</span><Pill tone="muted">{w.symbol}</Pill></div>
+                    <button onClick={() => copy(w.address)} style={{ fontSize: 12, color: copied === w.address ? 'var(--up)' : 'var(--muted)', fontFamily: 'ui-monospace, monospace', marginTop: 1, background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', gap: 5 }}>{truncAddr(w.address)} <Icon name={copied === w.address ? 'check' : 'copy'} size={12} /></button>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{fmtUsd(h)}</div>
+                    <button onClick={() => { if (confirm(`Remove the ${w.label} wallet from this device? Make sure you have its recovery phrase or private key backed up — this cannot be undone.`)) FXW().removeWallet(w.chain); }} style={{ fontSize: 11, color: 'var(--down)', fontWeight: 700, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', padding: 0 }}>Remove</button>
+                  </div>
                 </div>
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: 13.5, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{fmtUsd(h)}</div>
-                  <button onClick={() => { if (confirm(`Remove the ${w.label} wallet from this device? Make sure you have its recovery phrase or private key backed up — this cannot be undone.`)) FXW().removeWallet(w.chain); }} style={{ fontSize: 11, color: 'var(--down)', fontWeight: 700, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', padding: 0 }}>Remove</button>
-                </div>
+                {w.tokensSupported && (
+                  <div style={{ marginTop: 12, borderTop: '1px solid var(--line)', paddingTop: 11 }}>
+                    {toks.length > 0 && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 10 }}>
+                        {toks.map((t) => (
+                          <span key={t.address} style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'var(--surface2)', borderRadius: 9, padding: '5px 7px 5px 10px', fontSize: 12.5, fontWeight: 700 }}>
+                            {t.symbol || '???'}
+                            <button onClick={() => FXW().removeToken(w.chain, t.address)} aria-label={'Remove ' + (t.symbol || 'token')} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', color: 'var(--faint)' }}><Icon name="xCircle" size={15} /></button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <button onClick={() => { setTokChain(w.chain); setView('addtoken'); }} style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', fontSize: 12.5, fontWeight: 700, fontFamily: 'inherit', padding: 0 }}><Icon name="plus" size={15} /> Add {toks.length ? 'another ' : ''}token</button>
+                  </div>
+                )}
               </div>
             );
           })}
         </div>
-        <div style={{ marginTop: 14 }}><Btn kind="soft" full icon="plus" onClick={() => setView('add')}>Add or import wallet</Btn></div>
+        <div style={{ marginTop: 14, display: 'flex', gap: 10 }}>
+          <Btn kind="soft" full icon="plus" onClick={() => setView('add')}>Add wallet</Btn>
+          <Btn kind="soft" full icon="wallet" onClick={() => { setTokChain(null); setView('addtoken'); }}>Add token</Btn>
+        </div>
       </div>
     );
   }
@@ -553,6 +575,8 @@ function WalletManage({ onClose, go }) {
       </div>
     );
   }
+
+  if (view === 'addtoken') return <AddTokenFlow initialChain={tokChain} onBack={() => setView('wallets')} onDone={() => setView('wallets')} />;
 
   const done = () => setView('wallets');
   if (view === 'create')   return <CreateWalletFlow onBack={() => setView('add')} onDone={done} />;
@@ -998,6 +1022,74 @@ function ImportKeyFlow({ onBack, onDone }) {
         {err && <div style={{ marginBottom: 12, fontSize: 13, color: 'var(--down)', background: 'var(--down-bg)', borderRadius: 11, padding: '10px 12px', fontWeight: 600 }}>{err}</div>}
         <Btn size="lg" full icon="check" onClick={importIt} disabled={key.trim().length < 8 || busy} style={{ opacity: busy ? 0.6 : 1 }}>{busy ? 'Importing…' : 'Import account'}</Btn>
       </GateThen>
+    </div>
+  );
+}
+
+// Add a custom token (by contract/mint) to a chain wallet. Detection is a
+// read-only RPC call — no password, no keys touched. Only chains the user
+// actually has a wallet on (and that support tokens: EVM + Solana) are offered.
+function AddTokenFlow({ initialChain, onBack, onDone }) {
+  const W = useFXW();
+  const supported = window.FXWallet ? window.FXWallet.tokenChains() : [];
+  const walletChains = W.wallets.filter((w) => supported.includes(w.chain));
+  const [chain, setChain] = wS(initialChain && walletChains.some((w) => w.chain === initialChain) ? initialChain : (walletChains[0] ? walletChains[0].chain : null));
+  const [addr, setAddr] = wS('');
+  const [sym, setSym] = wS('');
+  const [dec, setDec] = wS(null);
+  const [detected, setDetected] = wS(false);
+  const [busy, setBusy] = wS(false);
+  const [err, setErr] = wS('');
+  const [done, setDone] = wS(false);
+  const chainLabel = (FXW().chains.find((c) => c.key === chain) || {}).label || '';
+  const reset = () => { setDetected(false); setSym(''); setDec(null); setErr(''); };
+
+  if (!walletChains.length) return (
+    <div style={{ paddingBottom: 10 }}>
+      <WMHeader title="Add token" onBack={onBack} />
+      <div style={{ textAlign: 'center', color: 'var(--muted)', padding: 30, fontSize: 13.5, lineHeight: 1.55 }}>Create or import a wallet first — custom tokens are added onto a chain wallet you already hold (Ethereum, BNB Chain, Base, Polygon or Solana).</div>
+      <Btn kind="soft" full icon="plus" onClick={onBack}>Back to wallets</Btn>
+    </div>
+  );
+  if (done) return <FlowSuccess icon="wallet" title="Token added" body={`${sym || 'Your token'} is now tracked in your ${chainLabel} wallet.`} onDone={onDone} />;
+
+  const detect = async () => {
+    setBusy(true); setErr('');
+    try { const t = await FXW().detectToken(chain, addr.trim()); setSym(t.symbol || ''); setDec(t.decimals); setDetected(true); }
+    catch (e) { setErr((e && e.message) || 'Could not read this token'); setDetected(false); }
+    finally { setBusy(false); }
+  };
+  const add = async () => {
+    setBusy(true); setErr('');
+    try { await FXW().addToken(chain, { address: addr.trim(), symbol: sym.trim(), decimals: dec }); setDone(true); }
+    catch (e) { setErr((e && e.message) || 'Failed to add token'); setBusy(false); }
+  };
+
+  return (
+    <div style={{ paddingBottom: 10 }}>
+      <WMHeader title="Add custom token" sub="Track any token by its contract" onBack={onBack} />
+      <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--muted)', margin: '0 2px 8px' }}>Network</div>
+      <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 14 }}>
+        {walletChains.map((w) => <Chip key={w.chain} active={chain === w.chain} onClick={() => { setChain(w.chain); reset(); }}>{w.label}</Chip>)}
+      </div>
+      <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--muted)', margin: '0 2px 8px' }}>Token contract{chain === 'sol' ? ' (mint) ' : ' '}address</div>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, background: 'var(--surface)', borderRadius: 13, padding: '13px 14px', boxShadow: 'inset 0 0 0 1px var(--line)', marginBottom: 12 }}>
+        <Icon name="wallet" size={18} color="var(--muted)" style={{ marginTop: 2 }} />
+        <textarea value={addr} onChange={(e) => { setAddr(e.target.value); if (detected) reset(); }} placeholder={chain === 'sol' ? 'Token mint address (base58)' : '0x… token contract address'} rows={2} style={{ flex: 1, border: 'none', background: 'transparent', outline: 'none', color: 'var(--text)', fontSize: 14, fontFamily: 'ui-monospace, monospace', resize: 'none', minWidth: 0 }} />
+      </div>
+      {detected && (<>
+        <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--muted)', margin: '0 2px 8px' }}>Symbol</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--surface)', borderRadius: 12, padding: '12px 14px', boxShadow: 'inset 0 0 0 1px var(--line)', marginBottom: 12 }}>
+          <Icon name="wallet" size={16} color="var(--muted)" />
+          <input value={sym} onChange={(e) => setSym(e.target.value)} placeholder="e.g. USDC" maxLength={12} style={{ flex: 1, border: 'none', background: 'transparent', outline: 'none', color: 'var(--text)', fontSize: 15, fontWeight: 700, fontFamily: 'inherit', minWidth: 0 }} />
+          {dec != null && <Pill tone="muted">{dec} decimals</Pill>}
+        </div>
+      </>)}
+      {err && <div style={{ marginBottom: 12, fontSize: 13, color: 'var(--down)', background: 'var(--down-bg)', borderRadius: 11, padding: '10px 12px', fontWeight: 600 }}>{err}</div>}
+      {!detected
+        ? <Btn size="lg" full icon="search" onClick={detect} disabled={!addr.trim() || busy} style={{ opacity: busy ? 0.6 : 1 }}>{busy ? 'Reading token…' : 'Detect token'}</Btn>
+        : <Btn size="lg" full icon="check" onClick={add} disabled={busy || !sym.trim()} style={{ opacity: busy ? 0.6 : 1 }}>{busy ? 'Adding…' : 'Add ' + (sym.trim() || 'token')}</Btn>}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, fontSize: 11.5, color: 'var(--faint)', marginTop: 14, padding: '0 2px', lineHeight: 1.5 }}><Icon name="info" size={14} style={{ marginTop: 1, flexShrink: 0 }} /> Adding a token only tracks its balance — it never moves funds. Always verify the contract address from a trusted source before sending.</div>
     </div>
   );
 }
