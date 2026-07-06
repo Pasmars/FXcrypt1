@@ -1638,7 +1638,7 @@ exports.processSignalOutcomes = functions.region('europe-west1')
   .pubsub.schedule('every 30 minutes')
   .onRun(async () => {
     const res = await signalTracker.resolveSignals(db, admin)
-    if (res.resolved) console.log(`signal outcomes: resolved ${res.resolved} of ${res.checked} recent signals`)
+    if (res.resolved) console.log(`signal outcomes: resolved ${res.resolved} of ${res.checked} recent signals · recorded ${res.recorded} durable`)
     return null
   })
 

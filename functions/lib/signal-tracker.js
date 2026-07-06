@@ -91,6 +91,20 @@ function resolveOutcome(signal, candles, now = Date.now()) {
 
 const dayKey = (ms) => new Date(ms).toISOString().slice(0, 10)
 
+// Durable, server-only record of each won/lost signal, written at resolution
+// time. The per-user `signals` docs are ephemeral (they age out via TTL once
+// `expiresAt` passes), so the track-record drill-down can't rely on them still
+// existing — this collection is the permanent source for the outcome list.
+const OUTCOMES_COL = 'signalOutcomes'
+const OUTCOMES_D90 = 90 * 24 * 3600000
+const outcomeRecord = (uid, sigId, s, outcome, outcomeR) => ({
+  id: `${uid}__${sigId}`,
+  symbol: s.symbol || '', bias: s.bias || 'long',
+  outcome, outcomeR: outcomeR != null ? outcomeR : null,
+  generatedAt: s.generatedAt, entry: s.entry != null ? s.entry : null,
+  won: String(outcome).startsWith('tp'), resolvedAt: Date.now(),
+})
+
 // The scheduler entrypoint: resolve recent unresolved signals across all users
 // and fold outcomes into the daily aggregates.
 async function resolveSignals(db, admin) {
@@ -109,7 +123,7 @@ async function resolveSignals(db, admin) {
     return candleCache[symbol]
   }
 
-  let resolved = 0
+  let resolved = 0, recorded = 0
   const dailyInc = {} // day → field increments
   for (const doc of unresolved) {
     const s = doc.data()
@@ -120,6 +134,13 @@ async function resolveSignals(db, admin) {
     if (!res) continue
     resolved++
     await doc.ref.set({ outcome: res.outcome, outcomeR: res.outcomeR, outcomeAt: Date.now() }, { merge: true }).catch(() => {})
+    // Durably record terminal (won/lost) outcomes for the drill-down list, so it
+    // survives the signal doc being TTL-deleted after it resolves.
+    if (res.outcome && res.outcome !== 'expired') {
+      const uid = (doc.ref.parent.parent && doc.ref.parent.parent.id) || 'u'
+      const rec = outcomeRecord(uid, doc.id, s, res.outcome, res.outcomeR)
+      await db.collection(OUTCOMES_COL).doc(rec.id).set(rec, { merge: true }).then(() => { recorded++ }).catch(() => {})
+    }
     const day = dayKey(s.generatedAt)
     const inc = (dailyInc[day] = dailyInc[day] || { total: 0, tp1: 0, tp2: 0, tp3: 0, sl: 0, expired: 0, sumR: 0, rCount: 0 })
     inc.total++
@@ -133,7 +154,7 @@ async function resolveSignals(db, admin) {
     for (const [k, v] of Object.entries(inc)) if (v) patch[k] = FieldValue.increment(v)
     if (Object.keys(patch).length) await db.doc(`signalStats/${day}`).set(patch, { merge: true }).catch(() => {})
   }
-  return { checked: snap.size, resolved }
+  return { checked: snap.size, resolved, recorded }
 }
 
 // Aggregate the daily docs into 30/90-day windows for the app + paywall.
@@ -170,25 +191,43 @@ async function readStats(db) {
 // from the last 90 days (most recent first). Only terminal outcomes (a TP hit or
 // an SL) are won/lost; 'expired' (never filled) is excluded — it was neither.
 async function readOutcomes(db) {
-  const cutoff = Date.now() - 90 * 24 * 3600000
-  // Where-only (no server-side orderBy): a collection-group query ordered by
-  // generatedAt needs a COLLECTION_GROUP_DESC index we don't provision. Mirror
-  // resolveSignals' proven pattern and sort in memory instead.
-  const snap = await db.collectionGroup('signals')
-    .where('generatedAt', '>', cutoff).limit(600).get()
-  const list = []
-  snap.forEach((doc) => {
-    const s = doc.data()
-    if (!s.outcome || s.outcome === 'expired') return
-    const won = s.outcome.startsWith('tp')
-    list.push({
-      symbol: s.symbol || '', bias: s.bias || 'long',
-      outcome: s.outcome, outcomeR: s.outcomeR != null ? s.outcomeR : null,
-      generatedAt: s.generatedAt, entry: s.entry != null ? s.entry : null, won,
-    })
+  const cutoff = Date.now() - OUTCOMES_D90
+  const clean = (r) => ({
+    symbol: r.symbol || '', bias: r.bias || 'long', outcome: r.outcome,
+    outcomeR: r.outcomeR != null ? r.outcomeR : null,
+    generatedAt: r.generatedAt, entry: r.entry != null ? r.entry : null,
+    won: r.won != null ? r.won : String(r.outcome).startsWith('tp'),
   })
-  list.sort((a, b) => (b.generatedAt || 0) - (a.generatedAt || 0))
-  return { outcomes: list.slice(0, 200), updatedAt: Date.now() }
+
+  // Primary: durable outcome records (top-level collection → indexed orderBy).
+  let recs = []
+  try {
+    const snap = await db.collection(OUTCOMES_COL)
+      .where('generatedAt', '>', cutoff).orderBy('generatedAt', 'desc').limit(200).get()
+    recs = snap.docs.map((d) => d.data())
+  } catch (_) { recs = [] }
+
+  // Bootstrap/self-heal: if nothing's been recorded yet, scan any signal docs
+  // that are still present, capture their resolved outcomes into the durable
+  // collection (so later opens are instant), and return them now.
+  if (!recs.length) {
+    try {
+      const live = await db.collectionGroup('signals').where('generatedAt', '>', cutoff).limit(1000).get()
+      const found = []
+      live.forEach((doc) => {
+        const s = doc.data()
+        if (!s.outcome || s.outcome === 'expired') return
+        const uid = (doc.ref.parent.parent && doc.ref.parent.parent.id) || 'u'
+        found.push(outcomeRecord(uid, doc.id, s, s.outcome, s.outcomeR))
+      })
+      found.sort((a, b) => (b.generatedAt || 0) - (a.generatedAt || 0))
+      recs = found.slice(0, 200)
+      await Promise.all(recs.map((r) => db.collection(OUTCOMES_COL).doc(r.id).set(r, { merge: true }).catch(() => {})))
+    } catch (_) { /* leave recs empty */ }
+  }
+
+  recs.sort((a, b) => (b.generatedAt || 0) - (a.generatedAt || 0))
+  return { outcomes: recs.map(clean), updatedAt: Date.now() }
 }
 
 module.exports = { resolveSignals, resolveOutcome, readStats, readOutcomes, fetchCandles }
