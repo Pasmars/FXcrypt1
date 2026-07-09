@@ -1866,10 +1866,11 @@ exports.runAgentScan = functions
     const timeframe     = agentSettings.timeframe  || '4H'
     const minConfidence = agentSettings.minConfidence || 70
 
-    // Fetch recent signals to deduplicate
+    // Fetch recent signals to deduplicate — 48h window so post-resolution
+    // cooldowns (up to 18h after a stop) are enforceable.
     const recentSnap = await db.collection(`users/${uid}/signals`)
-      .where('generatedAt', '>', Date.now() - 4 * 60 * 60 * 1000)
-      .limit(50).get()
+      .where('generatedAt', '>', Date.now() - 48 * 60 * 60 * 1000)
+      .orderBy('generatedAt', 'desc').limit(100).get()
     const recentSignals = recentSnap.docs.map(d => d.data())
 
     const allAnalyses = []
@@ -2087,12 +2088,13 @@ exports.processAgentScans = functions
       const autoExecute   = agentSettings.autoExecute || false
       const ms            = MASTER_SECRET()
 
-      // Fetch recent signals to deduplicate
+      // Fetch recent signals to deduplicate — 48h window so post-resolution
+      // cooldowns (up to 18h after a stop) are enforceable.
       let recentSignals = []
       try {
         const recentSnap = await db.collection(`users/${uid}/signals`)
-          .where('generatedAt', '>', Date.now() - 4 * 60 * 60 * 1000)
-          .limit(50).get()
+          .where('generatedAt', '>', Date.now() - 48 * 60 * 60 * 1000)
+          .orderBy('generatedAt', 'desc').limit(100).get()
         recentSignals = recentSnap.docs.map(d => d.data())
       } catch (_) {}
 
@@ -2131,8 +2133,9 @@ exports.processAgentScans = functions
       // sliced in insertion order (spot is pushed before futures), so spot filled
       // all 8 slots and futures signals were saved only if spot ran dry — which is
       // why the app showed spot but almost never futures from the auto scan.
+      let skippedDup = 0
       for (const analysis of Object.values(symbolMap).sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, 8)) {
-        if (signalGen.isDuplicateSignal(analysis, recentSignals)) continue
+        if (signalGen.isDuplicateSignal(analysis, recentSignals)) { skippedDup++; continue }
         const signal = signalGen.generateSignal(analysis, exchanges)
         if (!signal) continue
 
@@ -2142,7 +2145,7 @@ exports.processAgentScans = functions
       }
 
       const savedFutures = newSignals.filter((s) => s.marketType === 'futures').length
-      if (newSignals.length) console.log(`processAgentScans ${uid.slice(0, 6)}: saved ${newSignals.length} (${savedFutures} futures, ${newSignals.length - savedFutures} spot)`)
+      if (newSignals.length || skippedDup) console.log(`processAgentScans ${uid.slice(0, 6)}: saved ${newSignals.length} (${savedFutures} futures, ${newSignals.length - savedFutures} spot) · skipped ${skippedDup} dup/cooldown`)
 
       await db.doc(`users/${uid}`).set(
         { agentSettings: { lastScanAt: Date.now(), lastScanSignals: newSignals.length } },

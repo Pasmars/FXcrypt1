@@ -236,16 +236,54 @@ function formatTelegramSignalWithButtons(signal, signalId) {
   return { text, keyboard }
 }
 
-// ── Deduplication ─────────────────────────────────────────────────────────────
+// ── Deduplication & cooldown policy ───────────────────────────────────────────
+// Prevents the repeated-symbol noise: at most ONE active signal per symbol +
+// timeframe, a rest period after a signal resolves (short after a win, longer
+// after a stop), and a whipsaw guard that skips the symbol when it just printed
+// the opposite bias.
+const TP_COOLDOWN_MS  = 6  * 60 * 60 * 1000  // rest a symbol+TF this long after a TP win (4–8h band)
+const SL_COOLDOWN_MS  = 18 * 60 * 60 * 1000  // longer rest after a stop-loss (12–24h band)
+const OPP_BIAS_MS     = 3  * 60 * 60 * 1000  // skip if the same symbol just printed the opposite side
+const ACTIVE_MAX_MS   = 4  * 60 * 60 * 1000  // an unresolved signal counts as "active" until ~its expiry
 
+// Returns true if `newSignal` should be SUPPRESSED given the recent signal
+// history for the same symbol. `newSignal` may be a raw analysis (it only needs
+// symbol / bias / timeframe / marketType). `windowMs` is the legacy same-bias
+// fallback window, kept for backward-compatible callers.
 function isDuplicateSignal(newSignal, recentSignals, windowMs = 4 * 60 * 60 * 1000) {
-  const cutoff = Date.now() - windowMs
-  return recentSignals.some(s =>
-    s.symbol                           === newSignal.symbol &&
-    s.bias                             === newSignal.bias &&
-    (s.marketType || 'spot')           === (newSignal.marketType || 'spot') &&
-    s.generatedAt > cutoff
-  )
+  const now  = Date.now()
+  const sym  = newSignal.symbol
+  const tf   = newSignal.timeframe
+  const mt   = newSignal.marketType || 'spot'
+  const bias = newSignal.bias
+  for (const s of (recentSignals || [])) {
+    if (s.symbol !== sym) continue
+    if ((s.marketType || 'spot') !== mt) continue
+    const age = now - (s.generatedAt || 0)
+    if (age < 0) continue
+
+    // 1) Opposite-bias whipsaw guard (any timeframe): the market is undecided —
+    //    skip the new one rather than run a contradictory pair.
+    if (bias && s.bias && s.bias !== bias && age < OPP_BIAS_MS) return true
+
+    // Remaining rules are scoped to the same timeframe.
+    if ((s.timeframe || tf) !== tf) continue
+
+    // 2) One active signal per symbol+timeframe at a time.
+    if (!s.outcome && age < ACTIVE_MAX_MS) return true
+
+    // 3) Cooldown measured from when the prior signal RESOLVED.
+    if (s.outcome) {
+      const sinceResolve = now - (s.outcomeAt || s.generatedAt || 0)
+      if (String(s.outcome).startsWith('tp') && sinceResolve < TP_COOLDOWN_MS) return true // rest after a win
+      if (s.outcome === 'sl' && sinceResolve < SL_COOLDOWN_MS) return true                   // longer rest after a stop
+      // 'expired' → no cooldown; a fresh setup may re-arm immediately.
+    } else if (s.bias === bias && age < windowMs) {
+      // 4) Legacy same-bias/window fallback (belt-and-braces).
+      return true
+    }
+  }
+  return false
 }
 
 module.exports = { generateSignal, formatTelegramSignal, formatTelegramSignalWithButtons, isDuplicateSignal, fmtPrice, sizeTradeUsd }

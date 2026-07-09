@@ -1476,12 +1476,20 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
           const key = `${a.symbol}_${a.bias}_${a.marketType || 'spot'}`
           if (!symbolMap[key] || a.score > symbolMap[key].score) symbolMap[key] = a
         }
+        // Dedup/cooldown against recent signals (same policy as the app scans).
+        let recentSignals = []
+        try {
+          const rs = await db.collection(`users/${cbUid}/signals`).where('generatedAt', '>', Date.now() - 48 * 60 * 60 * 1000).orderBy('generatedAt', 'desc').limit(100).get()
+          recentSignals = rs.docs.map(d => d.data())
+        } catch (_) {}
         const newSignals = []
-        for (const analysis of Object.values(symbolMap).slice(0, 5)) {
+        for (const analysis of Object.values(symbolMap).sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, 5)) {
+          if (signalGen.isDuplicateSignal(analysis, recentSignals)) continue
           const signal = signalGen.generateSignal(analysis, exchanges)
           if (!signal) continue
           const ref = await db.collection(`users/${cbUid}/signals`).add(signal)
           newSignals.push({ id: ref.id, ...signal })
+          recentSignals.push(signal)
         }
         if (!newSignals.length) {
           await bot.sendMessage(chatId, '📭 No high-confidence signals found right now.')
@@ -3088,12 +3096,20 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
               if (!symbolMap[key] || a.score > symbolMap[key].score) symbolMap[key] = a
             }
 
+            // Dedup/cooldown against recent signals (same policy as the app scans).
+            let recentSignals = []
+            try {
+              const rs = await db.collection(`users/${uid}/signals`).where('generatedAt', '>', Date.now() - 48 * 60 * 60 * 1000).orderBy('generatedAt', 'desc').limit(100).get()
+              recentSignals = rs.docs.map(d => d.data())
+            } catch (_) {}
             const newSignals = []
-            for (const analysis of Object.values(symbolMap).slice(0, 5)) {
+            for (const analysis of Object.values(symbolMap).sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, 5)) {
+              if (signalGen.isDuplicateSignal(analysis, recentSignals)) continue
               const signal = signalGen.generateSignal(analysis, exchanges)
               if (!signal) continue
               const ref = await db.collection(`users/${uid}/signals`).add(signal)
               newSignals.push({ id: ref.id, ...signal })
+              recentSignals.push(signal)
             }
 
             if (!newSignals.length) { await reply('📭 No high-confidence signals found right now. Markets may be ranging.'); break }
