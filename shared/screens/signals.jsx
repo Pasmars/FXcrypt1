@@ -631,9 +631,22 @@ function ExecProcessing({ s, margin, onComplete }) {
 // Every row is a real, server-resolved signal (TP hit or SL) from the last 90
 // days. Nothing self-reported: outcomes come from exchange candles.
 const OUTCOME_LABEL = { tp1: 'TP1 hit', tp2: 'TP2 hit', tp3: 'TP3 hit', sl: 'Stopped out' };
+// Date+time / duration / price formatters for the per-signal detail panel.
+const fmtDT = (ms) => (ms ? new Date(ms).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—');
+const fmtDur = (a, b) => {
+  if (!a || !b || b < a) return null;
+  const mins = Math.round((b - a) / 60000);
+  if (mins < 60) return mins + 'm';
+  const h = Math.floor(mins / 60), m = mins % 60;
+  if (h < 24) return h + 'h' + (m ? ' ' + m + 'm' : '');
+  const d = Math.floor(h / 24); return d + 'd' + (h % 24 ? ' ' + (h % 24) + 'h' : '');
+};
+const fmtNum = (v) => (v == null || !isFinite(v)) ? '—' : (Math.abs(v) >= 1000 ? Number(v).toLocaleString('en-US', { maximumFractionDigits: 2 }) : Math.abs(v) >= 1 ? Number(v).toFixed(4) : Number(v).toFixed(6));
+const capitalize = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 function SignalTrackRecord({ go }) {
   const [data, setData] = sgS(null);
   const [filter, setFilter] = sgS('All');
+  const [openIdx, setOpenIdx] = sgS(null);
   sgE(() => {
     let alive = true;
     if (window.FXAPI && window.FXAPI.getSignalOutcomes) {
@@ -645,6 +658,13 @@ function SignalTrackRecord({ go }) {
   const wins = all.filter((o) => o.won).length;
   const losses = all.length - wins;
   const list = filter === 'All' ? all : filter === 'Won' ? all.filter((o) => o.won) : all.filter((o) => !o.won);
+
+  const detailRow = (k, v) => (
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 12.5 }}>
+      <span style={{ color: 'var(--muted)', flexShrink: 0 }}>{k}</span>
+      <span style={{ fontWeight: 700, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{v}</span>
+    </div>
+  );
 
   if (!data) return <div style={{ padding: '60px 20px', textAlign: 'center', color: 'var(--muted)' }}><span style={{ display: 'inline-block', width: 22, height: 22, border: '3px solid var(--line2)', borderTopColor: 'var(--accent)', borderRadius: '50%', animation: 'fxspin .7s linear infinite' }} /></div>;
 
@@ -669,19 +689,36 @@ function SignalTrackRecord({ go }) {
           const long = (o.bias || 'long') === 'long';
           const pair = o.symbol ? o.symbol.replace(/USDT$/, '/USDT') : '—';
           const when = o.generatedAt ? new Date(o.generatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
+          const open = openIdx === i;
+          const held = fmtDur(o.generatedAt, o.hitAt);
+          const setup = [o.confidence != null ? o.confidence + '% conf' : null, o.timeframe, capitalize(o.exchange), o.marketType === 'futures' ? ('Futures' + (o.leverage ? ' ' + o.leverage + 'x' : '')) : 'Spot'].filter(Boolean).join('  ·  ');
           return (
-            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 11, background: 'var(--surface)', borderRadius: 12, padding: '11px 13px', boxShadow: 'inset 0 0 0 1px var(--line)' }}>
-              <div style={{ width: 34, height: 34, borderRadius: '50%', flexShrink: 0, background: o.won ? 'var(--up-bg)' : 'var(--down-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: o.won ? 'var(--up)' : 'var(--down)' }}><Icon name={o.won ? 'check' : 'x'} size={17} stroke={3} /></div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ fontSize: 14.5, fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{pair}</span>
-                  <span style={{ fontSize: 10, fontWeight: 800, color: long ? 'var(--up)' : 'var(--down)', background: long ? 'var(--up-bg)' : 'var(--down-bg)', padding: '1px 6px', borderRadius: 5 }}>{long ? 'LONG' : 'SHORT'}</span>
+            <div key={i} onClick={() => setOpenIdx(open ? null : i)} style={{ background: 'var(--surface)', borderRadius: 12, padding: '11px 13px', boxShadow: open ? 'inset 0 0 0 1.5px var(--accent)' : 'inset 0 0 0 1px var(--line)', cursor: 'pointer', transition: 'box-shadow .15s' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
+                <div style={{ width: 34, height: 34, borderRadius: '50%', flexShrink: 0, background: o.won ? 'var(--up-bg)' : 'var(--down-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: o.won ? 'var(--up)' : 'var(--down)' }}><Icon name={o.won ? 'check' : 'x'} size={17} stroke={3} /></div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: 14.5, fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{pair}</span>
+                    <span style={{ fontSize: 10, fontWeight: 800, color: long ? 'var(--up)' : 'var(--down)', background: long ? 'var(--up-bg)' : 'var(--down-bg)', padding: '1px 6px', borderRadius: 5 }}>{long ? 'LONG' : 'SHORT'}</span>
+                    {o.marketType === 'futures' && <span style={{ fontSize: 10, fontWeight: 800, color: 'var(--muted)', background: 'var(--chip)', padding: '1px 6px', borderRadius: 5 }}>FUT{o.leverage ? ' ' + o.leverage + 'x' : ''}</span>}
+                  </div>
+                  <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 1 }}>{OUTCOME_LABEL[o.outcome] || o.outcome}{when ? ' · ' + when : ''}</div>
                 </div>
-                <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 1 }}>{OUTCOME_LABEL[o.outcome] || o.outcome}{when ? ' · ' + when : ''}</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div style={{ fontSize: 15, fontWeight: 800, color: o.won ? 'var(--up)' : 'var(--down)', fontVariantNumeric: 'tabular-nums' }}>{o.outcomeR != null ? (o.outcomeR >= 0 ? '+' : '') + o.outcomeR + 'R' : (o.won ? 'Win' : 'Loss')}</div>
+                  <Icon name={open ? 'chevU' : 'chevD'} size={16} color="var(--faint)" />
+                </div>
               </div>
-              <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: 15, fontWeight: 800, color: o.won ? 'var(--up)' : 'var(--down)', fontVariantNumeric: 'tabular-nums' }}>{o.outcomeR != null ? (o.outcomeR >= 0 ? '+' : '') + o.outcomeR + 'R' : (o.won ? 'Win' : 'Loss')}</div>
-              </div>
+              {open && (
+                <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: 7 }}>
+                  {detailRow('Called', fmtDT(o.generatedAt))}
+                  {detailRow(o.won ? 'Target hit' : 'Stop hit', fmtDT(o.hitAt) + (held ? '  ·  held ' + held : ''))}
+                  {detailRow('Entry → Stop', fmtNum(o.entry) + '  →  ' + fmtNum(o.stopLoss))}
+                  {(o.tp1 != null || o.tp2 != null || o.tp3 != null) && detailRow('Targets', [o.tp1, o.tp2, o.tp3].filter((v) => v != null).map(fmtNum).join('  ·  '))}
+                  {detailRow('Result', (OUTCOME_LABEL[o.outcome] || o.outcome) + (o.outcomeR != null ? '  ·  ' + (o.outcomeR >= 0 ? '+' : '') + o.outcomeR + 'R' : ''))}
+                  {setup && detailRow('Setup', setup)}
+                </div>
+              )}
             </div>
           );
         })}

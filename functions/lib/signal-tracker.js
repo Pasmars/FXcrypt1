@@ -44,7 +44,7 @@ function resolveOutcome(signal, candles, now = Date.now()) {
   const entry = +s.entry, sl = +s.stopLoss
   const tps = [+s.tp1, +s.tp2, +s.tp3]
   const risk = Math.abs(entry - sl)
-  if (!isFinite(entry) || !isFinite(sl) || risk <= 0) return { outcome: 'expired', outcomeR: null }
+  if (!isFinite(entry) || !isFinite(sl) || risk <= 0) return { outcome: 'expired', outcomeR: null, at: null }
   const fillDeadline = s.expiresAt || s.generatedAt + 4 * 3600000
   const trackDeadline = s.generatedAt + TRACK_WINDOW_MS
   const window = (candles || []).filter((c) => c.time + 3600000 > s.generatedAt) // include the candle containing generation
@@ -57,12 +57,13 @@ function resolveOutcome(signal, candles, now = Date.now()) {
     if (long ? c.low <= entry : c.high >= entry) { fillIdx = i; break }
   }
   if (fillIdx < 0) {
-    if (now > fillDeadline + 3600000) return { outcome: 'expired', outcomeR: null } // never filled
+    if (now > fillDeadline + 3600000) return { outcome: 'expired', outcomeR: null, at: null } // never filled
     return null // fill window still open
   }
 
-  // 2) walk candles after fill: highest TP reached before the SL touch.
-  let bestTp = 0
+  // 2) walk candles after fill: highest TP reached before the SL touch. Track the
+  // candle time of the deciding event (`at`) so the record shows when it hit.
+  let bestTp = 0, bestTpAt = null
   for (let i = fillIdx; i < window.length; i++) {
     const c = window[i]
     const slTouched = long ? c.low <= sl : c.high >= sl
@@ -70,21 +71,21 @@ function resolveOutcome(signal, candles, now = Date.now()) {
     // that same candle (TPs banked in EARLIER candles still count).
     if (slTouched) {
       return bestTp > 0
-        ? { outcome: 'tp' + bestTp, outcomeR: +(Math.abs(tps[bestTp - 1] - entry) / risk).toFixed(2) }
-        : { outcome: 'sl', outcomeR: -1 }
+        ? { outcome: 'tp' + bestTp, outcomeR: +(Math.abs(tps[bestTp - 1] - entry) / risk).toFixed(2), at: bestTpAt }
+        : { outcome: 'sl', outcomeR: -1, at: c.time }
     }
     for (let t = bestTp; t < 3; t++) {
-      if (long ? c.high >= tps[t] : c.low <= tps[t]) bestTp = t + 1
+      if (long ? c.high >= tps[t] : c.low <= tps[t]) { bestTp = t + 1; bestTpAt = c.time }
       else break
     }
-    if (bestTp === 3) return { outcome: 'tp3', outcomeR: +(Math.abs(tps[2] - entry) / risk).toFixed(2) }
+    if (bestTp === 3) return { outcome: 'tp3', outcomeR: +(Math.abs(tps[2] - entry) / risk).toFixed(2), at: bestTpAt }
   }
 
   // 3) no terminal event yet.
   if (now > trackDeadline) {
     return bestTp > 0
-      ? { outcome: 'tp' + bestTp, outcomeR: +(Math.abs(tps[bestTp - 1] - entry) / risk).toFixed(2) }
-      : { outcome: 'expired', outcomeR: null }
+      ? { outcome: 'tp' + bestTp, outcomeR: +(Math.abs(tps[bestTp - 1] - entry) / risk).toFixed(2), at: bestTpAt }
+      : { outcome: 'expired', outcomeR: null, at: null }
   }
   return null
 }
@@ -97,12 +98,27 @@ const dayKey = (ms) => new Date(ms).toISOString().slice(0, 10)
 // existing — this collection is the permanent source for the outcome list.
 const OUTCOMES_COL = 'signalOutcomes'
 const OUTCOMES_D90 = 90 * 24 * 3600000
-const outcomeRecord = (uid, sigId, s, outcome, outcomeR) => ({
+const num = (v) => (v != null && isFinite(+v) ? +v : null)
+// Full, durable snapshot of a resolved signal so the track-record drill-down can
+// show every detail (levels, timing, exchange, R) even after the ephemeral
+// per-user signal doc is TTL-deleted. `res` = { outcome, outcomeR, at }, where
+// `at` is the candle time the deciding TP/SL was hit.
+const outcomeRecord = (uid, sigId, s, res) => ({
   id: `${uid}__${sigId}`,
   symbol: s.symbol || '', bias: s.bias || 'long',
-  outcome, outcomeR: outcomeR != null ? outcomeR : null,
-  generatedAt: s.generatedAt, entry: s.entry != null ? s.entry : null,
-  won: String(outcome).startsWith('tp'), resolvedAt: Date.now(),
+  outcome: res.outcome, outcomeR: res.outcomeR != null ? res.outcomeR : null,
+  won: String(res.outcome).startsWith('tp'),
+  generatedAt: s.generatedAt || null,          // when the signal was called
+  hitAt: res.at != null ? res.at : Date.now(), // when it hit TP/SL
+  resolvedAt: Date.now(),                       // when the resolver recorded it
+  entry: num(s.entry), stopLoss: num(s.stopLoss),
+  tp1: num(s.tp1), tp2: num(s.tp2), tp3: num(s.tp3),
+  riskReward: s.riskReward != null ? s.riskReward : null,
+  confidence: num(s.confidence),
+  exchange: s.exchange || null,
+  timeframe: s.timeframe || null,
+  marketType: s.marketType || 'spot',
+  leverage: num(s.leverage),
 })
 
 // The scheduler entrypoint: resolve recent unresolved signals across all users
@@ -138,7 +154,7 @@ async function resolveSignals(db, admin) {
     // survives the signal doc being TTL-deleted after it resolves.
     if (res.outcome && res.outcome !== 'expired') {
       const uid = (doc.ref.parent.parent && doc.ref.parent.parent.id) || 'u'
-      const rec = outcomeRecord(uid, doc.id, s, res.outcome, res.outcomeR)
+      const rec = outcomeRecord(uid, doc.id, s, res)
       await db.collection(OUTCOMES_COL).doc(rec.id).set(rec, { merge: true }).then(() => { recorded++ }).catch(() => {})
     }
     const day = dayKey(s.generatedAt)
@@ -195,8 +211,19 @@ async function readOutcomes(db) {
   const clean = (r) => ({
     symbol: r.symbol || '', bias: r.bias || 'long', outcome: r.outcome,
     outcomeR: r.outcomeR != null ? r.outcomeR : null,
-    generatedAt: r.generatedAt, entry: r.entry != null ? r.entry : null,
     won: r.won != null ? r.won : String(r.outcome).startsWith('tp'),
+    generatedAt: r.generatedAt != null ? r.generatedAt : null,
+    hitAt: r.hitAt != null ? r.hitAt : (r.resolvedAt != null ? r.resolvedAt : null),
+    resolvedAt: r.resolvedAt != null ? r.resolvedAt : null,
+    entry: r.entry != null ? r.entry : null,
+    stopLoss: r.stopLoss != null ? r.stopLoss : null,
+    tp1: r.tp1 != null ? r.tp1 : null, tp2: r.tp2 != null ? r.tp2 : null, tp3: r.tp3 != null ? r.tp3 : null,
+    riskReward: r.riskReward != null ? r.riskReward : null,
+    confidence: r.confidence != null ? r.confidence : null,
+    exchange: r.exchange || null,
+    timeframe: r.timeframe || null,
+    marketType: r.marketType || 'spot',
+    leverage: r.leverage != null ? r.leverage : null,
   })
 
   // Primary: durable outcome records (top-level collection → indexed orderBy).
@@ -218,7 +245,7 @@ async function readOutcomes(db) {
         const s = doc.data()
         if (!s.outcome || s.outcome === 'expired') return
         const uid = (doc.ref.parent.parent && doc.ref.parent.parent.id) || 'u'
-        found.push(outcomeRecord(uid, doc.id, s, s.outcome, s.outcomeR))
+        found.push(outcomeRecord(uid, doc.id, s, { outcome: s.outcome, outcomeR: s.outcomeR, at: s.outcomeAt }))
       })
       found.sort((a, b) => (b.generatedAt || 0) - (a.generatedAt || 0))
       recs = found.slice(0, 200)
