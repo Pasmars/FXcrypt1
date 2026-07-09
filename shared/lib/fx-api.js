@@ -282,6 +282,8 @@ window.FXAPI = {
         autoExecute:     !!ag.autoExecute,
         telegramSignals: ag.telegramSignals !== false,
         riskPercent:     ag.riskPercent != null ? ag.riskPercent : 1,
+        riskMode:        ag.riskMode === 'fixed' ? 'fixed' : 'percent',
+        riskUsd:         ag.riskUsd != null ? ag.riskUsd : 50,
       };
     } catch (e) { return null; }
   },
@@ -391,6 +393,12 @@ window.FXAPI = {
     if (patch && patch.riskPercent !== undefined) {
       const r = parseFloat(patch.riskPercent);
       if (Number.isFinite(r)) agentSettings.riskPercent = Math.max(0.1, Math.min(r, 25));
+    }
+    // Position-sizing mode: 'percent' (of balance) or 'fixed' (a USDT amount/trade).
+    if (patch && patch.riskMode !== undefined) agentSettings.riskMode = patch.riskMode === 'fixed' ? 'fixed' : 'percent';
+    if (patch && patch.riskUsd !== undefined) {
+      const u = parseFloat(patch.riskUsd);
+      if (Number.isFinite(u)) agentSettings.riskUsd = Math.max(1, Math.min(u, 1000000));
     }
     if (!Object.keys(agentSettings).length) return {};
     await setDoc(doc(db, 'users', u.uid), { agentSettings }, { merge: true });

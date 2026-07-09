@@ -1952,7 +1952,8 @@ exports.approveTrade = fn.https.onCall(async (data, context) => {
   if (!userSnap.exists) throw new functions.https.HttpsError('not-found', 'User not found')
 
   const ms   = MASTER_SECRET()
-  const keys = (userSnap.data().agentSettings || {}).cexKeys || {}
+  const agentSettings = userSnap.data().agentSettings || {}
+  const keys = agentSettings.cexKeys || {}
 
   // Use caller-supplied exchange if provided, otherwise fall back to signal origin
   const validExchanges = new Set(['binance', 'mexc', 'bybit', 'kucoin'])
@@ -1969,7 +1970,6 @@ exports.approveTrade = fn.https.onCall(async (data, context) => {
   const passphrase = keys[ex].encryptedPassphrase
     ? encryption.decrypt(keys[ex].encryptedPassphrase, uid, ms) : ''
 
-  const riskPct    = Math.max(0.5, Math.min(parseFloat(riskPercent) || 2, 10))
   const marketType = signal.marketType || 'spot'
   const leverage   = signal.leverage   || 5
   const side       = signal.bias === 'short' ? 'sell' : 'buy'
@@ -1991,7 +1991,9 @@ exports.approveTrade = fn.https.onCall(async (data, context) => {
     usdtBalance = bal.free
   } catch (_) {}
 
-  const tradeUSDT = usdtBalance * (riskPct / 100)
+  // Size by the trader's configured mode: % of balance or a fixed USDT amount.
+  const tradeUSDT = signalGen.sizeTradeUsd(agentSettings, usdtBalance, riskPercent)
+  if (!(tradeUSDT > 0)) throw new functions.https.HttpsError('failed-precondition', 'Trade size is 0 — fund the account or raise your per-trade amount.')
 
   await signalRef.update({ status: 'approved', approvedAt: admin.firestore.FieldValue.serverTimestamp() })
 
@@ -2041,11 +2043,15 @@ exports.saveAgentSettings = fn.https.onCall(async (data, context) => {
   if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
 
   const uid = context.auth.uid
-  const allowed = ['enabled', 'exchanges', 'timeframe', 'minConfidence', 'riskPercent', 'maxConcurrentTrades', 'autoExecute', 'telegramSignals', 'scanInterval', 'marketTypes']
+  const allowed = ['enabled', 'exchanges', 'timeframe', 'minConfidence', 'riskPercent', 'maxConcurrentTrades', 'autoExecute', 'telegramSignals', 'scanInterval', 'marketTypes', 'riskMode', 'riskUsd']
   const settings = {}
   for (const k of allowed) {
     if (data[k] !== undefined) settings[k] = data[k]
   }
+  // Validate the position-sizing config: mode is percent|fixed; fixed USDT
+  // amount is clamped to a sane range so a bad value can't size a huge order.
+  if (settings.riskMode !== undefined) settings.riskMode = settings.riskMode === 'fixed' ? 'fixed' : 'percent'
+  if (settings.riskUsd !== undefined) { const n = parseFloat(settings.riskUsd); settings.riskUsd = Number.isFinite(n) ? Math.max(1, Math.min(n, 1000000)) : 50 }
   await db.doc(`users/${uid}`).set({ agentSettings: settings }, { merge: true })
   return { success: true }
 })
@@ -2188,8 +2194,8 @@ exports.processAgentScans = functions
                     usdtBalance = bal.free
                   } catch (_) {}
 
-                  const riskPct  = agentSettings.riskPercent || 2
-                  const tradeAmt = usdtBalance * (riskPct / 100)
+                  const tradeAmt = signalGen.sizeTradeUsd(agentSettings, usdtBalance, null)
+                  if (!(tradeAmt > 0)) { console.warn(`auto-exec ${signal.symbol}: trade size 0 (balance ${usdtBalance})`); continue }
 
                   const result = await cexTrader.placeOrderSafe(
                     ex, creds, signal.symbol, tradeAmt, signal.currentPrice, mktType, leverage, side

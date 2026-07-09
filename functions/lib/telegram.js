@@ -364,7 +364,9 @@ function agentSettingsKeyboard(agentSettings) {
          callback_data: 'sedit_timeframe' }],
       [{ text: `Min Confidence: ${agentSettings.minConfidence ?? 70}%`,
          callback_data: 'sedit_minConfidence' }],
-      [{ text: `Risk Per Trade: ${agentSettings.riskPercent ?? 2}%`,
+      [{ text: agentSettings.riskMode === 'fixed'
+           ? `Trade Size: $${agentSettings.riskUsd ?? 50} fixed`
+           : `Risk Per Trade: ${agentSettings.riskPercent ?? 2}%`,
          callback_data: 'sedit_riskPercent' }],
       [{ text: `Auto-Execute: ${agentSettings.autoExecute ? '✅ ON' : '❌ OFF'}`,
          callback_data: 'sedit_autoExecute' }],
@@ -3374,11 +3376,11 @@ async function executeTgTrade(bot, db, admin, encryption, masterSecret, cexTrade
     const passphrase = keys[ex].encryptedPassphrase
       ? encryption.decrypt(keys[ex].encryptedPassphrase, uid, masterSecret) : ''
 
-    const riskPct = agentSettings.riskPercent || 2
     let usdtBal   = 100
     try { const b = await cexTrader.getSpotBalance(ex, { apiKey, secret, passphrase }, 'USDT'); usdtBal = b.free } catch (_) {}
 
-    const tradeAmt = usdtBal * (riskPct / 100)
+    // Size by the trader's configured mode: % of balance or fixed USDT amount.
+    const tradeAmt = signalGen.sizeTradeUsd(agentSettings, usdtBal, null)
 
     // placeOrderSafe validates symbol listing, min notional, and uses each
     // exchange's "buy by quote" endpoint so step-size precision never causes 400s

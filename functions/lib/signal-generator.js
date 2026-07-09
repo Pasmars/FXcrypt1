@@ -159,6 +159,22 @@ function htmlEsc(v) {
   return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
+// Position size (USDT) for a signal trade. Traders pick one of two modes in the
+// signal-scanner auto-bot settings:
+//   riskMode 'percent' (default) → a % of available USDT balance (clamped 0.5–10)
+//   riskMode 'fixed'             → a fixed USDT amount per trade (capped at balance)
+// pctOverride lets a manual approve pass a per-trade % (ignored in fixed mode).
+function sizeTradeUsd(agentSettings, usdtBalance, pctOverride) {
+  const s = agentSettings || {}
+  const bal = Number(usdtBalance) || 0
+  if (s.riskMode === 'fixed') {
+    const usd = Math.max(0, parseFloat(s.riskUsd) || 0)
+    return Math.max(0, Math.min(usd, bal))
+  }
+  const pct = Math.max(0.5, Math.min(parseFloat(pctOverride != null ? pctOverride : s.riskPercent) || 2, 10))
+  return bal * (pct / 100)
+}
+
 function formatTelegramSignal(signal) {
   const biasEmoji  = signal.bias === 'long' ? '🟢' : '🔴'
   const biasLabel  = signal.bias === 'long' ? 'LONG' : 'SHORT'
@@ -232,4 +248,4 @@ function isDuplicateSignal(newSignal, recentSignals, windowMs = 4 * 60 * 60 * 10
   )
 }
 
-module.exports = { generateSignal, formatTelegramSignal, formatTelegramSignalWithButtons, isDuplicateSignal, fmtPrice }
+module.exports = { generateSignal, formatTelegramSignal, formatTelegramSignalWithButtons, isDuplicateSignal, fmtPrice, sizeTradeUsd }

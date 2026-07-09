@@ -2,6 +2,7 @@
 const { useState: sgS, useEffect: sgE } = React;
 
 const SIGNAL_RISK_OPTS = [0.5, 1, 2, 3, 5];
+const SIGNAL_USD_OPTS = [25, 50, 100, 250];
 const SIGNAL_SCAN_STEPS = [
   { icon: 'search', label: 'Connecting to exchanges', sub: 'Binance · MEXC · Bybit · KuCoin' },
   { icon: 'candles', label: 'Pulling top liquid pairs', sub: 'Spot & futures markets' },
@@ -17,6 +18,9 @@ function Signals({ go, onUpsell }) {
   const [tg, setTg] = sgS(false);
   const [tgLinked, setTgLinked] = sgS(false);
   const [risk, setRisk] = sgS(1);
+  // Position sizing: 'percent' of balance, or a 'fixed' USDT amount per trade.
+  const [riskMode, setRiskMode] = sgS('percent');
+  const [riskUsd, setRiskUsd] = sgS('50');
   const [scan, setScan] = sgS({ on: false, ago: 'cached', found: 0 });
   // Scan modal state: open + done + result summary so the user sees progress
   // and the fresh setups the moment a scan finishes (no page refresh needed).
@@ -39,12 +43,23 @@ function Signals({ go, onUpsell }) {
       setTg(!!p.signalAuto && p.telegramSignals);
       setTgLinked(!!p.telegramLinked);
       if (p.riskPercent) setRisk(p.riskPercent);
+      if (p.riskMode) setRiskMode(p.riskMode);
+      if (p.riskUsd != null) setRiskUsd(String(p.riskUsd));
     }).catch(() => {});
     return () => { alive = false; };
   }, []);
   const changeRisk = async (v) => {
     setRisk(v);
     try { await window.FXAPI.saveSignalPrefs({ riskPercent: v }); } catch (e) {}
+  };
+  const changeMode = async (m) => {
+    setRiskMode(m);
+    try { await window.FXAPI.saveSignalPrefs({ riskMode: m }); } catch (e) {}
+  };
+  const changeUsd = async (v) => {
+    const n = Math.max(1, parseFloat(v) || 0);
+    setRiskUsd(String(n));
+    try { await window.FXAPI.saveSignalPrefs({ riskUsd: n }); } catch (e) {}
   };
   // Telegram delivery: enabling also turns on the agent scheduler so signals
   // are actually generated and pushed; disabling just stops delivery.
@@ -128,14 +143,32 @@ function Signals({ go, onUpsell }) {
       {auto && (
         <div style={{ padding: '0 16px 12px' }}>
           <div style={{ background: 'var(--surface)', borderRadius: 14, padding: '12px 14px', boxShadow: 'inset 0 0 0 1px var(--line)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 9 }}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13.5, fontWeight: 700 }}><Icon name="shield" size={16} color="var(--accent)" /> Risk per trade</span>
-              <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--accent)' }}>{risk}%</span>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13.5, fontWeight: 700 }}><Icon name="shield" size={16} color="var(--accent)" /> Size per trade</span>
+              <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--accent)' }}>{riskMode === 'fixed' ? '$' + (riskUsd || '0') : risk + '%'}</span>
             </div>
-            <div style={{ display: 'flex', gap: 7 }}>
-              {SIGNAL_RISK_OPTS.map(v => <Chip key={v} active={risk === v} onClick={() => changeRisk(v)} style={{ flex: 1, justifyContent: 'center' }}>{v}%</Chip>)}
-            </div>
-            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 8 }}>The bot risks this % of your balance on each auto-executed signal.</div>
+            {/* Choose how each auto-executed trade is sized: a % of balance or a fixed $ */}
+            <Segmented options={[{ value: 'percent', label: '% of balance' }, { value: 'fixed', label: 'Fixed $' }]} value={riskMode} onChange={changeMode} style={{ marginBottom: 11 }} />
+            {riskMode === 'percent' ? (
+              <div style={{ display: 'flex', gap: 7 }}>
+                {SIGNAL_RISK_OPTS.map(v => <Chip key={v} active={risk === v} onClick={() => changeRisk(v)} style={{ flex: 1, justifyContent: 'center' }}>{v}%</Chip>)}
+              </div>
+            ) : (
+              <>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surface2)', borderRadius: 11, padding: '10px 13px', marginBottom: 9 }}>
+                  <span style={{ fontSize: 22, fontWeight: 800, color: 'var(--muted)' }}>$</span>
+                  <input value={riskUsd} onChange={e => setRiskUsd(e.target.value.replace(/[^0-9.]/g, ''))} onBlur={() => changeUsd(riskUsd)} inputMode="decimal"
+                    style={{ flex: 1, border: 'none', background: 'transparent', outline: 'none', color: 'var(--text)', fontSize: 22, fontWeight: 800, fontFamily: 'inherit', minWidth: 0 }} />
+                  <span style={{ fontSize: 12.5, color: 'var(--muted)', fontWeight: 700 }}>USDT</span>
+                </div>
+                <div style={{ display: 'flex', gap: 7 }}>
+                  {SIGNAL_USD_OPTS.map(v => <Chip key={v} active={parseFloat(riskUsd) === v} onClick={() => changeUsd(v)} style={{ flex: 1, justifyContent: 'center' }}>${v}</Chip>)}
+                </div>
+              </>
+            )}
+            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 8 }}>{riskMode === 'fixed'
+              ? 'The bot spends this fixed USDT amount on each auto-executed signal (capped at your available balance).'
+              : 'The bot uses this % of your USDT balance on each auto-executed signal.'}</div>
           </div>
         </div>
       )}
