@@ -756,6 +756,7 @@ function formatGemCard(gem, settings) {
 async function sendGemAlerts(gems, settings, bot, chatId, db, uid) {
   const alertsRef = db.collection(`users/${uid}/gemAlerts`)
   let sentCount = 0
+  let logged = 0
 
   for (const gem of gems.slice(0, 10)) {
     // Dedup: skip if already alerted for this token in the last 6 hours
@@ -922,15 +923,13 @@ async function sendGemAlerts(gems, settings, bot, chatId, db, uid) {
       }),
     }
 
+    // Log the surfaced gem FIRST, independent of Telegram delivery — this is
+    // what powers the in-app "Auto-scanned" feed and the 6h de-dup above, so it
+    // must persist even when the Telegram send fails. `telegramSent` records
+    // whether delivery actually succeeded.
+    let logRef = null
     try {
-      await bot.sendMessage(chatId, message, {
-        parse_mode: 'Markdown',
-        disable_web_page_preview: true,
-        ...inlineKeyboard,
-      })
-
-      // Log the alert
-      await alertsRef.add({
+      logRef = await alertsRef.add({
         tokenAddress: gem.tokenAddress,
         tokenName:    gem.tokenName,
         tokenSymbol:  gem.tokenSymbol,
@@ -942,17 +941,30 @@ async function sendGemAlerts(gems, settings, bot, chatId, db, uid) {
         alertedAt:    Date.now(),
         autoBought:   false,
         txHash:       null,
+        telegramSent: false,
       })
+      logged++
+    } catch (e) { /* a logging failure shouldn't block the alert attempt */ }
 
+    try {
+      await bot.sendMessage(chatId, message, {
+        parse_mode: 'Markdown',
+        disable_web_page_preview: true,
+        ...inlineKeyboard,
+      })
       sentCount++
+      if (logRef) await logRef.update({ telegramSent: true }).catch(() => {})
     } catch (err) {
-      console.error(`Failed to send gem alert for ${gem.tokenSymbol}:`, err.message)
+      // Surface Telegram's actual reason (e.g. Markdown parse error) for triage.
+      const tgDesc = err && err.response && err.response.data && err.response.data.description
+      console.error(`Failed to send gem alert for ${gem.tokenSymbol}:`, tgDesc || err.message)
     }
 
     // Small delay between messages to avoid Telegram rate limits
     await new Promise(r => setTimeout(r, 500))
   }
 
+  if (logged) console.log(`gem alerts [${uid.slice(0, 6)}]: logged ${logged} to feed · ${sentCount} delivered to Telegram`)
   return sentCount
 }
 
