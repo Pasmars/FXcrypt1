@@ -2220,7 +2220,8 @@ exports.processAgentScans = functions
 
             await new Promise(r => setTimeout(r, 500)) // rate limit between TG messages
           } catch (tgErr) {
-            console.error(`TG signal send error:`, tgErr.message)
+            const tgDesc = tgErr && tgErr.response && tgErr.response.data && tgErr.response.data.description
+            console.error(`TG signal send error (${signal.symbol}):`, tgDesc || tgErr.message)
           }
         }
       }
