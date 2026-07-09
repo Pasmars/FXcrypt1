@@ -1486,7 +1486,7 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
         } else {
           for (const sig of newSignals.slice(0, 3)) {
             const { text, keyboard } = signalGen.formatTelegramSignalWithButtons(sig, sig.id)
-            await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: keyboard }).catch(() => {})
+            await bot.sendMessage(chatId, text, { parse_mode: 'HTML', reply_markup: keyboard }).catch(() => {})
             await new Promise(r => setTimeout(r, 500))
           }
         }
@@ -3098,7 +3098,7 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
 
             for (const sig of newSignals.slice(0, 3)) {
               const { text, keyboard } = signalGen.formatTelegramSignalWithButtons(sig, sig.id)
-              await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: keyboard }).catch(() => {})
+              await bot.sendMessage(chatId, text, { parse_mode: 'HTML', reply_markup: keyboard }).catch(() => {})
               await new Promise(r => setTimeout(r, 500))
             }
           } catch (err) {

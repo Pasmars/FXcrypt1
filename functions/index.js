@@ -2151,7 +2151,7 @@ exports.processAgentScans = functions
           try {
             const { text, keyboard } = signalGen.formatTelegramSignalWithButtons(signal, signal.id)
             const sentMsg = await bot.sendMessage(chatId, text, {
-              parse_mode: 'Markdown',
+              parse_mode: 'HTML',
               reply_markup: keyboard,
             })
             const msgId = sentMsg?.result?.message_id

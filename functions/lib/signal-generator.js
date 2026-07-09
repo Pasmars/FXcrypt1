@@ -152,14 +152,21 @@ function fmtPct(entry, target) {
   return (pct >= 0 ? '+' : '') + pct.toFixed(1) + '%'
 }
 
+// Escape dynamic text for Telegram HTML parse mode. Legacy `Markdown` broke
+// delivery whenever a dynamic field (setup text, structure bias, symbol…)
+// contained an unbalanced * _ ` [ — HTML + escaping is robust to that.
+function htmlEsc(v) {
+  return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
 function formatTelegramSignal(signal) {
   const biasEmoji  = signal.bias === 'long' ? '🟢' : '🔴'
   const biasLabel  = signal.bias === 'long' ? 'LONG' : 'SHORT'
-  const alphaTag   = signal.isAlpha ? ' 🔥 *\\[ALPHA\\]*' : ''
-  const exchanges  = (signal.exchanges || [signal.exchange]).map(e => e.toUpperCase()).join(' / ')
-  const mktTag     = signal.marketType === 'futures' ? ' 📊 *\\[FUTURES\\]*' : ' 🏪 *\\[SPOT\\]*'
+  const alphaTag   = signal.isAlpha ? ' 🔥 <b>[ALPHA]</b>' : ''
+  const exchanges  = (signal.exchanges || [signal.exchange]).map(e => String(e).toUpperCase()).join(' / ')
+  const mktTag     = signal.marketType === 'futures' ? ' 📊 <b>[FUTURES]</b>' : ' 🏪 <b>[SPOT]</b>'
   const leverageLn = signal.marketType === 'futures' && signal.leverage
-    ? `⚡ Suggested Leverage: *${signal.leverage}x*\n`
+    ? `⚡ Suggested Leverage: <b>${signal.leverage}x</b>\n`
     : ''
 
   const entryLine = signal.entryHigh
@@ -168,7 +175,7 @@ function formatTelegramSignal(signal) {
       ? `$${fmtPrice(signal.entryLow)} — $${fmtPrice(signal.entry)}`
       : `$${fmtPrice(signal.entry)}`
 
-  const rsiLine = signal.indicators.rsi !== null ? `📊 RSI: *${signal.indicators.rsi}*\n` : ''
+  const rsiLine = signal.indicators.rsi !== null ? `📊 RSI: <b>${signal.indicators.rsi}</b>\n` : ''
   const volLine = signal.indicators.volumeSpike ? `🔊 Volume: Spike detected\n` : ''
   const bosLine = signal.structure.bos ? `✅ BOS confirmed\n` : ''
   const fvgLine = signal.structure.hasFVG ? `📍 FVG imbalance nearby\n` : ''
@@ -178,27 +185,27 @@ function formatTelegramSignal(signal) {
   if (signal.marketType === 'futures' && signal.tvRecommend?.label) {
     const tv    = signal.tvRecommend
     const emoji = tv.label.includes('Buy') ? '🟢' : tv.label.includes('Sell') ? '🔴' : '⚪'
-    const adxStr = tv.adx != null ? ` · ADX *${Math.round(tv.adx)}*` : ''
-    tvLine = `${emoji} TradingView: *${tv.label}*${adxStr}\n`
+    const adxStr = tv.adx != null ? ` · ADX <b>${Math.round(tv.adx)}</b>` : ''
+    tvLine = `${emoji} TradingView: <b>${htmlEsc(tv.label)}</b>${adxStr}\n`
   }
 
   return (
-    `${biasEmoji} *${biasLabel} SIGNAL — ${signal.symbol}*${alphaTag}${mktTag}\n\n` +
-    `📡 Exchange: *${exchanges}*\n` +
+    `${biasEmoji} <b>${biasLabel} SIGNAL — ${htmlEsc(signal.symbol)}</b>${alphaTag}${mktTag}\n\n` +
+    `📡 Exchange: <b>${htmlEsc(exchanges)}</b>\n` +
     leverageLn +
-    `⏱ Timeframe: *${signal.timeframe}*\n` +
+    `⏱ Timeframe: <b>${htmlEsc(signal.timeframe)}</b>\n` +
     `💰 Current Price: $${fmtPrice(signal.currentPrice)}\n\n` +
-    `📍 *Entry Zone:* ${entryLine}\n` +
-    `🎯 TP1: $${fmtPrice(signal.tp1)} *(${fmtPct(signal.entry, signal.tp1)})*\n` +
-    `🎯 TP2: $${fmtPrice(signal.tp2)} *(${fmtPct(signal.entry, signal.tp2)})*\n` +
-    `🎯 TP3: $${fmtPrice(signal.tp3)} *(${fmtPct(signal.entry, signal.tp3)})*\n` +
-    `🛑 Stop Loss: $${fmtPrice(signal.stopLoss)} *(${fmtPct(signal.entry, signal.stopLoss)})*\n` +
-    `⚖ Risk/Reward: *1:${signal.riskReward}*\n\n` +
-    `📈 Market Structure: *${signal.structure.bias}*\n` +
-    `🔧 Setup: ${signal.setup}\n` +
+    `📍 <b>Entry Zone:</b> ${entryLine}\n` +
+    `🎯 TP1: $${fmtPrice(signal.tp1)} <b>(${fmtPct(signal.entry, signal.tp1)})</b>\n` +
+    `🎯 TP2: $${fmtPrice(signal.tp2)} <b>(${fmtPct(signal.entry, signal.tp2)})</b>\n` +
+    `🎯 TP3: $${fmtPrice(signal.tp3)} <b>(${fmtPct(signal.entry, signal.tp3)})</b>\n` +
+    `🛑 Stop Loss: $${fmtPrice(signal.stopLoss)} <b>(${fmtPct(signal.entry, signal.stopLoss)})</b>\n` +
+    `⚖ Risk/Reward: <b>1:${htmlEsc(signal.riskReward)}</b>\n\n` +
+    `📈 Market Structure: <b>${htmlEsc(signal.structure.bias)}</b>\n` +
+    `🔧 Setup: ${htmlEsc(signal.setup)}\n` +
     rsiLine + volLine + bosLine + fvgLine + obLine + tvLine +
-    `\n🎯 *Confidence: ${signal.confidence}%*\n` +
-    `⏰ _Expires in 4 hours_`
+    `\n🎯 <b>Confidence: ${signal.confidence}%</b>\n` +
+    `⏰ <i>Expires in 4 hours</i>`
   )
 }
 
