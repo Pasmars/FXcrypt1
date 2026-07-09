@@ -2127,7 +2127,11 @@ exports.processAgentScans = functions
       }
 
       const newSignals = []
-      for (const analysis of Object.values(symbolMap).slice(0, 8)) {
+      // Rank by score across BOTH market types before capping. Previously this
+      // sliced in insertion order (spot is pushed before futures), so spot filled
+      // all 8 slots and futures signals were saved only if spot ran dry — which is
+      // why the app showed spot but almost never futures from the auto scan.
+      for (const analysis of Object.values(symbolMap).sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, 8)) {
         if (signalGen.isDuplicateSignal(analysis, recentSignals)) continue
         const signal = signalGen.generateSignal(analysis, exchanges)
         if (!signal) continue
@@ -2136,6 +2140,9 @@ exports.processAgentScans = functions
         newSignals.push({ id: ref.id, ...signal })
         recentSignals.push(signal) // prevent duplicates within same run
       }
+
+      const savedFutures = newSignals.filter((s) => s.marketType === 'futures').length
+      if (newSignals.length) console.log(`processAgentScans ${uid.slice(0, 6)}: saved ${newSignals.length} (${savedFutures} futures, ${newSignals.length - savedFutures} spot)`)
 
       await db.doc(`users/${uid}`).set(
         { agentSettings: { lastScanAt: Date.now(), lastScanSignals: newSignals.length } },
