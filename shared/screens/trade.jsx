@@ -454,6 +454,34 @@ function gemDexUrl(g) {
   if (g.address) return `https://dexscreener.com/${GEM_DS_SLUG[g.chain] || g.chain}/${g.address}`;
   return null;
 }
+// Compact USD + relative-time helpers for the auto-scan feed.
+function gemCompactUsd(n) {
+  n = Number(n) || 0;
+  if (n >= 1e9) return '$' + (n / 1e9).toFixed(1) + 'B';
+  if (n >= 1e6) return '$' + (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return '$' + (n / 1e3).toFixed(1) + 'K';
+  return '$' + n.toFixed(0);
+}
+function gemAgo(ms) {
+  ms = Number(ms) || 0;
+  if (!ms) return 'recently';
+  const m = Math.floor((Date.now() - ms) / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return m + 'm ago';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + 'h ago';
+  return Math.floor(h / 24) + 'd ago';
+}
+// Map a stored gemAlert doc into the shape gemToken()/TokenDetail expect.
+function gemAlertToken(a) {
+  const sym = a.tokenSymbol || '?';
+  return gemToken({
+    sym, name: a.tokenName || sym, chain: a.chain, price: a.priceUsd || 0, ch: 0,
+    mcap: a.marketCap ? gemCompactUsd(a.marketCap) : '—', liq: a.liquidity ? gemCompactUsd(a.liquidity) : '—',
+    vol: '—', holders: '—', address: a.tokenAddress, img: null,
+  });
+}
+
 // Full blockchain narrative taxonomy — must mirror classifyNarrative() in
 // fx-api.js. "All" applies no filter (the scan is already narrative-agnostic).
 const GEM_NARRATIVES = ['All', 'AI', 'Meme', 'DeFi', 'DePIN', 'RWA', 'GameFi', 'SocialFi', 'Layer', 'Payments', 'New'];
@@ -491,6 +519,9 @@ function GemScanner({ go, onTrade, locked, onUpsell }) {
   const [setOpen, setSetOpen] = tS(false);
   // Hindsight stats: how gems the scanner surfaced actually performed.
   const [stats, setStats] = tS(null);
+  // Auto-scanned gems (the 5-min scheduler's finds, sent to Telegram) so they're
+  // listed in the app too, not only in Telegram.
+  const [alerts, setAlerts] = tS([]);
   tE(() => {
     let alive = true;
     window.FXAPI.getBotPrefs().then(p => {
@@ -501,6 +532,7 @@ function GemScanner({ go, onTrade, locked, onUpsell }) {
     }).catch(() => {});
     window.FXAPI.getGemSettings().then(s => { if (alive && s) setCfg(s); }).catch(() => {});
     if (window.FXAPI.getGemStats) window.FXAPI.getGemStats().then(s => { if (alive && s) setStats(s); }).catch(() => {});
+    if (window.FXAPI.getGemAlerts) window.FXAPI.getGemAlerts().then(a => { if (alive && Array.isArray(a)) setAlerts(a); }).catch(() => {});
     return () => { alive = false; };
   }, []);
   const toggleTgAlerts = async () => {
@@ -692,8 +724,38 @@ function GemScanner({ go, onTrade, locked, onUpsell }) {
           </div>
         </div>
       )}
+      {/* Auto-scanned feed — the 5-min scheduler's finds (also pushed to
+          Telegram), so they're listed in the app and tracked on the record. */}
+      {alerts.length > 0 && (
+        <div style={{ padding: '0 16px 14px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 9, padding: '0 2px' }}>
+            <Icon name="telegram" size={15} color="#229ED9" />
+            <span style={{ fontSize: 13, fontWeight: 800, flex: 1 }}>Auto-scanned</span>
+            <Pill tone="muted">every 5 min · Telegram</Pill>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {alerts.map((a) => {
+              const sym = a.tokenSymbol || '?';
+              const px = a.priceUsd ? '$' + (a.priceUsd < 0.00001 ? a.priceUsd.toExponential(2) : a.priceUsd.toPrecision(4)) : '—';
+              return (
+                <div key={a.id} onClick={() => go('token', { token: gemAlertToken(a) })} style={{ display: 'flex', alignItems: 'center', gap: 11, background: 'var(--surface)', borderRadius: 12, padding: '11px 13px', boxShadow: 'inset 0 0 0 1px var(--line)', cursor: 'pointer' }}>
+                  <Logo color={'#' + (sym.charCodeAt(0) * 4321 % 0xffffff).toString(16).padStart(6, '0')} sym={sym} chain={a.chain} address={a.tokenAddress} size={34} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ fontWeight: 800, fontSize: 14.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>${sym}</span>
+                      <Pill tone="muted">{(a.chain || '').toUpperCase()}</Pill>
+                    </div>
+                    <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 1 }}>{gemAgo(a.alertedAt)} · {px}{a.marketCap ? ' · ' + gemCompactUsd(a.marketCap) + ' mcap' : ''}</div>
+                  </div>
+                  <ScoreRing score={Math.round(a.score || 0)} />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
       <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {list.length === 0 && !scan.on && (
+        {list.length === 0 && !scan.on && alerts.length === 0 && (
           <div style={{ textAlign: 'center', padding: '36px 20px', color: 'var(--muted)' }}>
             <Icon name="scan" size={28} color="var(--faint)" style={{ marginBottom: 10 }} />
             <div style={{ fontSize: 14.5, fontWeight: 700, color: 'var(--text)' }}>No gems scanned yet</div>

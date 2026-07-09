@@ -52,6 +52,12 @@ service cloud.firestore {
       match /cexTrades/{docId} {
         allow read, write: if request.auth != null && request.auth.uid == userId;
       }
+      // Gem-scanner alerts (5-min auto-scan → Telegram), written by the scheduler
+      // (admin SDK). The app lists them read-only; clients never write them.
+      match /gemAlerts/{docId} {
+        allow read: if request.auth != null && request.auth.uid == userId;
+        allow write: if false;
+      }
       match /pointerChats/{docId} {
         allow read, write: if request.auth != null && request.auth.uid == userId;
       }

@@ -645,6 +645,22 @@ window.FXAPI = {
     };
   })(),
 
+  // Auto-scanned gems (the 5-min scheduler's finds, also pushed to Telegram),
+  // read from the user's own server-written gemAlerts log so they list in-app.
+  getGemAlerts: async () => {
+    const u = auth.currentUser;
+    if (!u) return [];
+    try {
+      const q = query(collection(db, 'users', u.uid, 'gemAlerts'), orderBy('alertedAt', 'desc'), limit(40));
+      const snap = await getDocs(q);
+      return snap.docs.map((d) => {
+        const x = d.data();
+        const at = x.alertedAt && x.alertedAt.toMillis ? x.alertedAt.toMillis() : x.alertedAt;
+        return { id: d.id, ...x, alertedAt: at };
+      });
+    } catch (e) { return []; }
+  },
+
   // ── Pointer usage & credits ──
   // Usage snapshot for the in-app quota pill/paywall.
   getPointerUsage: async () => {
