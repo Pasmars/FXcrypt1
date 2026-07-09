@@ -624,6 +624,13 @@ function fmtPct(val) {
   return (val > 0 ? '+' : '') + val.toFixed(1) + '%'
 }
 
+// Escape text for Telegram HTML parse mode. Token names/symbols/descriptions
+// are attacker-controlled and routinely contain < > & and Markdown specials —
+// which is what was breaking delivery under the old `Markdown` parse mode.
+function htmlEsc(v) {
+  return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
 function buildTxnBar(buys, sells) {
   const total = buys + sells
   if (total === 0) return ''
@@ -631,7 +638,7 @@ function buildTxnBar(buys, sells) {
   const sellPct = 100 - buyPct
   const filled = Math.round(buyPct / 5)
   const bar = '█'.repeat(filled) + '░'.repeat(20 - filled)
-  return `\`[${bar}]\`\n🟢 ${buys} buys (${buyPct}%) │ 🔴 ${sells} sells (${sellPct}%)`
+  return `<code>[${bar}]</code>\n🟢 ${buys} buys (${buyPct}%) │ 🔴 ${sells} sells (${sellPct}%)`
 }
 
 // ── Format a single gem card (reusable — returns text + metadata) ─────────
@@ -850,12 +857,12 @@ async function sendGemAlerts(gems, settings, bot, chatId, db, uid) {
       const checkedBy = checks.length ? `Checked by: ${checks.join(', ')}` : 'Unverified'
 
       safetySection =
-        `\n🛡 *Safety* ${riskEmoji} *${s.riskLevel}*\n` +
-        (details  ? `├ ${details}\n` : '') +
+        `\n🛡 <b>Safety</b> ${riskEmoji} <b>${htmlEsc(s.riskLevel)}</b>\n` +
+        (details  ? `├ ${htmlEsc(details)}\n` : '') +
         (s.isOpenSource === false ? `├ ⚠️ Contract unverified\n` : '') +
         (s.isMintable   === true  ? `├ ⚠️ Token is mintable\n`  : '') +
-        (flagLine ? `├ ${flagLine}\n` : '') +
-        `└ _${checkedBy}_\n`
+        (flagLine ? `├ ${htmlEsc(flagLine)}\n` : '') +
+        `└ <i>${htmlEsc(checkedBy)}</i>\n`
     }
 
     // Description snippet
@@ -864,46 +871,46 @@ async function sendGemAlerts(gems, settings, bot, chatId, db, uid) {
       const desc = gem.description.length > 150
         ? gem.description.slice(0, 150) + '...'
         : gem.description
-      descSection = `\n📝 _${desc}_\n`
+      descSection = `\n📝 <i>${htmlEsc(desc)}</i>\n`
     }
 
     // Transaction ratio bar
     const txnSection = buildTxnBar(gem.buys24h, gem.sells24h)
 
     const message =
-      `💎 *GEM ALERT* ─ ${gem.tokenName}\n` +
+      `💎 <b>GEM ALERT</b> ─ ${htmlEsc(gem.tokenName)}\n` +
       `──────────────────────────\n\n` +
 
-      `${scoreEmoji} *Score: ${gem.gemScore}/100*` +
+      `${scoreEmoji} <b>Score: ${gem.gemScore}/100</b>` +
       `${gem.boosted ? ' | 🚀 Boosted' : ''}\n\n` +
 
-      `*Token:* ${gem.tokenName} (\`${gem.tokenSymbol}\`)\n` +
-      `*Chain:* ${chainLabel}\n` +
-      `*DEX:* ${gem.dexName} (​${pairStr}​)\n` +
-      `*Age:* ${ageStr}\n\n` +
+      `<b>Token:</b> ${htmlEsc(gem.tokenName)} (<code>${htmlEsc(gem.tokenSymbol)}</code>)\n` +
+      `<b>Chain:</b> ${chainLabel}\n` +
+      `<b>DEX:</b> ${htmlEsc(gem.dexName)} (​${htmlEsc(pairStr)}​)\n` +
+      `<b>Age:</b> ${ageStr}\n\n` +
 
-      `💰 *Market Data*\n` +
-      `├ Price: \`$${priceStr}\`\n` +
-      `├ MCap: *${mcapStr}*\n` +
+      `💰 <b>Market Data</b>\n` +
+      `├ Price: <code>$${priceStr}</code>\n` +
+      `├ MCap: <b>${mcapStr}</b>\n` +
       `├ FDV: ${fdvStr}\n` +
-      `├ Liq: *${liqStr}*\n` +
-      `└ Vol 24h: *${volStr}*\n\n` +
+      `├ Liq: <b>${liqStr}</b>\n` +
+      `└ Vol 24h: <b>${volStr}</b>\n\n` +
 
-      `📈 *Price Action*\n` +
-      `├ 5m: \`${fmtPct(gem.priceChange5m)}\`\n` +
-      `├ 1h: \`${fmtPct(gem.priceChange1h)}\`\n` +
-      `└ 24h: \`${fmtPct(gem.priceChange24h)}\`\n\n` +
+      `📈 <b>Price Action</b>\n` +
+      `├ 5m: <code>${fmtPct(gem.priceChange5m)}</code>\n` +
+      `├ 1h: <code>${fmtPct(gem.priceChange1h)}</code>\n` +
+      `└ 24h: <code>${fmtPct(gem.priceChange24h)}</code>\n\n` +
 
-      `📊 *Transactions (24h)*\n` +
+      `📊 <b>Transactions (24h)</b>\n` +
       (txnSection ? txnSection + '\n' : '') +
       safetySection +
       descSection +
 
-      `\n📜 *Contract*\n` +
-      `\`${gem.tokenAddress}\`\n\n` +
+      `\n📜 <b>Contract</b>\n` +
+      `<code>${htmlEsc(gem.tokenAddress)}</code>\n\n` +
 
-      `🔗 [DexScreener](${dexUrl}) | ` +
-      `[Explorer](${explorerUrl})`
+      `🔗 <a href="${htmlEsc(dexUrl)}">DexScreener</a> | ` +
+      `<a href="${htmlEsc(explorerUrl)}">Explorer</a>`
 
     const inlineKeyboard = {
       reply_markup: JSON.stringify({
@@ -948,7 +955,7 @@ async function sendGemAlerts(gems, settings, bot, chatId, db, uid) {
 
     try {
       await bot.sendMessage(chatId, message, {
-        parse_mode: 'Markdown',
+        parse_mode: 'HTML',
         disable_web_page_preview: true,
         ...inlineKeyboard,
       })
