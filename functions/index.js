@@ -1929,6 +1929,28 @@ exports.runAgentScan = functions
     return { signals: newSignals, scannedAt: Date.now() }
   })
 
+// Best-effort TP1 + hard-stop bracket after a signal entry. Opt-in via
+// agentSettings.bracketExit (Binance for now). Never throws — a failure returns
+// a note so the caller records it; the entry always stands.
+async function maybeAttachBracket(agentSettings, ex, creds, signal, marketType, side, entryResult) {
+  if (!agentSettings || agentSettings.bracketExit !== true) return { ok: false, data: null, note: null }
+  const tp1 = parseFloat(signal.tp1), sl = parseFloat(signal.stopLoss)
+  if (!(tp1 > 0) || !(sl > 0)) return { ok: false, data: null, note: 'signal had no TP1/SL' }
+  try {
+    const data = await cexTrader.attachBracketExit(ex, creds, {
+      symbol: signal.symbol, marketType, entrySide: side, tp1, sl,
+      qty: parseFloat(entryResult && entryResult.raw && entryResult.raw.executedQty) || 0,
+    })
+    return { ok: true, data, note: null }
+  } catch (e) {
+    const note = e && e.unsupported
+      ? `${String(ex).toUpperCase()} auto-bracket isn't supported yet — TP/SL not placed on the exchange`
+      : `bracket failed: ${(e && e.message) || 'error'}`
+    console.error(`bracket ${signal.symbol} ${ex}:`, (e && e.message) || e)
+    return { ok: false, data: null, note }
+  }
+}
+
 // ── Approve Trade (callable — execute a pending signal) ───────────────────
 exports.approveTrade = fn.https.onCall(async (data, context) => {
   if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
@@ -2009,6 +2031,8 @@ exports.approveTrade = fn.https.onCall(async (data, context) => {
       orderId: result.orderId, tradeUSDT, executedOnExchange: ex,
     })
 
+    const bracket = await maybeAttachBracket(agentSettings, ex, { apiKey, secret, passphrase }, signal, marketType, side, result)
+
     await db.collection(`users/${uid}/cexTrades`).add({
       signalId, exchange: ex, symbol: signal.symbol, bias: signal.bias,
       marketType, leverage: marketType === 'futures' ? leverage : null,
@@ -2016,6 +2040,7 @@ exports.approveTrade = fn.https.onCall(async (data, context) => {
       tradeUSDT, entryPrice: signal.entry,
       stopLoss: signal.stopLoss, tp1: signal.tp1, tp2: signal.tp2, tp3: signal.tp3,
       riskReward: signal.riskReward, confidence: signal.confidence,
+      bracket: bracket.data, bracketPlaced: bracket.ok, bracketNote: bracket.note,
       source: 'web-approval', status: 'open', pnl: null,
       openedAt: admin.firestore.FieldValue.serverTimestamp(), closedAt: null,
     })
@@ -2044,7 +2069,7 @@ exports.saveAgentSettings = fn.https.onCall(async (data, context) => {
   if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
 
   const uid = context.auth.uid
-  const allowed = ['enabled', 'exchanges', 'timeframe', 'minConfidence', 'riskPercent', 'maxConcurrentTrades', 'autoExecute', 'telegramSignals', 'scanInterval', 'marketTypes', 'riskMode', 'riskUsd']
+  const allowed = ['enabled', 'exchanges', 'timeframe', 'minConfidence', 'riskPercent', 'maxConcurrentTrades', 'autoExecute', 'telegramSignals', 'scanInterval', 'marketTypes', 'riskMode', 'riskUsd', 'bracketExit']
   const settings = {}
   for (const k of allowed) {
     if (data[k] !== undefined) settings[k] = data[k]
@@ -2053,6 +2078,7 @@ exports.saveAgentSettings = fn.https.onCall(async (data, context) => {
   // amount is clamped to a sane range so a bad value can't size a huge order.
   if (settings.riskMode !== undefined) settings.riskMode = settings.riskMode === 'fixed' ? 'fixed' : 'percent'
   if (settings.riskUsd !== undefined) { const n = parseFloat(settings.riskUsd); settings.riskUsd = Number.isFinite(n) ? Math.max(1, Math.min(n, 1000000)) : 50 }
+  if (settings.bracketExit !== undefined) settings.bracketExit = !!settings.bracketExit
   await db.doc(`users/${uid}`).set({ agentSettings: settings }, { merge: true })
   return { success: true }
 })
@@ -2215,12 +2241,14 @@ exports.processAgentScans = functions
                     status: 'executed', approvedAt: admin.firestore.FieldValue.serverTimestamp(),
                     executedAt: admin.firestore.FieldValue.serverTimestamp(), orderId: result.orderId, tradeAmt,
                   })
+                  const abx = await maybeAttachBracket(agentSettings, ex, creds, signal, mktType, side, result)
                   await db.collection(`users/${uid}/cexTrades`).add({
                     signalId: signal.id, exchange: ex, symbol: signal.symbol, bias: signal.bias,
                     marketType: mktType, leverage: mktType === 'futures' ? leverage : null,
                     orderId: result.orderId, tradeUSDT: tradeAmt, entryPrice: signal.entry,
                     stopLoss: signal.stopLoss, tp1: signal.tp1, tp2: signal.tp2, tp3: signal.tp3,
                     riskReward: signal.riskReward, confidence: signal.confidence,
+                    bracket: abx.data, bracketPlaced: abx.ok, bracketNote: abx.note,
                     source: 'auto-agent', status: 'open', pnl: null,
                     openedAt: admin.firestore.FieldValue.serverTimestamp(), closedAt: null,
                   })

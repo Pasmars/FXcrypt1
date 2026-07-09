@@ -83,11 +83,13 @@ async function getSymbolInfo(exchange, symbol) {
         if (!sym) return null
         const lot      = sym.filters.find(f => f.filterType === 'LOT_SIZE') || {}
         const notional = sym.filters.find(f => f.filterType === 'MIN_NOTIONAL' || f.filterType === 'NOTIONAL') || {}
+        const price    = sym.filters.find(f => f.filterType === 'PRICE_FILTER') || {}
         return {
           exists: true,
           stepSize:    parseFloat(lot.stepSize    || '0.001'),
           minQty:      parseFloat(lot.minQty      || '0'),
           minNotional: parseFloat(notional.minNotional || notional.minOrderValue || '5'),
+          tickSize:    parseFloat(price.tickSize  || '0'),
         }
       }
       case 'mexc': {
@@ -610,6 +612,85 @@ function calcOrderQuantity(_exchange, _symbol, usdtAmount, currentPrice, stepSiz
   return roundToStep(usdtAmount / currentPrice, stepSize)
 }
 
+// ── Bracket exits (Binance) — place TP1 + hard stop after the entry ────────────
+// "Full close at TP1" locks the win the moment TP1 prints and caps the loss at
+// the stop, which is what maximizes realized win rate. Best-effort: any failure
+// here is reported but never unwinds the entry. Binance only for now.
+let _futTickCache = { at: 0, map: {} }
+async function binanceFuturesTick(symbol) {
+  try {
+    if (Date.now() - _futTickCache.at > 3600000) {
+      const r = await axios.get('https://fapi.binance.com/fapi/v1/exchangeInfo', { timeout: API_TIMEOUT })
+      const map = {}
+      for (const s of (r.data?.symbols || [])) {
+        const pf = (s.filters || []).find(f => f.filterType === 'PRICE_FILTER')
+        if (pf) map[s.symbol] = parseFloat(pf.tickSize || '0')
+      }
+      _futTickCache = { at: Date.now(), map }
+    }
+    return _futTickCache.map[symbol] || 0
+  } catch { return 0 }
+}
+// Round a price to the tick grid (nearest); falls back to magnitude-based dp.
+function roundPriceToTick(price, tick) {
+  const p = +price
+  if (!isFinite(p) || p <= 0) return p
+  if (tick > 0) return parseFloat((Math.round(p / tick) * tick).toFixed(12))
+  const dp = p >= 1000 ? 2 : p >= 100 ? 3 : p >= 1 ? 4 : p >= 0.01 ? 6 : 8
+  return parseFloat(p.toFixed(dp))
+}
+
+// Dispatcher: attach a TP1 + stop bracket for a just-opened position. Throws
+// 'bracket-unsupported-exchange' for venues without bracket support yet so the
+// caller can fall back to notifying the owner. Binance only for now.
+async function attachBracketExit(exchange, credentials, opts) {
+  if (exchange !== 'binance') { const e = new Error('bracket-unsupported-exchange'); e.unsupported = true; throw e }
+  return attachBinanceBracket(credentials.apiKey, credentials.secret, opts)
+}
+
+// entrySide is the side of the ENTRY ('buy' long / 'sell' short); the bracket
+// closes the opposite side. qty (base) is required for spot OCO only.
+async function attachBinanceBracket(apiKey, secret, { symbol, marketType, entrySide, tp1, sl, qty }) {
+  const closeSide = String(entrySide).toLowerCase() === 'buy' ? 'SELL' : 'BUY'
+  if (!(tp1 > 0) || !(sl > 0)) throw new Error('bracket needs tp1 and sl')
+
+  if (marketType === 'futures') {
+    const tick   = await binanceFuturesTick(symbol)
+    const tpStop = roundPriceToTick(tp1, tick)
+    const slStop = roundPriceToTick(sl, tick)
+    const post = async (params) => {
+      const ts  = Date.now()
+      const qs  = new URLSearchParams({ ...params, symbol, side: closeSide, closePosition: 'true', workingType: 'MARK_PRICE', timestamp: ts, recvWindow: 5000 }).toString()
+      const sig = hmacHex(secret, qs)
+      const r   = await binanceFuturesPost('/fapi/v1/order', `${qs}&signature=${sig}`, apiKey)
+      return String(r.data.orderId)
+    }
+    // closePosition orders auto-cancel each other when the position closes.
+    const tpId = await post({ type: 'TAKE_PROFIT_MARKET', stopPrice: String(tpStop) })
+    const slId = await post({ type: 'STOP_MARKET',        stopPrice: String(slStop) })
+    return { tpOrderId: tpId, slOrderId: slId, tp: tpStop, sl: slStop }
+  }
+
+  // Spot OCO: one sell that is a TP limit OR an SL stop-limit (one cancels other).
+  const info = await getSymbolInfo('binance', symbol).catch(() => null)
+  const tick = info?.tickSize || 0
+  const step = info?.stepSize || 0.000001
+  const sellQty = roundToStep(qty, step)
+  if (!(sellQty > 0)) throw new Error('bracket: no sellable quantity')
+  const tpPrice   = roundPriceToTick(tp1, tick)
+  const slTrigger = roundPriceToTick(sl, tick)
+  const slLimit   = roundPriceToTick(sl * 0.997, tick) // limit slightly below trigger so it fills
+  const ts  = Date.now()
+  const qs  = new URLSearchParams({
+    symbol, side: 'SELL', quantity: String(sellQty),
+    price: String(tpPrice), stopPrice: String(slTrigger), stopLimitPrice: String(slLimit),
+    stopLimitTimeInForce: 'GTC', timestamp: ts, recvWindow: 5000,
+  }).toString()
+  const sig = hmacHex(secret, qs)
+  const r   = await binancePost('/api/v3/order/oco', `${qs}&signature=${sig}`, apiKey)
+  return { orderListId: String(r.data.orderListId), tp: tpPrice, sl: slTrigger }
+}
+
 module.exports = {
   placeOrderSafe,
   placeOrder,
@@ -621,4 +702,5 @@ module.exports = {
   placeBinanceOrder, placeMexcOrder, placeBybitOrder, placeKucoinOrder,
   placeBinanceFuturesMarketOrder, placeBybitLinearMarketOrder, placeMexcFuturesMarketOrder,
   getMexcFuturesBalance,
+  attachBinanceBracket, attachBracketExit,
 }

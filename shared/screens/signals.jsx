@@ -21,6 +21,8 @@ function Signals({ go, onUpsell }) {
   // Position sizing: 'percent' of balance, or a 'fixed' USDT amount per trade.
   const [riskMode, setRiskMode] = sgS('percent');
   const [riskUsd, setRiskUsd] = sgS('50');
+  // Auto TP1 + stop bracket on the exchange (opt-in, Binance).
+  const [bracket, setBracket] = sgS(false);
   const [scan, setScan] = sgS({ on: false, ago: 'cached', found: 0 });
   // Scan modal state: open + done + result summary so the user sees progress
   // and the fresh setups the moment a scan finishes (no page refresh needed).
@@ -45,6 +47,7 @@ function Signals({ go, onUpsell }) {
       if (p.riskPercent) setRisk(p.riskPercent);
       if (p.riskMode) setRiskMode(p.riskMode);
       if (p.riskUsd != null) setRiskUsd(String(p.riskUsd));
+      if (typeof p.bracketExit === 'boolean') setBracket(p.bracketExit);
     }).catch(() => {});
     return () => { alive = false; };
   }, []);
@@ -60,6 +63,11 @@ function Signals({ go, onUpsell }) {
     const n = Math.max(1, parseFloat(v) || 0);
     setRiskUsd(String(n));
     try { await window.FXAPI.saveSignalPrefs({ riskUsd: n }); } catch (e) {}
+  };
+  const toggleBracket = async () => {
+    const next = !bracket;
+    setBracket(next);
+    try { await window.FXAPI.saveSignalPrefs({ bracketExit: next }); } catch (e) { setBracket(!next); }
   };
   // Telegram delivery: enabling also turns on the agent scheduler so signals
   // are actually generated and pushed; disabling just stops delivery.
@@ -169,6 +177,19 @@ function Signals({ go, onUpsell }) {
             <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 8 }}>{riskMode === 'fixed'
               ? 'The bot spends this fixed USDT amount on each auto-executed signal (capped at your available balance).'
               : 'The bot uses this % of your USDT balance on each auto-executed signal.'}</div>
+          </div>
+        </div>
+      )}
+      {/* Exchange-side TP1 + hard stop (opt-in, Binance) */}
+      {auto && (
+        <div style={{ padding: '0 16px 12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 11, background: 'var(--surface)', borderRadius: 14, padding: '12px 14px', boxShadow: bracket ? 'inset 0 0 0 1.5px var(--accent)' : 'inset 0 0 0 1px var(--line)' }}>
+            <div style={{ width: 34, height: 34, borderRadius: 10, background: bracket ? 'var(--accent)' : 'var(--surface2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: bracket ? 'var(--on-accent)' : 'var(--accent)', flexShrink: 0 }}><Icon name="target" size={17} /></div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 700 }}>Auto TP1 + hard stop</div>
+              <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 1, lineHeight: 1.45 }}>Places a take-profit at TP1 and a stop at SL on the exchange — banks the full position at TP1 for a higher win rate. Binance only; test with small size first.</div>
+            </div>
+            <Toggle on={bracket} onClick={toggleBracket} />
           </div>
         </div>
       )}

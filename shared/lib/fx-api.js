@@ -284,6 +284,7 @@ window.FXAPI = {
         riskPercent:     ag.riskPercent != null ? ag.riskPercent : 1,
         riskMode:        ag.riskMode === 'fixed' ? 'fixed' : 'percent',
         riskUsd:         ag.riskUsd != null ? ag.riskUsd : 50,
+        bracketExit:     ag.bracketExit === true,
       };
     } catch (e) { return null; }
   },
@@ -388,7 +389,7 @@ window.FXAPI = {
     const u = auth.currentUser;
     if (!u) throw new Error('Sign in to change signal settings.');
     const agentSettings = {};
-    for (const k of ['enabled', 'autoExecute', 'telegramSignals']) if (patch && patch[k] !== undefined) agentSettings[k] = !!patch[k];
+    for (const k of ['enabled', 'autoExecute', 'telegramSignals', 'bracketExit']) if (patch && patch[k] !== undefined) agentSettings[k] = !!patch[k];
     // Risk per trade (% of balance) for the auto-execute bot — clamp to a sane range.
     if (patch && patch.riskPercent !== undefined) {
       const r = parseFloat(patch.riskPercent);
