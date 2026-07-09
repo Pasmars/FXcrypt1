@@ -2072,7 +2072,10 @@ exports.processAgentScans = functions
       const chatId        = (userData.botSettings || {}).telegramChatId
 
       const exchanges     = agentSettings.exchanges  || ['binance', 'mexc', 'bybit', 'kucoin']
-      const marketTypes   = agentSettings.marketTypes || ['spot']
+      // Default to BOTH spot + futures so the scheduled scan matches the manual
+      // one (which always sends both). The app never persisted marketTypes, so a
+      // 'spot'-only default silently starved every user of futures signals.
+      const marketTypes   = agentSettings.marketTypes || ['spot', 'futures']
       const timeframe     = agentSettings.timeframe  || '4H'
       const minConfidence = agentSettings.minConfidence || 70
       const autoExecute   = agentSettings.autoExecute || false

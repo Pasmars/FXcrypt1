@@ -12,6 +12,8 @@ const axios = require('axios')
 const arbitrage      = require('./arbitrage')
 const marketAnalyzer = require('./market-analyzer')
 const signalGen      = require('./signal-generator')
+const signalTracker  = require('./signal-tracker')
+const gemTracker     = require('./gem-tracker')
 const cexTrader      = require('./cex-trader')
 const holdergraph    = require('./holdergraph')
 
@@ -84,6 +86,7 @@ const TOOLS = [
   fnTool('scan_arbitrage', 'Scan cross-DEX arbitrage opportunities (price spreads for the same token across DEXs).', { properties: { chains: { type: 'array', items: { type: 'string', enum: ['bsc', 'sol'] }, description: 'default bsc,sol' }, minSpread: { type: 'number', description: 'min % spread, default 0.3' }, minLiqUsd: { type: 'integer', description: 'min liquidity USD, default 20000' } } }),
   fnTool('scan_signals', 'Generate CEX/futures trade signals via technical analysis on an exchange. Slow (~20-40s).', { properties: { exchange: { type: 'string', enum: ['binance', 'mexc', 'bybit', 'kucoin'], description: 'default binance' }, timeframe: { type: 'string', description: 'e.g. 1H, 4H, 1D (default 4H)' }, marketType: { type: 'string', enum: ['spot', 'futures'], description: 'default spot' }, minScore: { type: 'integer' } } }),
   fnTool('get_recent_signals', 'Most recent trade signals the AI signal agent generated.', { properties: { limit: { type: 'integer', description: 'How many (max 20)' } } }),
+  fnTool('get_track_record', "The VERIFIED performance track record of the app's own two bots — the CEX/futures SIGNAL scanner and the on-chain GEM scanner. Signals are resolved server-side against their SL/TP using exchange candles (win rate, avg R multiple, TP1/2/3 vs SL breakdown) over 30 & 90 days. Gems are re-priced at their 24h/7d marks (median/best return, up-rate) plus a 90-day win/loss record. Also returns a sample of individual recent WON/LOST outcomes for each. Use this whenever the owner asks how the signal bot or gem scanner has performed, its win rate/edge, or to analyze/critique either track record.", { properties: { bot: { type: 'string', enum: ['signal', 'gem', 'both'], description: "Which bot's record (default both)" }, outcomes: { type: 'boolean', description: 'Include a sample of individual won/lost items (default true)' } } }),
   fnTool('get_cex_balances', "USDT spot (and futures) balances on the owner's connected CEX exchange API keys.", { properties: {} }),
   fnTool('get_token_info', 'Full Token-Tracker view for one token by contract address: price, market cap, 24h volume, liquidity, 24h change, holders.', { properties: { chain: { type: 'string', enum: ['bsc', 'eth', 'sol'] }, address: { type: 'string' } }, required: ['chain', 'address'] }),
   fnTool('get_tracked_tokens', "The owner's FULL watchlist — both their Markets-tab starred coins/tokens AND their Token Tracker list, merged and deduped — each with live price, 24h change, market cap, volume, liquidity. Use this whenever they mention 'my watchlist', 'my tracked tokens', 'coins I'm watching', etc.", { properties: {} }),
@@ -111,7 +114,7 @@ const SYSTEM_POINTER = `You are Pointer — the in-app AI assistant inside the F
 
 The app trades memecoins/tokens across BSC, ETH, SOL and Base via DEXs, runs a "gem scanner" for new tokens, tracks tokens, analyzes holders (bubble maps), and generates CEX/futures signals. You can read live app/market/wallet state with your tools and answer questions, summarize activity, flag risks, and recommend actions.
 
-You CAN: read the owner's wallet balances (BNB/ETH/SOL/MATIC/TON) and bot/wallet configuration (addresses and settings — never private keys) and their connected CEX exchange balances; **search the entire market — ANY coin or token by name, ticker, or contract address — via lookup_token (CoinGecko-listed coins with market-cap rank + on-chain DEX tokens across all chains)**; browse the live market (top coins, gainers, losers, volume) via get_market; **research the live web & news with web_search (crypto trends, narratives, project background, regulation & government policy, hacks, listings, macro)**; get live prices and market data; run the gem scanner; scan cross-DEX arbitrage; generate and read CEX/futures signals (technical analysis on Binance/MEXC/Bybit/KuCoin); check token safety/honeypot risk and holder counts; view & manage the owner's **Token Tracker** watchlist (add/remove/search tokens); pull full info for any token; and run **bubble-map holder analysis** (top holders, top-10 concentration, linked-wallet clusters) to flag whale/insider/bundling risk.
+You CAN: read the owner's wallet balances (BNB/ETH/SOL/MATIC/TON) and bot/wallet configuration (addresses and settings — never private keys) and their connected CEX exchange balances; **search the entire market — ANY coin or token by name, ticker, or contract address — via lookup_token (CoinGecko-listed coins with market-cap rank + on-chain DEX tokens across all chains)**; browse the live market (top coins, gainers, losers, volume) via get_market; **research the live web & news with web_search (crypto trends, narratives, project background, regulation & government policy, hacks, listings, macro)**; get live prices and market data; run the gem scanner; scan cross-DEX arbitrage; generate and read CEX/futures signals (technical analysis on Binance/MEXC/Bybit/KuCoin); **analyze the VERIFIED track record of the app's own signal & gem scanners — win rate, avg R, 24h/7d gem returns, and individual recent won/lost outcomes — via get_track_record (use it whenever they ask how a bot has performed or whether it has an edge)**; check token safety/honeypot risk and holder counts; view & manage the owner's **Token Tracker** watchlist (add/remove/search tokens); pull full info for any token; and run **bubble-map holder analysis** (top holders, top-10 concentration, linked-wallet clusters) to flag whale/insider/bundling risk.
 
 PRIVATE KEYS: you never see or expose private keys, seed phrases or the means to move funds without approval. You can report balances and addresses, but never reveal secrets.
 
@@ -385,6 +388,35 @@ async function runTool(name, input, ctx) {
       const snap = await db.collection(`users/${uid}/signals`).orderBy('generatedAt', 'desc').limit(n).get().catch(() => null)
       if (!snap) return []
       return snap.docs.map((d) => { const x = d.data(); return { symbol: x.symbol, bias: x.bias, marketType: x.marketType, confidence: x.confidence, entry: x.entry, status: x.status, exchange: x.exchange } })
+    }
+    case 'get_track_record': {
+      // Verified performance of the app's own bots. Stats/outcomes are global
+      // (aggregated across all resolved signals/gems), server-computed.
+      const which = ['signal', 'gem', 'both'].includes(input.bot) ? input.bot : 'both'
+      const wantOutcomes = input.outcomes !== false
+      const out = {}
+      if (which === 'signal' || which === 'both') {
+        const stats = await signalTracker.readStats(db).catch(() => null)
+        const outc  = wantOutcomes ? await signalTracker.readOutcomes(db).catch(() => null) : null
+        out.signalScanner = {
+          note: 'CEX/futures signals resolved against SL/TP from exchange candles. R = reward/risk multiple; winRate is % of decided (non-expired) signals that hit a TP.',
+          last30d: stats ? stats.d30 : null,
+          last90d: stats ? stats.d90 : null,
+          recentOutcomes: outc ? (outc.outcomes || []).slice(0, 25) : undefined,
+        }
+      }
+      if (which === 'gem' || which === 'both') {
+        const stats = await gemTracker.readStats(db).catch(() => null)
+        const outc  = wantOutcomes ? await gemTracker.readOutcomes(db).catch(() => null) : null
+        out.gemScanner = {
+          note: 'On-chain gems the scanner surfaced, re-priced from first sighting. return = realized % (7d, or 24h while the 7d mark is pending); moon = 2x+.',
+          perf24h: stats ? stats.d1 : null,
+          perf7d:  stats ? stats.d7 : null,
+          last90d: stats ? stats.d90 : null,
+          recentOutcomes: outc ? (outc.outcomes || []).slice(0, 25) : undefined,
+        }
+      }
+      return out
     }
     case 'get_token_info': {
       const chain = input.chain, addr = String(input.address || '').trim()
