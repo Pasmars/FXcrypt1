@@ -177,18 +177,18 @@ function Change({ v, size = 13 }) {
   return <span style={{ color: up ? 'var(--up)' : 'var(--down)', fontWeight: 700, fontSize: size, fontVariantNumeric: 'tabular-nums' }}>{pct(v)}</span>;
 }
 
-// Bottom sheet
+// Bottom sheet (desktop ≥1024px: centered dialog via .fx-sheet/.fx-sheet-panel)
 function Sheet({ open, onClose, children, title, height }) {
   const [show, setShow] = useState(open);
   useEffect(() => { if (open) setShow(true); }, [open]);
   if (!show && !open) return null;
   return (
-    <div onClick={onClose} style={{
+    <div onClick={onClose} className="fx-sheet" style={{
       position: 'absolute', inset: 0, zIndex: 200, display: 'flex', alignItems: 'flex-end',
       background: 'var(--overlay)', backdropFilter: 'blur(2px)',
       opacity: open ? 1 : 0, transition: 'opacity .25s',
     }} onTransitionEnd={() => { if (!open) setShow(false); }}>
-      <div onClick={e => e.stopPropagation()} style={{
+      <div onClick={e => e.stopPropagation()} className="fx-sheet-panel" style={{
         width: '100%', background: 'var(--bg2)', borderRadius: '22px 22px 0 0',
         boxShadow: '0 -8px 40px rgba(0,0,0,0.4), inset 0 1px 0 var(--line)',
         transform: open ? 'translateY(0)' : 'translateY(100%)', transition: 'transform .3s cubic-bezier(.32,.72,0,1)',
@@ -225,7 +225,7 @@ function SecHead({ children, action, onAction }) {
 // App top bar (in-app, not iOS)
 function TopBar({ left, title, right, sub }) {
   return (
-    <div style={{
+    <div className="fx-topbar" style={{
       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
       padding: '6px 16px 12px', gap: 10,
     }}>
@@ -296,8 +296,8 @@ function ScanModal({ open, onClose, accent = 'var(--accent)', title, steps = [],
   const pctDone = finished ? 100 : Math.min(94, (step / Math.max(steps.length, 1)) * 100);
   const ring = error ? 'var(--down)' : accent;
   return (
-    <div onClick={finished ? onClose : undefined} style={{ position: 'fixed', inset: 0, zIndex: 300, display: 'flex', alignItems: 'flex-end', background: 'var(--overlay)', backdropFilter: 'blur(3px)' }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ width: '100%', background: 'var(--bg2)', borderRadius: '22px 22px 0 0', boxShadow: '0 -8px 40px rgba(0,0,0,0.45), inset 0 1px 0 var(--line)', maxHeight: '88%', display: 'flex', flexDirection: 'column', paddingBottom: 26, animation: 'fxslideUp .32s cubic-bezier(.32,.72,0,1)' }}>
+    <div onClick={finished ? onClose : undefined} className="fx-sheet" style={{ position: 'fixed', inset: 0, zIndex: 300, display: 'flex', alignItems: 'flex-end', background: 'var(--overlay)', backdropFilter: 'blur(3px)' }}>
+      <div onClick={(e) => e.stopPropagation()} className="fx-sheet-panel" style={{ width: '100%', background: 'var(--bg2)', borderRadius: '22px 22px 0 0', boxShadow: '0 -8px 40px rgba(0,0,0,0.45), inset 0 1px 0 var(--line)', maxHeight: '88%', display: 'flex', flexDirection: 'column', paddingBottom: 26, animation: 'fxslideUp .32s cubic-bezier(.32,.72,0,1)' }}>
         <div style={{ display: 'flex', justifyContent: 'center', padding: '10px 0 2px' }}><div style={{ width: 40, height: 4.5, borderRadius: 3, background: 'var(--line2)' }} /></div>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 20px 8px' }}>
           <div style={{ fontSize: 17, fontWeight: 800 }}>{title}</div>

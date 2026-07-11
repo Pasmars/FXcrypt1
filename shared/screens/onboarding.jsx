@@ -8,7 +8,7 @@ function Onboarding({ onDone, dark, postAuth }) {
   const next = () => setStep(s => (postAuth && s === 1 ? 3 : s + 1));
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg)' }}>
+    <div className="fx-onboard" style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg)' }}>
       {step === 0 && <Splash onDone={next} />}
       {step === 1 && <Carousel onDone={next} />}
       {step === 2 && <Auth onDone={() => setStep(3)} />}

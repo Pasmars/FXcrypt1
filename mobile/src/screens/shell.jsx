@@ -169,10 +169,10 @@ function App() {
     else if (key === 'copytrade') { custom = true; inner = <CopyTrading go={go} plan={plan} onUpsell={upsell} />; }
 
     return (
-      <div style={{ position: 'absolute', inset: 0, background: 'var(--bg)', zIndex: 30, display: 'flex', flexDirection: 'column' }}>
-        <div style={{ height: 54, flexShrink: 0 }} />
+      <div className="fx-overlay" style={{ position: 'absolute', inset: 0, background: 'var(--bg)', zIndex: 30, display: 'flex', flexDirection: 'column' }}>
+        <div className="fx-top-spacer" style={{ height: 54, flexShrink: 0 }} />
         {header}
-        <div style={{ flex: 1, overflowY: 'auto', position: 'relative' }}>{inner}</div>
+        <div className="fx-scroll" style={{ flex: 1, overflowY: 'auto', position: 'relative' }}>{inner}</div>
       </div>
     );
   }
@@ -186,9 +186,9 @@ function App() {
         if (intent === 'wallet') setTab('wallet'); else setWizard(true);
       }} />}
       {phase === 'app' && <>
-        <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-          <div style={{ height: 54, flexShrink: 0 }} />
-          <div style={{ flex: 1, overflowY: 'auto' }} data-ver={dataVer}>{TabContent()}<div style={{ height: 96 }} /></div>
+        <div className="fx-main" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+          <div className="fx-top-spacer" style={{ height: 54, flexShrink: 0 }} />
+          <div className="fx-scroll" style={{ flex: 1, overflowY: 'auto' }} data-ver={dataVer}>{TabContent()}<div style={{ height: 96 }} /></div>
         </div>
         <BottomNav tab={tab} onTab={(id) => { if (id === 'trade') go('trade', { token: window.FX.tokens[4], side: 'buy' }); else resetTo(id); }} />
         {/* Invoke TabContent()/Overlay() as functions (not <Component/>) so an App
@@ -207,20 +207,25 @@ function App() {
 
 function BottomNav({ tab, onTab }) {
   return (
-    <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 25, paddingBottom: 22, background: 'var(--bar)', backdropFilter: 'blur(20px) saturate(150%)', WebkitBackdropFilter: 'blur(20px)', borderTop: '1px solid var(--line)' }}>
-      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-around', padding: '8px 8px 2px' }}>
+    <div className="fx-nav" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 25, paddingBottom: 22, background: 'var(--bar)', backdropFilter: 'blur(20px) saturate(150%)', WebkitBackdropFilter: 'blur(20px)', borderTop: '1px solid var(--line)' }}>
+      {/* desktop-only brand header (revealed by the ≥1024px media query) */}
+      <div className="fx-nav-brand" style={{ display: 'none', alignItems: 'center', gap: 9, padding: '10px 12px 22px' }}>
+        <Mark size={30} />
+        <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: -0.5 }}>FX<span style={{ color: 'var(--accent)' }}>crypt</span></span>
+      </div>
+      <div className="fx-nav-row" style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-around', padding: '8px 8px 2px' }}>
         {TABS.map(tb => {
           if (tb.center) return (
-            <button key={tb.id} onClick={() => onTab(tb.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, transform: 'translateY(-10px)' }}>
-              <span style={{ width: 54, height: 54, borderRadius: 18, background: 'var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--on-accent)', boxShadow: '0 8px 22px var(--glow)' }}><Icon name="swap" size={26} stroke={2.4} /></span>
-              <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--muted)' }}>{tb.label}</span>
+            <button key={tb.id} onClick={() => onTab(tb.id)} className="fx-nav-btn fx-nav-center" style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, transform: 'translateY(-10px)' }}>
+              <span className="fx-nav-chip" style={{ width: 54, height: 54, borderRadius: 18, background: 'var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--on-accent)', boxShadow: '0 8px 22px var(--glow)' }}><Icon name="swap" size={26} stroke={2.4} /></span>
+              <span className="fx-nav-label" style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--muted)' }}>{tb.label}</span>
             </button>
           );
           const on = tab === tb.id;
           return (
-            <button key={tb.id} onClick={() => onTab(tb.id)} style={{ flex: 1, background: 'none', border: 'none', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, padding: '4px 0', color: on ? 'var(--accent)' : 'var(--faint)' }}>
+            <button key={tb.id} onClick={() => onTab(tb.id)} className={'fx-nav-btn' + (on ? ' fx-nav-btn-on' : '')} style={{ flex: 1, background: 'none', border: 'none', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, padding: '4px 0', color: on ? 'var(--accent)' : 'var(--faint)' }}>
               <Icon name={tb.icon} size={23} fill={on ? 'var(--glow)' : 'none'} stroke={on ? 2.4 : 2} />
-              <span style={{ fontSize: 10.5, fontWeight: on ? 800 : 600 }}>{tb.label}</span>
+              <span className="fx-nav-label" style={{ fontSize: 10.5, fontWeight: on ? 800 : 600 }}>{tb.label}</span>
             </button>
           );
         })}
@@ -231,8 +236,8 @@ function BottomNav({ tab, onTab }) {
 
 function FirstTradeWizard({ onTrade, onClose }) {
   return (
-    <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 150, background: 'var(--overlay)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-end', padding: '0 14px 110px', animation: 'fxfade .3s' }}>
-      <div onClick={e => e.stopPropagation()} style={{ background: 'var(--bg2)', borderRadius: 22, padding: 22, width: '100%', boxShadow: '0 20px 60px rgba(0,0,0,0.5), inset 0 0 0 1px var(--line)', animation: 'fxslideUp .35s cubic-bezier(.32,.72,0,1)' }}>
+    <div onClick={onClose} className="fx-sheet" style={{ position: 'absolute', inset: 0, zIndex: 150, background: 'var(--overlay)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-end', padding: '0 14px 110px', animation: 'fxfade .3s' }}>
+      <div onClick={e => e.stopPropagation()} className="fx-sheet-panel" style={{ background: 'var(--bg2)', borderRadius: 22, padding: 22, width: '100%', boxShadow: '0 20px 60px rgba(0,0,0,0.5), inset 0 0 0 1px var(--line)', animation: 'fxslideUp .35s cubic-bezier(.32,.72,0,1)' }}>
         <div style={{ width: 52, height: 52, borderRadius: 16, background: 'var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 14, boxShadow: '0 8px 24px var(--glow)' }}><Icon name="zap" size={27} color="var(--on-accent)" /></div>
         <div style={{ fontSize: 21, fontWeight: 800, letterSpacing: -0.4 }}>You’re all set{(window.FX.user && window.FX.user.name) ? ', ' + window.FX.user.name.split(' ')[0] : ''} 👋</div>
         <div style={{ fontSize: 14.5, color: 'var(--muted)', marginTop: 6, lineHeight: 1.5 }}>Let’s make your first trade together. Pointer will walk you through buying a token with safety checks on — it takes about 20 seconds.</div>

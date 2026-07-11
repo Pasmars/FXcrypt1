@@ -2,6 +2,7 @@
 import React from 'react';
 import { useApp } from '@/app/providers';
 import ScreenHost from './ScreenHost';
+import BottomNavHost from './BottomNavHost';
 
 // Title for the standard overlay header (dynamic ones read the payload).
 const TITLE: Record<string, (p: any) => string> = {
@@ -23,19 +24,26 @@ export default function OverlayScreen({ screen }: { screen: string }) {
   const Icon = (typeof window !== 'undefined' ? (window as any).Icon : null);
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'var(--bg)', color: 'var(--text)', display: 'flex', flexDirection: 'column', zIndex: 1 }}>
-      <div style={{ height: 'max(env(safe-area-inset-top), 8px)', flexShrink: 0 }} />
-      {!custom && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 16px 12px' }}>
-          <button onClick={app.back} aria-label="Back" style={{ width: 40, height: 40, borderRadius: 12, background: 'var(--surface2)', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text)' }}>
-            {Icon ? React.createElement(Icon, { name: 'chevL', size: 21 }) : '‹'}
-          </button>
-          <div style={{ fontSize: 19, fontWeight: 800, letterSpacing: -0.3 }}>{title}</div>
-        </div>
-      )}
-      <div style={{ flex: 1, overflowY: 'auto', position: 'relative' }}>
-        <ScreenHost screen={screen} />
+    <>
+      {/* Desktop (≥1024px) keeps the nav rail visible next to overlay routes;
+          hidden on mobile via .fx-overlay-rail (display:none by default). */}
+      <div className="fx-overlay-rail" style={{ display: 'none' }}>
+        <BottomNavHost />
       </div>
-    </div>
+      <div className="fx-overlay" style={{ position: 'fixed', inset: 0, background: 'var(--bg)', color: 'var(--text)', display: 'flex', flexDirection: 'column', zIndex: 1 }}>
+        <div className="fx-top-spacer" style={{ height: 'max(env(safe-area-inset-top), 8px)', flexShrink: 0 }} />
+        {!custom && (
+          <div className="fx-topbar" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 16px 12px' }}>
+            <button onClick={app.back} aria-label="Back" style={{ width: 40, height: 40, borderRadius: 12, background: 'var(--surface2)', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text)' }}>
+              {Icon ? React.createElement(Icon, { name: 'chevL', size: 21 }) : '‹'}
+            </button>
+            <div style={{ fontSize: 19, fontWeight: 800, letterSpacing: -0.3 }}>{title}</div>
+          </div>
+        )}
+        <div className="fx-scroll" style={{ flex: 1, overflowY: 'auto', position: 'relative' }}>
+          <ScreenHost screen={screen} />
+        </div>
+      </div>
+    </>
   );
 }

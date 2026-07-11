@@ -207,20 +207,25 @@ function App() {
 
 function BottomNav({ tab, onTab }) {
   return (
-    <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 25, paddingBottom: 22, background: 'var(--bar)', backdropFilter: 'blur(20px) saturate(150%)', WebkitBackdropFilter: 'blur(20px)', borderTop: '1px solid var(--line)' }}>
-      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-around', padding: '8px 8px 2px' }}>
+    <div className="fx-nav" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 25, paddingBottom: 22, background: 'var(--bar)', backdropFilter: 'blur(20px) saturate(150%)', WebkitBackdropFilter: 'blur(20px)', borderTop: '1px solid var(--line)' }}>
+      {/* desktop-only brand header (revealed by the ≥1024px media query) */}
+      <div className="fx-nav-brand" style={{ display: 'none', alignItems: 'center', gap: 9, padding: '10px 12px 22px' }}>
+        <Mark size={30} />
+        <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: -0.5 }}>FX<span style={{ color: 'var(--accent)' }}>crypt</span></span>
+      </div>
+      <div className="fx-nav-row" style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-around', padding: '8px 8px 2px' }}>
         {TABS.map(tb => {
           if (tb.center) return (
-            <button key={tb.id} onClick={() => onTab(tb.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, transform: 'translateY(-10px)' }}>
-              <span style={{ width: 54, height: 54, borderRadius: 18, background: 'var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--on-accent)', boxShadow: '0 8px 22px var(--glow)' }}><Icon name="swap" size={26} stroke={2.4} /></span>
-              <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--muted)' }}>{tb.label}</span>
+            <button key={tb.id} onClick={() => onTab(tb.id)} className="fx-nav-btn fx-nav-center" style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, transform: 'translateY(-10px)' }}>
+              <span className="fx-nav-chip" style={{ width: 54, height: 54, borderRadius: 18, background: 'var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--on-accent)', boxShadow: '0 8px 22px var(--glow)' }}><Icon name="swap" size={26} stroke={2.4} /></span>
+              <span className="fx-nav-label" style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--muted)' }}>{tb.label}</span>
             </button>
           );
           const on = tab === tb.id;
           return (
-            <button key={tb.id} onClick={() => onTab(tb.id)} style={{ flex: 1, background: 'none', border: 'none', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, padding: '4px 0', color: on ? 'var(--accent)' : 'var(--faint)' }}>
+            <button key={tb.id} onClick={() => onTab(tb.id)} className={'fx-nav-btn' + (on ? ' fx-nav-btn-on' : '')} style={{ flex: 1, background: 'none', border: 'none', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, padding: '4px 0', color: on ? 'var(--accent)' : 'var(--faint)' }}>
               <Icon name={tb.icon} size={23} fill={on ? 'var(--glow)' : 'none'} stroke={on ? 2.4 : 2} />
-              <span style={{ fontSize: 10.5, fontWeight: on ? 800 : 600 }}>{tb.label}</span>
+              <span className="fx-nav-label" style={{ fontSize: 10.5, fontWeight: on ? 800 : 600 }}>{tb.label}</span>
             </button>
           );
         })}
