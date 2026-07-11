@@ -1,6 +1,6 @@
 # FXcrypt — Product Strategy Document
 *Prepared from a senior product management lens: current state, gaps, and a path to profitability.*
-*Last updated 2026-07-03 to reflect the monetization + trading-loop build-out (see §0).*
+*Last updated 2026-07-11 to reflect the signal-bot hardening + track-record depth build-out (see §0.1).*
 
 ---
 
@@ -27,6 +27,31 @@ When this doc was first written the product was **pre-monetization** with most r
 **Still open (the honest gaps):** WalletConnect / hardware-wallet / external signing (the #1 trust/liability item — keys are still custodial), a security audit, exchange affiliate links, backtesting, multi-language/accessibility, chart-image & voice input, a status/health page, and full tax reporting (raw CSV export exists). These are the priorities for the next phase.
 
 Sections 4/6/7/10 below are annotated with **[LIVE]** where a proposal has shipped.
+
+---
+
+## 0.1 Latest increment — signal-bot hardening + track-record depth (2026-07-11)
+
+A focused build-out that makes the **CEX signal bot** trustworthy and analyzable end-to-end, deepens the **verified track records**, and closes several delivery/UX gaps. All shipped to production (fxcrypt-app + fxcrypt-webapp + Cloud Functions):
+
+**CEX signal bot — quality & execution:**
+- **De-duplication + cooldown policy** (all four signal-generation paths): **max one active signal per symbol + timeframe**, a rest period after resolution (**6h after a TP win, 18h after a stop**), and an **opposite-bias whipsaw guard** (skip a symbol that just printed the other side). Kills the repeated-symbol noise.
+- **Spot + futures both scanned** — the scheduled scan defaulted to spot-only (the app never persisted `marketTypes`) so futures never fired; now defaults to both, and signals are **ranked by score before the save cap** so strong futures setups actually persist and show in the app (previously spot filled every slot).
+- **Fixed-$ per-trade sizing** alongside % of balance — traders choose a % of USDT balance *or* a fixed dollar amount per trade; applied consistently across all execution paths (app approve, auto-execute, Telegram approve).
+- **[LIVE] CEX bracket-exit (Binance)** — the first real CEX *exit* management: after entry, best-effort attach an exchange-native **TP1 + hard-stop bracket** (futures: TAKE_PROFIT_MARKET + STOP_MARKET with `closePosition`; spot: an OCO). **Full-close at TP1** to maximize realized win rate. Opt-in (`agentSettings.bracketExit`, default off) with a Signals toggle; never unwinds the entry on failure. *(Bybit/MEXC bracket + "partial at TP1 + trail the runner" still open.)*
+
+**Track records — depth & durability:**
+- **Durable signal-outcome records** — outcomes are now written to a permanent server-only collection at resolution time, so the drill-down survives the ephemeral per-user signal doc's TTL (the list was going empty).
+- **Full per-signal detail** in the track record — tappable rows expand to show **when it was called, when it hit TP/SL (exact candle time) + hold duration**, entry/stop/targets, R multiple, confidence, exchange, timeframe, market type and leverage.
+- **Gem 90-day track record** (mirrors the signal card) + **clickable won/lost drill-downs** for both the gem and signal records.
+- **[LIVE] Pointer can analyze both track records** — a `get_track_record` tool exposes the verified signal + gem records (win rate, avg R, 24h/7d gem returns, and individual recent won/lost outcomes with timing/levels) so Pointer can critique edge, hold time and setup quality.
+
+**Delivery, wallet & UX fixes:**
+- **Telegram delivery fixed** — gem *and* signal alerts were failing 100% ("can't parse entities" from token names/emojis breaking legacy Markdown); rebuilt as **HTML with escaping**. Verified live (deliveries went 0 → N).
+- **In-app "Auto-scanned" gem feed** — the 5-min scheduler's finds are now **listed in the app** (Gem Scanner), not only pushed to Telegram; and each surfaced gem is logged **independent of Telegram success** (the log write previously sat after a failing send).
+- **Wallet: import/add custom tokens across chains** — paste a contract/mint in Manage wallets to track any token; **EVM (auto symbol+decimals on-chain) + Solana SPL**; per-wallet chips with remove. **Security hardening:** wallet password minimum raised **6 → 8**.
+- **USD-denominated native-coin buys** — the manual DEX buy flow adds a **native/USD toggle** so you can enter the dollar worth of the pay coin (converts to native for execution).
+- **App icon** switched to the "F·" brand mark (PWA icons, favicons, Android launcher); **Pointer list-numbering fix** (loose markdown lists were restarting every item at "1.").
 
 ---
 
@@ -81,8 +106,8 @@ The product is feature-rich and technically mature, and — as of the 2026-07 bu
 - Runs server-side (always-on Cloud Function); excludes Wallet & PnL by design.
 
 ### 4.2 DEX Bot
-- **Manual Trade**: buy/sell tokens across **BSC, ETH, SOL, Base** (PancakeSwap, Uniswap, Jupiter, etc.), slippage/gas controls, USD-equivalent sizing. **[LIVE] Token picker** — search any tradable token by name, ticker, or contract address (DexScreener live search, liquidity-ranked). **[LIVE] Configurable platform fee** skimmed natively per trade; real pool-liquidity readout; tx links to explorers. No more mock fills — non-tradable assets error honestly.
-- **Gem Scanner**: narrative search, market-cap/volume/age/score/liquidity filters, trend & sort; sources stacked (DexScreener + GeckoTerminal + DexTools); auto-scan every 5 min → Telegram alerts; honeypot/safety gating. **[LIVE] Per-chain Telegram-alert selector** (choose which chains the auto-bot scans), **auto-execute (auto-buy)** with per-chain size/slippage + **armed exit defaults (TP/SL/trailing/max-hold)**, and **hindsight stats** (median/best 24h & 7d performance of surfaced gems).
+- **Manual Trade**: buy/sell tokens across **BSC, ETH, SOL, Base** (PancakeSwap, Uniswap, Jupiter, etc.), slippage/gas controls, USD-equivalent sizing with a **[LIVE] native/USD denomination toggle** (enter the dollar worth of the pay coin, converts to native for execution). **[LIVE] Token picker** — search any tradable token by name, ticker, or contract address (DexScreener live search, liquidity-ranked). **[LIVE] Configurable platform fee** skimmed natively per trade; real pool-liquidity readout; tx links to explorers. No more mock fills — non-tradable assets error honestly.
+- **Gem Scanner**: narrative search, market-cap/volume/age/score/liquidity filters, trend & sort; sources stacked (DexScreener + GeckoTerminal + DexTools); auto-scan every 5 min → **Telegram alerts (HTML) *and* an [LIVE] in-app "Auto-scanned" feed** (the scheduler's finds are logged and listed in the app, independent of Telegram delivery); honeypot/safety gating. **[LIVE] Per-chain Telegram-alert selector**, **auto-execute (auto-buy)** with per-chain size/slippage + **armed exit defaults (TP/SL/trailing/max-hold)**, **hindsight stats** (median/best 24h & 7d), and a **[LIVE] 90-day gem track record** with a clickable won/lost drill-down.
 - **Bot Wallets**: encrypted key storage per chain (two-tier, PBKDF2 600k).
 - **Telegram & Discord AI** integration tabs.
 
@@ -100,9 +125,11 @@ The product is feature-rich and technically mature, and — as of the 2026-07 bu
 ### 4.3 CEX Bot (formerly "AI Agent")
 - **Signal engine**: technical analysis (EMA, RSI, MACD, Bollinger, ATR, volume), market-structure detection (swings, FVGs, order blocks), TradingView merge, fundamental scoring -> scored long/short setups with entry/SL/TP1-3/R:R.
 - **Exchanges**: connect Binance, MEXC, Bybit, KuCoin (encrypted API keys); spot + futures balances.
-- **Auto-execution** (optional) with risk-% sizing; signal history; Telegram delivery with approve buttons.
-- Scheduled scans every 15 min.
-- **[LIVE] Verified track record**: every published signal is resolved against its SL/TP using exchange candles → 30/90-day win-rate + avg R-multiple, shown on the Signals screen and used as the **paywall's proof point** ("signals hit take-profit X% of the time — verified on-exchange").
+- **Auto-execution** (optional) with **[LIVE] % of balance *or* fixed-$ per-trade sizing**; signal history; Telegram delivery (HTML) with approve buttons.
+- Scheduled scans every 15 min; **[LIVE] scans spot + futures by default** and **ranks by score** so both surface in the app.
+- **[LIVE] De-dup + cooldown policy**: max one active signal per symbol+timeframe, 6h rest after a TP / 18h after a stop, and an opposite-bias whipsaw guard — enforced on every generation path.
+- **[LIVE] CEX bracket-exit (Binance, opt-in)**: after entry, best-effort exchange-native **TP1 + hard stop** (futures TP/STOP-market with `closePosition`; spot OCO) that **banks the full position at TP1** for a higher realized win rate; the entry always stands even if the bracket fails.
+- **[LIVE] Verified track record**: every published signal is resolved against its SL/TP using exchange candles → 30/90-day win-rate + avg R-multiple (**durable records**, so the list persists), shown on the Signals screen and used as the **paywall's proof point**. **[LIVE] Full per-signal detail** on tap — called/hit timestamps + hold duration, entry/stop/targets, R, confidence, exchange, timeframe, market type, leverage. Pointer can analyze it via `get_track_record`.
 
 ### 4.4 Tracker
 - **Token tab**: search by name/ticker/contract; full token card (price, MCap, volume, liquidity, 24h, **holder count**); personal **watchlist** with live auto-refresh.
@@ -110,7 +137,8 @@ The product is feature-rich and technically mature, and — as of the 2026-07 bu
 - **Bubble Map**: holder distribution + connected-wallet clustering (whale/insider/bundling signal) via Moralis/Helius.
 
 ### 4.5 Wallet (unified portfolio)
-- Multi-chain portfolio (6 chains), total USD, asset list with logos, **send/receive + QR**, tx history, single-password lock screen, idle auto-lock, CSP-hardened, address validation.
+- Multi-chain portfolio (6 chains), total USD, asset list with logos, **send/receive + QR**, tx history, single-password lock screen (**[LIVE] min length raised 6→8**), idle auto-lock, CSP-hardened, address validation.
+- **[LIVE] Import/add custom tokens across chains**: paste a contract/mint in Manage wallets to track any token — **EVM (symbol+decimals auto-detected on-chain) + Solana SPL** — with per-wallet token chips and remove.
 
 ### 4.6 Prices / PnL Calculator / Token detail
 - Live prices & watchlist; PnL calculator (entry/exit, fees, leverage); per-token detail pages.
@@ -124,7 +152,7 @@ The product is feature-rich and technically mature, and — as of the 2026-07 bu
 - **Light/Dark theming**, PWA install, signed Android APK; **[LIVE] CI guard** (builds both apps + syntax-checks functions on every push).
 
 ### 4.8 The AI tool suite (shared by Pointer + Discord)
-Balances, bot settings, recent trades, gem alerts, live gem scan, cross-chain token search, market browse, prices, **live web/news search (with cited sources)**, token safety, holder counts, bubble map, arbitrage scan, CEX/futures signals, recent signals, CEX balances, token info, full watchlist read, track/untrack tokens, **standing watch-tasks (create/list/cancel)**, gated trade proposals, and — when enabled — **Glassnode on-chain analytics (`gn_*`) via MCP**. (No Wallet/PnL access by design.)
+Balances, bot settings, recent trades, gem alerts, live gem scan, cross-chain token search, market browse, prices, **live web/news search (with cited sources)**, token safety, holder counts, bubble map, arbitrage scan, CEX/futures signals, recent signals, CEX balances, token info, full watchlist read, track/untrack tokens, **standing watch-tasks (create/list/cancel)**, **[LIVE] `get_track_record`** (verified signal + gem bot performance with per-signal timing/levels for edge analysis), gated trade proposals, and — when enabled — **Glassnode on-chain analytics (`gn_*`) via MCP**. (No Wallet/PnL access by design.)
 
 ### 4.9 [LIVE] Referral program & growth
 - Server-issued referral codes, permanent signup attribution, and a reward (Pointer credits) paid on the referee's **first payment** (anti-abuse, idempotent). Real Referral screen shows the click → signup → paid funnel; admin can adjust balances.
@@ -156,7 +184,8 @@ Prioritized by **Impact x Effort** (a lightweight RICE view). [STAR] = highest l
 ### 6.2 Productivity / "make it stickier"
 | Feature | Status |
 |---|---|
-| **Auto-trade automation**: SL/TP, trailing stop, max-hold, auto-buy | **[LIVE]** exit monitor + gem auto-buy with armed exits |
+| **Auto-trade automation**: SL/TP, trailing stop, max-hold, auto-buy | **[LIVE]** DEX exit monitor + gem auto-buy with armed exits; **[LIVE] CEX bracket-exit (Binance): TP1 + hard stop** (Bybit/MEXC bracket + partial-at-TP1/trail still open) |
+| **CEX signal quality**: de-dup, cooldowns, opposite-bias guard, spot+futures, fixed-$ sizing | **[LIVE]** all shipped this cycle |
 | **Copy-trading / wallet mirroring** | **[LIVE]** follow → alert → Elite auto-copy + leaderboard |
 | **Real PnL** auto-computed | **[LIVE]** Position Manager (from executed trades) — *full on-chain-holdings link still open* |
 | **Custom alert builder** + push | **[LIVE]** price alerts + FCM push |
@@ -261,9 +290,10 @@ If 2,000 active traders route **$3M/mo** swap volume at a blended **0.5%** -> **
 **Next 90 days (the remaining high-leverage work):**
 1. **WalletConnect / external signing + security audit** — the #1 trust and liability item; keys are still custodial. Do this before scaling spend.
 2. **Reliability**: RPC/endpoint redundancy + a public status/health page (paying users now expect uptime).
-3. **Growth**: exchange affiliate links, shareable trade/PnL cards, validate native APK push.
-4. **Depth**: backtesting, cross-session Pointer memory, chart-image/voice input; activate Glassnode MCP (public toggle) and lead marketing with the AI × on-chain-analytics differentiator.
-5. **Compliance**: Terms/disclaimers, geo-restriction review, and counsel on the now-live trading fee + auto-execution.
+3. **Finish CEX exit management** — extend the bracket-exit to **Bybit/MEXC** and add a **"partial at TP1 + trail the runner"** mode (needs a lightweight CEX exit monitor); validate the Binance bracket live with small size.
+4. **Growth**: exchange affiliate links, shareable trade/PnL cards, validate native APK push.
+5. **Depth**: backtesting, cross-session Pointer memory, chart-image/voice input; activate Glassnode MCP (public toggle) and lead marketing with the AI × on-chain-analytics differentiator.
+6. **Compliance**: Terms/disclaimers, geo-restriction review, and counsel on the now-live trading fee + auto-execution.
 
 ---
 
