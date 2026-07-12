@@ -648,11 +648,14 @@ function roundPriceToTick(price, tick) {
 }
 
 // Dispatcher: attach a TP1 + stop bracket for a just-opened position. Throws
-// 'bracket-unsupported-exchange' for venues without bracket support yet so the
-// caller can fall back to notifying the owner. Binance only for now.
+// 'bracket-unsupported-exchange' for venues without bracket support so the
+// caller can fall back to notifying the owner. Futures: Binance, Bybit, MEXC.
+// Spot: Binance only (an OCO is the only spot-side bracket primitive we use).
 async function attachBracketExit(exchange, credentials, opts) {
-  if (exchange !== 'binance') { const e = new Error('bracket-unsupported-exchange'); e.unsupported = true; throw e }
-  return attachBinanceBracket(credentials.apiKey, credentials.secret, opts)
+  if (exchange === 'binance') return attachBinanceBracket(credentials.apiKey, credentials.secret, opts)
+  if (opts.marketType === 'futures' && exchange === 'bybit') return attachBybitBracket(credentials.apiKey, credentials.secret, opts)
+  if (opts.marketType === 'futures' && exchange === 'mexc') return attachMexcBracket(credentials.apiKey, credentials.secret, opts)
+  const e = new Error('bracket-unsupported-exchange'); e.unsupported = true; throw e
 }
 
 // entrySide is the side of the ENTRY ('buy' long / 'sell' short); the bracket
@@ -715,6 +718,197 @@ async function attachBinanceBracket(apiKey, secret, { symbol, marketType, entryS
   return { orderListId: String(r.data.orderListId), tp: tpPrice, sl: slTrigger, mode: 'full' }
 }
 
+// ── Bybit linear bracket (conditional reduce-only market orders) ──────────────
+// Bybit has no OCO for conditionals, but reduce-only orders are auto-cancelled
+// by the exchange once the position is flat, so a TP + SL pair behaves like a
+// bracket. triggerDirection: 1 = fires when price RISES to trigger, 2 = falls.
+
+async function bybitSignedPost(apiKey, secret, path, params) {
+  const ts = Date.now().toString(), rw = '5000'
+  const body = JSON.stringify(params)
+  const sig = hmacHex(secret, ts + apiKey + rw + body)
+  const r = await axios.post(`https://api.bybit.com${path}`, body, {
+    headers: { 'Content-Type': 'application/json', 'X-BAPI-API-KEY': apiKey, 'X-BAPI-TIMESTAMP': ts, 'X-BAPI-SIGN': sig, 'X-BAPI-RECV-WINDOW': rw },
+    timeout: API_TIMEOUT,
+  })
+  if (r.data?.retCode !== 0) throw new Error(r.data?.retMsg || 'bybit error')
+  return r.data.result
+}
+
+async function bybitSignedGet(apiKey, secret, path, qs) {
+  const ts = Date.now().toString(), rw = '5000'
+  const sig = hmacHex(secret, ts + apiKey + rw + qs)
+  const r = await axios.get(`https://api.bybit.com${path}?${qs}`, {
+    headers: { 'X-BAPI-API-KEY': apiKey, 'X-BAPI-TIMESTAMP': ts, 'X-BAPI-SIGN': sig, 'X-BAPI-RECV-WINDOW': rw },
+    timeout: API_TIMEOUT,
+  })
+  if (r.data?.retCode !== 0) throw new Error(r.data?.retMsg || 'bybit error')
+  return r.data.result
+}
+
+async function bybitLinearPosition(apiKey, secret, symbol) {
+  const res = await bybitSignedGet(apiKey, secret, '/v5/position/list', `category=linear&symbol=${symbol}`)
+  const pos = (res?.list || []).find((p) => p.symbol === symbol)
+  return Math.abs(parseFloat(pos?.size || 0))
+}
+
+async function bybitLinearFilters(symbol) {
+  const r = await axios.get(`https://api.bybit.com/v5/market/instruments-info?category=linear&symbol=${symbol}`, { timeout: API_TIMEOUT })
+  const s = r.data?.result?.list?.[0]
+  return { step: parseFloat(s?.lotSizeFilter?.qtyStep || '0.001'), tick: parseFloat(s?.priceFilter?.tickSize || '0') }
+}
+
+// Conditional reduce-only market close (TP leg, SL leg, or a trail stop).
+async function placeBybitConditionalClose(apiKey, secret, { symbol, closeSide, qty, triggerPrice, triggerDirection }) {
+  const res = await bybitSignedPost(apiKey, secret, '/v5/order/create', {
+    category: 'linear', symbol, side: closeSide, orderType: 'Market',
+    qty: String(qty), triggerPrice: String(triggerPrice), triggerDirection,
+    triggerBy: 'MarkPrice', reduceOnly: true, timeInForce: 'IOC',
+  })
+  return String(res?.orderId || 'unknown')
+}
+
+// entrySide 'buy' (long) / 'sell' (short). Sizes come from the live position
+// (Bybit order responses don't return the fill qty).
+async function attachBybitBracket(apiKey, secret, { symbol, entrySide, tp1, sl, mode }) {
+  const long = String(entrySide).toLowerCase() === 'buy'
+  const closeSide = long ? 'Sell' : 'Buy'
+  if (!(tp1 > 0) || !(sl > 0)) throw new Error('bracket needs tp1 and sl')
+  const size = await bybitLinearPosition(apiKey, secret, symbol)
+  if (!(size > 0)) throw new Error('bracket: no open Bybit position found')
+  const { step, tick } = await bybitLinearFilters(symbol)
+  const tp = roundPriceToTick(tp1, tick), slp = roundPriceToTick(sl, tick)
+  const half = roundToStep(size / 2, step)
+  const trail = mode === 'trail' && half > 0
+  // Long: TP fires when price rises to tp (1), SL when it falls to sl (2). Short mirrors.
+  const tpId = await placeBybitConditionalClose(apiKey, secret, { symbol, closeSide, qty: trail ? half : size, triggerPrice: tp, triggerDirection: long ? 1 : 2 })
+  const slId = await placeBybitConditionalClose(apiKey, secret, { symbol, closeSide, qty: size, triggerPrice: slp, triggerDirection: long ? 2 : 1 })
+  return trail
+    ? { tpOrderId: tpId, slOrderId: slId, tp, sl: slp, mode: 'trail', tpQty: half }
+    : { tpOrderId: tpId, slOrderId: slId, tp, sl: slp, mode: 'full' }
+}
+
+// Order status ('Untriggered'|'Triggered'|'Filled'|'Cancelled'|…) — realtime
+// first, history for orders that have already left the open set.
+async function getBybitOrderStatus(apiKey, secret, symbol, orderId) {
+  for (const path of ['/v5/order/realtime', '/v5/order/history']) {
+    try {
+      const res = await bybitSignedGet(apiKey, secret, path, `category=linear&symbol=${symbol}&orderId=${orderId}`)
+      const o = (res?.list || []).find((x) => x.orderId === String(orderId)) || (res?.list || [])[0]
+      if (o && o.orderStatus) return o.orderStatus
+    } catch (_) { /* try next source */ }
+  }
+  return null
+}
+
+async function cancelBybitOrder(apiKey, secret, symbol, orderId) {
+  return bybitSignedPost(apiKey, secret, '/v5/order/cancel', { category: 'linear', symbol, orderId: String(orderId) })
+}
+
+// Trail stop for the runner: conditional market close of `qty` at stopPrice.
+async function placeBybitStopClose(apiKey, secret, symbol, closeSide, stopPrice, qty) {
+  const { step, tick } = await bybitLinearFilters(symbol)
+  const px = roundPriceToTick(stopPrice, tick)
+  const q = roundToStep(qty, step)
+  if (!(q > 0)) throw new Error('bybit stop: no quantity')
+  // Closing a long ('Sell') fires when price FALLS to the stop (2); short mirrors.
+  const orderId = await placeBybitConditionalClose(apiKey, secret, {
+    symbol, closeSide, qty: q, triggerPrice: px, triggerDirection: closeSide === 'Sell' ? 2 : 1,
+  })
+  return { orderId, stopPrice: px }
+}
+
+// ── MEXC contract bracket (plan/trigger orders) ───────────────────────────────
+// Best-effort: MEXC's contract API availability varies by account. Plan orders
+// are valid for 7 days (executeCycle 2) — the trail loop re-arms the stop on
+// every ratchet, and the exit monitor's estimate path still closes the trade
+// record if the venue rejects order management.
+// side: 2 = close short, 4 = close long. triggerType: 1 = price ≥ trigger, 2 = ≤.
+
+async function mexcContractPositionVol(apiKey, secret, symbol) {
+  const fxSym = mexcFuturesSymbol(symbol)
+  const ts = String(Date.now())
+  const qs = `symbol=${fxSym}`
+  const sig = mexcFuturesSign(apiKey, secret, ts, qs)
+  const r = await axios.get(`${MEXC_FUTURES_BASE}/api/v1/private/position/open_positions?${qs}`, {
+    headers: { ApiKey: apiKey, 'Request-Time': ts, Signature: sig, 'Content-Type': 'application/json' },
+    timeout: API_TIMEOUT,
+  })
+  if (r.data?.code !== 0) throw new Error(r.data?.message || 'mexc position error')
+  return (r.data?.data || []).reduce((s, p) => s + Math.abs(parseFloat(p.holdVol || 0)), 0)
+}
+
+async function mexcPlanOrderPlace(apiKey, secret, params) {
+  const ts = String(Date.now())
+  const body = JSON.stringify(params)
+  const sig = mexcFuturesSign(apiKey, secret, ts, body)
+  const r = await axios.post(`${MEXC_FUTURES_BASE}/api/v1/private/planorder/place`, body, {
+    headers: { ApiKey: apiKey, 'Request-Time': ts, Signature: sig, 'Content-Type': 'application/json' },
+    timeout: API_TIMEOUT,
+  })
+  if (r.data?.code !== 0) throw new Error(r.data?.message || 'mexc plan order failed')
+  return String(r.data?.data || 'unknown')
+}
+
+async function attachMexcBracket(apiKey, secret, { symbol, entrySide, tp1, sl, mode }) {
+  const long = String(entrySide).toLowerCase() === 'buy'
+  const closeSide = long ? 4 : 2
+  if (!(tp1 > 0) || !(sl > 0)) throw new Error('bracket needs tp1 and sl')
+  const fxSym = mexcFuturesSymbol(symbol)
+  const vol = await mexcContractPositionVol(apiKey, secret, symbol)
+  if (!(vol > 0)) throw new Error('bracket: no open MEXC position found')
+  const half = Math.floor(vol / 2)
+  const trail = mode === 'trail' && half > 0
+  const base = { symbol: fxSym, side: closeSide, openType: 1, orderType: 5, executeCycle: 2, trend: 1 }
+  // Long: TP fires at price ≥ tp1 (1), SL at ≤ sl (2). Short mirrors.
+  const tpId = await mexcPlanOrderPlace(apiKey, secret, { ...base, vol: trail ? half : vol, triggerPrice: tp1, triggerType: long ? 1 : 2 })
+  const slId = await mexcPlanOrderPlace(apiKey, secret, { ...base, vol, triggerPrice: sl, triggerType: long ? 2 : 1 })
+  return trail
+    ? { tpOrderId: tpId, slOrderId: slId, tp: tp1, sl, mode: 'trail', tpQty: half }
+    : { tpOrderId: tpId, slOrderId: slId, tp: tp1, sl, mode: 'full' }
+}
+
+// Plan-order state: 1 untriggered · 2 cancelled · 3 executed · 4 invalid · 5 failed.
+async function getMexcPlanOrderState(apiKey, secret, symbol, orderId) {
+  const fxSym = mexcFuturesSymbol(symbol)
+  const ts = String(Date.now())
+  const qs = `page_num=1&page_size=50&symbol=${fxSym}`
+  const sig = mexcFuturesSign(apiKey, secret, ts, qs)
+  const r = await axios.get(`${MEXC_FUTURES_BASE}/api/v1/private/planorder/list/orders?${qs}`, {
+    headers: { ApiKey: apiKey, 'Request-Time': ts, Signature: sig, 'Content-Type': 'application/json' },
+    timeout: API_TIMEOUT,
+  })
+  if (r.data?.code !== 0) throw new Error(r.data?.message || 'mexc plan order query failed')
+  const o = (r.data?.data || []).find((x) => String(x.id || x.orderId) === String(orderId))
+  return o ? +o.state : null
+}
+
+async function cancelMexcPlanOrder(apiKey, secret, symbol, orderId) {
+  const fxSym = mexcFuturesSymbol(symbol)
+  const ts = String(Date.now())
+  const body = JSON.stringify([{ symbol: fxSym, orderId: String(orderId) }])
+  const sig = mexcFuturesSign(apiKey, secret, ts, body)
+  const r = await axios.post(`${MEXC_FUTURES_BASE}/api/v1/private/planorder/cancel`, body, {
+    headers: { ApiKey: apiKey, 'Request-Time': ts, Signature: sig, 'Content-Type': 'application/json' },
+    timeout: API_TIMEOUT,
+  })
+  if (r.data?.code !== 0) throw new Error(r.data?.message || 'mexc plan order cancel failed')
+  return r.data
+}
+
+// Trail stop for the runner (plan order closing `vol` lots at stopPrice).
+async function placeMexcStopClose(apiKey, secret, symbol, closeSide, stopPrice, vol) {
+  const fxSym = mexcFuturesSymbol(symbol)
+  const v = Math.floor(vol)
+  if (!(v > 0)) throw new Error('mexc stop: no volume')
+  const side = closeSide === 'sell' ? 4 : 2 // closing long sells (4 close-long); closing short buys (2 close-short)
+  const orderId = await mexcPlanOrderPlace(apiKey, secret, {
+    symbol: fxSym, side, openType: 1, orderType: 5, executeCycle: 2, trend: 1,
+    vol: v, triggerPrice: stopPrice, triggerType: side === 4 ? 2 : 1, // stop fires against the position
+  })
+  return { orderId, stopPrice }
+}
+
 // ── Trail-runner order management (used by the CEX exit monitor) ─────────────
 async function getBinanceFuturesOrder(apiKey, secret, symbol, orderId) {
   const qs = `symbol=${symbol}&orderId=${orderId}&timestamp=${Date.now()}&recvWindow=5000`
@@ -764,6 +958,8 @@ module.exports = {
   placeBinanceOrder, placeMexcOrder, placeBybitOrder, placeKucoinOrder,
   placeBinanceFuturesMarketOrder, placeBybitLinearMarketOrder, placeMexcFuturesMarketOrder,
   getMexcFuturesBalance,
-  attachBinanceBracket, attachBracketExit,
+  attachBinanceBracket, attachBybitBracket, attachMexcBracket, attachBracketExit,
   getBinanceFuturesOrder, cancelBinanceFuturesOrder, placeBinanceFuturesStopClose,
+  getBybitOrderStatus, cancelBybitOrder, placeBybitStopClose, bybitLinearPosition,
+  getMexcPlanOrderState, cancelMexcPlanOrder, placeMexcStopClose, mexcContractPositionVol,
 }

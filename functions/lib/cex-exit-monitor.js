@@ -197,18 +197,55 @@ function labelExitFor(trade, exitPrice) {
   return 'manual'
 }
 
-// ── Trail-runner manager (Binance futures, bracket.mode === 'trail') ─────────
+// ── Venue adapters for trail-runner order management ─────────────────────────
+// Each venue exposes: positionSize, realized (real PnL from fills; null when
+// the venue can't provide it), tpFilled (has the partial TP1 executed?),
+// cancel(orderId), placeStop(closeSide 'sell'|'buy', stopPrice, qty) → { orderId, stopPrice }.
+// Quantities stay in each venue's native unit (base qty on Binance/Bybit,
+// lots on MEXC) — they only ever round-trip through the same venue.
+const TRAIL_VENUES = {
+  binance: {
+    positionSize: (c, t) => binanceFuturesPositionAmt(c.apiKey, c.secret, t.symbol),
+    realized: (c, t, since) => binanceFuturesRealized(c.apiKey, c.secret, t.symbol, since),
+    tpFilled: async (c, t) => {
+      const o = await cexTrader.getBinanceFuturesOrder(c.apiKey, c.secret, t.symbol, t.bracket.tpOrderId)
+      return !!o && o.status === 'FILLED'
+    },
+    cancel: (c, t, id) => cexTrader.cancelBinanceFuturesOrder(c.apiKey, c.secret, t.symbol, id),
+    placeStop: (c, t, side, px) => cexTrader.placeBinanceFuturesStopClose(c.apiKey, c.secret, t.symbol, side === 'sell' ? 'SELL' : 'BUY', px),
+  },
+  bybit: {
+    positionSize: (c, t) => bybitPositionSize(c.apiKey, c.secret, t.symbol),
+    realized: (c, t, since) => bybitClosedPnl(c.apiKey, c.secret, t.symbol, since),
+    tpFilled: async (c, t) => (await cexTrader.getBybitOrderStatus(c.apiKey, c.secret, t.symbol, t.bracket.tpOrderId)) === 'Filled',
+    cancel: (c, t, id) => cexTrader.cancelBybitOrder(c.apiKey, c.secret, t.symbol, id),
+    placeStop: (c, t, side, px, qty) => cexTrader.placeBybitStopClose(c.apiKey, c.secret, t.symbol, side === 'sell' ? 'Sell' : 'Buy', px, qty),
+  },
+  mexc: {
+    positionSize: (c, t) => mexcOpenPosition(c.apiKey, c.secret, t.symbol),
+    realized: async () => null, // MEXC exposes no usable fill-PnL query — estimate path
+    tpFilled: async (c, t) => (await cexTrader.getMexcPlanOrderState(c.apiKey, c.secret, t.symbol, t.bracket.tpOrderId)) === 3,
+    cancel: (c, t, id) => cexTrader.cancelMexcPlanOrder(c.apiKey, c.secret, t.symbol, id),
+    placeStop: (c, t, side, px, qty) => cexTrader.placeMexcStopClose(c.apiKey, c.secret, t.symbol, side, px, qty),
+  },
+}
+
+// ── Trail-runner manager (futures, bracket.mode === 'trail') ─────────────────
 // Lifecycle of a trail trade:
 //   armed   → half-position TP1 (reduceOnly) + full stop live on the exchange
 //   TP1 fills → cancel the stop, re-place it at BREAKEVEN, start trailing
 //   each run  → ratchet the stop behind the candle peak: gap = 1R (entry↔SL),
 //               tightening to 0.5R once price has cleared TP2; never below BE
-//   position flat → close the doc with REAL PnL from fills (TP1 + runner)
+//   position flat → close the doc with REAL PnL from fills where the venue
+//               provides it (Binance/Bybit), estimate otherwise (MEXC)
 // Returns { close: patch } | { patch: docPatch, note? } | null (nothing to do).
 async function manageTrailRunner(trade, creds, fetchCandles, now = Date.now()) {
+  const venue = TRAIL_VENUES[trade.exchange]
+  if (!venue) return null
   const br = trade.bracket || {}
   const symbol = trade.symbol
   const long = trade.bias !== 'short'
+  const closeSide = long ? 'sell' : 'buy'
   const entry = parseFloat(trade.entryPrice), origSl = parseFloat(trade.stopLoss)
   const tp1 = parseFloat(trade.tp1), tp2 = parseFloat(trade.tp2)
   const openedMs = openedMsOf(trade)
@@ -216,20 +253,21 @@ async function manageTrailRunner(trade, creds, fetchCandles, now = Date.now()) {
   if (!(entry > 0) || !(origSl > 0) || !(tp1 > 0) || !openedMs) return null
 
   // 1) Position flat → the trade is done (stop fired, TP'd out, or manual).
-  const size = await binanceFuturesPositionAmt(creds.apiKey, creds.secret, symbol)
+  const size = await venue.positionSize(creds, trade)
   if (size === 0) {
     let real = null
-    try { real = await binanceFuturesRealized(creds.apiKey, creds.secret, symbol, openedMs) } catch (_) {}
-    // Leftover reduce-only/closePosition orders on a flat position are inert,
-    // but clean them up so the order book stays tidy.
+    try { real = await venue.realized(creds, trade, openedMs) } catch (_) {}
+    // Leftover reduce-only/plan orders on a flat position are inert, but clean
+    // them up so the order book stays tidy.
     for (const oid of [trail?.stopOrderId, br.slOrderId, br.tpOrderId]) {
-      if (oid) await cexTrader.cancelBinanceFuturesOrder(creds.apiKey, creds.secret, symbol, oid).catch(() => {})
+      if (oid) await venue.cancel(creds, trade, oid).catch(() => {})
     }
     if (real && real.pnl != null) {
       return { close: closePatch(trade, trail?.active ? 'trail' : labelExitFor(trade, real.exitPrice), real.exitPrice, real.pnl, false) }
     }
-    // No fill history (window passed) → estimate: banked half at TP1 (if it
-    // fired) + runner out at the last trail stop, else the plain TP1/SL walk.
+    // No fill history (window passed / venue can't report) → estimate: banked
+    // half at TP1 (if it fired) + runner out at the last trail stop, else the
+    // plain TP1/SL walk.
     if (trail?.active) {
       const q = baseQty(trade), dir = long ? 1 : -1
       const est = (q / 2) * (tp1 - entry) * dir + (q / 2) * ((trail.stop || entry) - entry) * dir
@@ -245,12 +283,12 @@ async function manageTrailRunner(trade, creds, fetchCandles, now = Date.now()) {
   // 2) TP1 not banked yet → poll the partial TP order.
   if (!trail || !trail.active) {
     if (!br.tpOrderId) return null
-    const ord = await cexTrader.getBinanceFuturesOrder(creds.apiKey, creds.secret, symbol, br.tpOrderId).catch(() => null)
-    if (!ord || ord.status !== 'FILLED') return null // still waiting (or API hiccup — retry next run)
+    const filled = await venue.tpFilled(creds, trade).catch(() => false)
+    if (!filled) return null // still waiting (or API hiccup — retry next run)
     // TP1 banked → swap the original stop for a breakeven stop and go live.
-    if (br.slOrderId) await cexTrader.cancelBinanceFuturesOrder(creds.apiKey, creds.secret, symbol, br.slOrderId).catch(() => {})
-    const { orderId, stopPrice } = await cexTrader.placeBinanceFuturesStopClose(
-      creds.apiKey, creds.secret, symbol, long ? 'SELL' : 'BUY', entry)
+    // `size` is the remaining runner (TP1 already reduced the position).
+    if (br.slOrderId) await venue.cancel(creds, trade, br.slOrderId).catch(() => {})
+    const { orderId, stopPrice } = await venue.placeStop(creds, trade, closeSide, entry, size)
     return {
       patch: { partialTp1: true, trail: { active: true, stop: stopPrice, stopOrderId: orderId, peak: tp1, activatedAt: now } },
       note: 'tp1-banked',
@@ -275,9 +313,8 @@ async function manageTrailRunner(trade, creds, fetchCandles, now = Date.now()) {
   if (!improved) {
     return peak !== trail.peak ? { patch: { trail: { ...trail, peak } } } : null
   }
-  if (trail.stopOrderId) await cexTrader.cancelBinanceFuturesOrder(creds.apiKey, creds.secret, symbol, trail.stopOrderId).catch(() => {})
-  const { orderId, stopPrice } = await cexTrader.placeBinanceFuturesStopClose(
-    creds.apiKey, creds.secret, symbol, long ? 'SELL' : 'BUY', newStop)
+  if (trail.stopOrderId) await venue.cancel(creds, trade, trail.stopOrderId).catch(() => {})
+  const { orderId, stopPrice } = await venue.placeStop(creds, trade, closeSide, newStop, size)
   return { patch: { trail: { ...trail, stop: stopPrice, stopOrderId: orderId, peak } } }
 }
 
@@ -300,6 +337,14 @@ async function resolveTrade(trade, creds, fetchCandles, now = Date.now()) {
       else if (trade.exchange === 'mexc') size = await mexcOpenPosition(creds.apiKey, creds.secret, symbol)
       if (size != null && size > 0) return null // still open on the exchange — leave it
       if (size === 0) {
+        // Tidy up leftover bracket orders (inert on a flat position).
+        const venue = TRAIL_VENUES[trade.exchange]
+        const brk = trade.bracket || {}
+        if (venue) {
+          for (const oid of [brk.slOrderId, brk.tpOrderId]) {
+            if (oid) await venue.cancel(creds, trade, oid).catch(() => {})
+          }
+        }
         // Flat → recover the real realized PnL where the venue exposes it.
         let real = null
         try {
@@ -385,9 +430,10 @@ async function processCexExits(ctx) {
     try {
       const creds = await getCreds(uid, trade.exchange)
 
-      // Trail-runner trades (Binance futures, opt-in mode) get active exit
-      // management; everything else goes through the passive resolution ladder.
-      if (creds && trade.exchange === 'binance' && trade.marketType === 'futures' && trade.bracket?.mode === 'trail') {
+      // Trail-runner trades (futures on a supported venue, opt-in mode) get
+      // active exit management; everything else goes through the passive
+      // resolution ladder.
+      if (creds && TRAIL_VENUES[trade.exchange] && trade.marketType === 'futures' && trade.bracket?.mode === 'trail') {
         const act = await manageTrailRunner(trade, creds, getCandles)
         if (act?.patch) {
           await doc.ref.set(act.patch, { merge: true })

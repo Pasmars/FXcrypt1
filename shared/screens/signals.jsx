@@ -196,7 +196,7 @@ function Signals({ go, onUpsell }) {
               <div style={{ width: 34, height: 34, borderRadius: 10, background: bracket ? 'var(--accent)' : 'var(--surface2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: bracket ? 'var(--on-accent)' : 'var(--accent)', flexShrink: 0 }}><Icon name="target" size={17} /></div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13.5, fontWeight: 700 }}>Auto TP1 + hard stop</div>
-                <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 1, lineHeight: 1.45 }}>Places a take-profit at TP1 and a stop at SL on the exchange. Binance only; test with small size first.</div>
+                <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 1, lineHeight: 1.45 }}>Places a take-profit at TP1 and a stop at SL on the exchange. Futures: Binance · Bybit · MEXC; spot: Binance. Test with small size first.</div>
               </div>
               <Toggle on={bracket} onClick={toggleBracket} />
             </div>

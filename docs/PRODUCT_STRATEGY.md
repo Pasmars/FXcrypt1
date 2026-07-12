@@ -42,7 +42,9 @@ A correctness pass over the whole signal-bot loop plus the missing piece of trad
 
 **[LIVE] CEX exit monitor (`processCexExits`, every 10 min)** — `cexTrades` docs now **close with realized PnL** (they were opened and never closed). Exchange truth first: futures position-flat detection with **real PnL from fills** (Binance `userTrades`, Bybit `closed-pnl`), spot **OCO leg status** for bracket trades; candle-walk TP1/SL estimate as fallback (flagged `pnlEstimated`); 30-day timeout close. Docs get `exitPrice / exitReason (tp1|sl|manual|trail|timeout) / pnl / pnlPct`, one in-app push per close.
 
-**[LIVE] Trailing-runner exit mode (`exitMode: 'trail'`, Binance futures, opt-in)** — the "partial at TP1 + trail the runner" mode from the roadmap, built on the monitor: entry places a **half-position TP1** (reduce-only) + full hard stop; when TP1 banks, the monitor **moves the stop to breakeven** and then **ratchets it behind the 1h-candle peak** (1R gap, tightening to 0.5R once price clears TP2, never below BE) until the runner is stopped out — closed with **real PnL from fills** (TP1 partial + runner summed). Signals UI: "Bank all at TP1" / "Half out · trail rest" selector under the bracket toggle. Spot keeps full-close (OCO can't split).
+**[LIVE] Trailing-runner exit mode (`exitMode: 'trail'`, futures, opt-in)** — the "partial at TP1 + trail the runner" mode from the roadmap, built on the monitor: entry places a **half-position TP1** (reduce-only) + full hard stop; when TP1 banks, the monitor **moves the stop to breakeven** and then **ratchets it behind the 1h-candle peak** (1R gap, tightening to 0.5R once price clears TP2, never below BE) until the runner is stopped out — closed with **real PnL from fills** (TP1 partial + runner summed). Signals UI: "Bank all at TP1" / "Half out · trail rest" selector under the bracket toggle. Spot keeps full-close (OCO can't split).
+
+**[LIVE] Brackets + trailing on all three futures venues** — the bracket-exit and trail mode now cover **Binance** (TP/STOP-market + closePosition), **Bybit** (conditional reduce-only market orders, auto-cancelled by the venue on flat; real PnL via `closed-pnl`) and **MEXC** (contract plan-orders, 7-day validity re-armed on every ratchet; PnL estimated — the venue has no usable fill-PnL query). The exit monitor dispatches order management per venue through one adapter table; sizes are read from the live position (Bybit/MEXC order responses don't return fill qty).
 
 ---
 
@@ -200,7 +202,7 @@ Prioritized by **Impact x Effort** (a lightweight RICE view). [STAR] = highest l
 ### 6.2 Productivity / "make it stickier"
 | Feature | Status |
 |---|---|
-| **Auto-trade automation**: SL/TP, trailing stop, max-hold, auto-buy | **[LIVE]** DEX exit monitor + gem auto-buy with armed exits; **[LIVE] CEX bracket-exit (Binance): TP1 + hard stop**; **[LIVE] CEX exit monitor** closing trades with realized PnL (Bybit/MEXC bracket + partial-at-TP1/trail still open) |
+| **Auto-trade automation**: SL/TP, trailing stop, max-hold, auto-buy | **[LIVE]** DEX exit monitor + gem auto-buy with armed exits; **[LIVE] CEX bracket-exit on Binance/Bybit/MEXC futures** (TP1 + hard stop, full or half-out-and-trail); **[LIVE] CEX exit monitor** closing trades with realized PnL |
 | **CEX signal quality**: de-dup, cooldowns, opposite-bias guard, spot+futures, fixed-$ sizing | **[LIVE]** all shipped this cycle |
 | **Copy-trading / wallet mirroring** | **[LIVE]** follow → alert → Elite auto-copy + leaderboard |
 | **Real PnL** auto-computed | **[LIVE]** Position Manager (from executed trades) — *full on-chain-holdings link still open* |
@@ -306,7 +308,7 @@ If 2,000 active traders route **$3M/mo** swap volume at a blended **0.5%** -> **
 **Next 90 days (the remaining high-leverage work):**
 1. **WalletConnect / external signing + security audit** — the #1 trust and liability item; keys are still custodial. Do this before scaling spend.
 2. **Reliability**: RPC/endpoint redundancy + a public status/health page (paying users now expect uptime).
-3. **Finish CEX exit management** — the **exit monitor AND the "partial at TP1 + trail the runner" mode are now LIVE** (Binance futures). Remaining: extend brackets/trailing to **Bybit/MEXC**, and validate the Binance bracket + trail live with small size.
+3. **CEX exit management — COMPLETE**: exit monitor, trailing-runner mode, and brackets on **all three futures venues (Binance/Bybit/MEXC)** are live. Remaining: validate live with small size on each venue (the whole bracket pipeline is untested against funded accounts).
 4. **Growth**: exchange affiliate links, shareable trade/PnL cards, validate native APK push.
 5. **Depth**: backtesting, cross-session Pointer memory, chart-image/voice input; activate Glassnode MCP (public toggle) and lead marketing with the AI × on-chain-analytics differentiator.
 6. **Compliance**: Terms/disclaimers, geo-restriction review, and counsel on the now-live trading fee + auto-execution.
