@@ -285,6 +285,7 @@ window.FXAPI = {
         riskMode:        ag.riskMode === 'fixed' ? 'fixed' : 'percent',
         riskUsd:         ag.riskUsd != null ? ag.riskUsd : 50,
         bracketExit:     ag.bracketExit === true,
+        exitMode:        ag.exitMode === 'trail' ? 'trail' : 'full',
       };
     } catch (e) { return null; }
   },
@@ -401,6 +402,9 @@ window.FXAPI = {
       const u = parseFloat(patch.riskUsd);
       if (Number.isFinite(u)) agentSettings.riskUsd = Math.max(1, Math.min(u, 1000000));
     }
+    // Bracket exit style: 'full' banks everything at TP1; 'trail' banks half
+    // and trails the runner (Binance futures).
+    if (patch && patch.exitMode !== undefined) agentSettings.exitMode = patch.exitMode === 'trail' ? 'trail' : 'full';
     if (!Object.keys(agentSettings).length) return {};
     await setDoc(doc(db, 'users', u.uid), { agentSettings }, { merge: true });
     return agentSettings;

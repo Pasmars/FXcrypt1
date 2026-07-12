@@ -622,20 +622,22 @@ function calcOrderQuantity(_exchange, _symbol, usdtAmount, currentPrice, stepSiz
 // the stop, which is what maximizes realized win rate. Best-effort: any failure
 // here is reported but never unwinds the entry. Binance only for now.
 let _futTickCache = { at: 0, map: {} }
-async function binanceFuturesTick(symbol) {
+async function binanceFuturesFilters(symbol) {
   try {
     if (Date.now() - _futTickCache.at > 3600000) {
       const r = await axios.get('https://fapi.binance.com/fapi/v1/exchangeInfo', { timeout: API_TIMEOUT })
       const map = {}
       for (const s of (r.data?.symbols || [])) {
         const pf = (s.filters || []).find(f => f.filterType === 'PRICE_FILTER')
-        if (pf) map[s.symbol] = parseFloat(pf.tickSize || '0')
+        const lf = (s.filters || []).find(f => f.filterType === 'LOT_SIZE')
+        map[s.symbol] = { tick: parseFloat(pf?.tickSize || '0'), step: parseFloat(lf?.stepSize || '0.001') }
       }
       _futTickCache = { at: Date.now(), map }
     }
-    return _futTickCache.map[symbol] || 0
-  } catch { return 0 }
+    return _futTickCache.map[symbol] || { tick: 0, step: 0.001 }
+  } catch { return { tick: 0, step: 0.001 } }
 }
+async function binanceFuturesTick(symbol) { return (await binanceFuturesFilters(symbol)).tick }
 // Round a price to the tick grid (nearest); falls back to magnitude-based dp.
 function roundPriceToTick(price, tick) {
   const p = +price
@@ -654,26 +656,43 @@ async function attachBracketExit(exchange, credentials, opts) {
 }
 
 // entrySide is the side of the ENTRY ('buy' long / 'sell' short); the bracket
-// closes the opposite side. qty (base) is required for spot OCO only.
-async function attachBinanceBracket(apiKey, secret, { symbol, marketType, entrySide, tp1, sl, qty }) {
+// closes the opposite side. qty (base) is required for spot OCO and for the
+// futures 'trail' mode (to size the half-position TP1).
+//
+// mode 'full'  (default): TP1 closes the WHOLE position (closePosition), hard
+//                         stop at SL — banks everything at TP1.
+// mode 'trail' (futures): TP1 closes HALF the position (reduceOnly qty), hard
+//                         stop at SL on the rest; the CEX exit monitor then
+//                         moves the stop to breakeven once TP1 fills and
+//                         trails the runner. Falls back to 'full' when the
+//                         half-qty can't be sized. Spot stays 'full' (an OCO
+//                         can't split quantities).
+async function attachBinanceBracket(apiKey, secret, { symbol, marketType, entrySide, tp1, sl, qty, mode }) {
   const closeSide = String(entrySide).toLowerCase() === 'buy' ? 'SELL' : 'BUY'
   if (!(tp1 > 0) || !(sl > 0)) throw new Error('bracket needs tp1 and sl')
 
   if (marketType === 'futures') {
-    const tick   = await binanceFuturesTick(symbol)
+    const { tick, step } = await binanceFuturesFilters(symbol)
     const tpStop = roundPriceToTick(tp1, tick)
     const slStop = roundPriceToTick(sl, tick)
     const post = async (params) => {
       const ts  = Date.now()
-      const qs  = new URLSearchParams({ ...params, symbol, side: closeSide, closePosition: 'true', workingType: 'MARK_PRICE', timestamp: ts, recvWindow: 5000 }).toString()
+      const qs  = new URLSearchParams({ ...params, symbol, side: closeSide, workingType: 'MARK_PRICE', timestamp: ts, recvWindow: 5000 }).toString()
       const sig = hmacHex(secret, qs)
       const r   = await binanceFuturesPost('/fapi/v1/order', `${qs}&signature=${sig}`, apiKey)
       return String(r.data.orderId)
     }
-    // closePosition orders auto-cancel each other when the position closes.
-    const tpId = await post({ type: 'TAKE_PROFIT_MARKET', stopPrice: String(tpStop) })
-    const slId = await post({ type: 'STOP_MARKET',        stopPrice: String(slStop) })
-    return { tpOrderId: tpId, slOrderId: slId, tp: tpStop, sl: slStop }
+    const halfQty = mode === 'trail' ? roundToStep((parseFloat(qty) || 0) / 2, step) : 0
+    if (mode === 'trail' && halfQty > 0) {
+      // Partial TP1 (half, reduce-only) + full-position hard stop.
+      const tpId = await post({ type: 'TAKE_PROFIT_MARKET', stopPrice: String(tpStop), quantity: String(halfQty), reduceOnly: 'true' })
+      const slId = await post({ type: 'STOP_MARKET', stopPrice: String(slStop), closePosition: 'true' })
+      return { tpOrderId: tpId, slOrderId: slId, tp: tpStop, sl: slStop, mode: 'trail', tpQty: halfQty }
+    }
+    // Full mode: closePosition orders auto-cancel each other when the position closes.
+    const tpId = await post({ type: 'TAKE_PROFIT_MARKET', stopPrice: String(tpStop), closePosition: 'true' })
+    const slId = await post({ type: 'STOP_MARKET',        stopPrice: String(slStop), closePosition: 'true' })
+    return { tpOrderId: tpId, slOrderId: slId, tp: tpStop, sl: slStop, mode: 'full' }
   }
 
   // Spot OCO: one sell that is a TP limit OR an SL stop-limit (one cancels other).
@@ -693,7 +712,45 @@ async function attachBinanceBracket(apiKey, secret, { symbol, marketType, entryS
   }).toString()
   const sig = hmacHex(secret, qs)
   const r   = await binancePost('/api/v3/order/oco', `${qs}&signature=${sig}`, apiKey)
-  return { orderListId: String(r.data.orderListId), tp: tpPrice, sl: slTrigger }
+  return { orderListId: String(r.data.orderListId), tp: tpPrice, sl: slTrigger, mode: 'full' }
+}
+
+// ── Trail-runner order management (used by the CEX exit monitor) ─────────────
+async function getBinanceFuturesOrder(apiKey, secret, symbol, orderId) {
+  const qs = `symbol=${symbol}&orderId=${orderId}&timestamp=${Date.now()}&recvWindow=5000`
+  const r  = await binanceFuturesGet('/fapi/v1/order', `${qs}&signature=${hmacHex(secret, qs)}`, apiKey)
+  return r.data
+}
+
+async function cancelBinanceFuturesOrder(apiKey, secret, symbol, orderId) {
+  const ts = Date.now()
+  const qs = `symbol=${symbol}&orderId=${orderId}&timestamp=${ts}&recvWindow=5000`
+  const sig = hmacHex(secret, qs)
+  let hit451 = false
+  for (const base of BINANCE_FUTURES_BASES) {
+    try {
+      return (await axios.delete(`${base}/fapi/v1/order?${qs}&signature=${sig}`, { headers: { 'X-MBX-APIKEY': apiKey }, timeout: API_TIMEOUT })).data
+    } catch (e) {
+      if (e?.response?.status === 451) { hit451 = true; continue }
+      throw parseBinanceError(e)
+    }
+  }
+  if (hit451) throw new Error('Binance Futures API geo-restricted (HTTP 451).')
+}
+
+// Close-the-position stop at `stopPrice` (STOP_MARKET, closePosition) — the
+// ratcheting trail stop for the runner.
+async function placeBinanceFuturesStopClose(apiKey, secret, symbol, closeSide, stopPrice) {
+  const { tick } = await binanceFuturesFilters(symbol)
+  const px  = roundPriceToTick(stopPrice, tick)
+  const ts  = Date.now()
+  const qs  = new URLSearchParams({
+    symbol, side: closeSide, type: 'STOP_MARKET', stopPrice: String(px),
+    closePosition: 'true', workingType: 'MARK_PRICE', timestamp: ts, recvWindow: 5000,
+  }).toString()
+  const sig = hmacHex(secret, qs)
+  const r   = await binanceFuturesPost('/fapi/v1/order', `${qs}&signature=${sig}`, apiKey)
+  return { orderId: String(r.data.orderId), stopPrice: px }
 }
 
 module.exports = {
@@ -708,4 +765,5 @@ module.exports = {
   placeBinanceFuturesMarketOrder, placeBybitLinearMarketOrder, placeMexcFuturesMarketOrder,
   getMexcFuturesBalance,
   attachBinanceBracket, attachBracketExit,
+  getBinanceFuturesOrder, cancelBinanceFuturesOrder, placeBinanceFuturesStopClose,
 }

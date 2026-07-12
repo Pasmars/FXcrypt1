@@ -23,6 +23,8 @@ function Signals({ go, onUpsell }) {
   const [riskUsd, setRiskUsd] = sgS('50');
   // Auto TP1 + stop bracket on the exchange (opt-in, Binance).
   const [bracket, setBracket] = sgS(false);
+  // Bracket exit style: 'full' banks all at TP1; 'trail' banks half + trails the runner.
+  const [exitMode, setExitMode] = sgS('full');
   const [scan, setScan] = sgS({ on: false, ago: 'cached', found: 0 });
   // Scan modal state: open + done + result summary so the user sees progress
   // and the fresh setups the moment a scan finishes (no page refresh needed).
@@ -48,6 +50,7 @@ function Signals({ go, onUpsell }) {
       if (p.riskMode) setRiskMode(p.riskMode);
       if (p.riskUsd != null) setRiskUsd(String(p.riskUsd));
       if (typeof p.bracketExit === 'boolean') setBracket(p.bracketExit);
+      if (p.exitMode) setExitMode(p.exitMode);
     }).catch(() => {});
     return () => { alive = false; };
   }, []);
@@ -68,6 +71,11 @@ function Signals({ go, onUpsell }) {
     const next = !bracket;
     setBracket(next);
     try { await window.FXAPI.saveSignalPrefs({ bracketExit: next }); } catch (e) { setBracket(!next); }
+  };
+  const changeExitMode = async (m) => {
+    const prev = exitMode;
+    setExitMode(m);
+    try { await window.FXAPI.saveSignalPrefs({ exitMode: m }); } catch (e) { setExitMode(prev); }
   };
   // Telegram delivery: enabling also turns on the agent scheduler so signals
   // are actually generated and pushed; disabling just stops delivery.
@@ -183,13 +191,25 @@ function Signals({ go, onUpsell }) {
       {/* Exchange-side TP1 + hard stop (opt-in, Binance) */}
       {auto && (
         <div style={{ padding: '0 16px 12px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 11, background: 'var(--surface)', borderRadius: 14, padding: '12px 14px', boxShadow: bracket ? 'inset 0 0 0 1.5px var(--accent)' : 'inset 0 0 0 1px var(--line)' }}>
-            <div style={{ width: 34, height: 34, borderRadius: 10, background: bracket ? 'var(--accent)' : 'var(--surface2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: bracket ? 'var(--on-accent)' : 'var(--accent)', flexShrink: 0 }}><Icon name="target" size={17} /></div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 13.5, fontWeight: 700 }}>Auto TP1 + hard stop</div>
-              <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 1, lineHeight: 1.45 }}>Places a take-profit at TP1 and a stop at SL on the exchange — banks the full position at TP1 for a higher win rate. Binance only; test with small size first.</div>
+          <div style={{ background: 'var(--surface)', borderRadius: 14, padding: '12px 14px', boxShadow: bracket ? 'inset 0 0 0 1.5px var(--accent)' : 'inset 0 0 0 1px var(--line)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
+              <div style={{ width: 34, height: 34, borderRadius: 10, background: bracket ? 'var(--accent)' : 'var(--surface2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: bracket ? 'var(--on-accent)' : 'var(--accent)', flexShrink: 0 }}><Icon name="target" size={17} /></div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 700 }}>Auto TP1 + hard stop</div>
+                <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 1, lineHeight: 1.45 }}>Places a take-profit at TP1 and a stop at SL on the exchange. Binance only; test with small size first.</div>
+              </div>
+              <Toggle on={bracket} onClick={toggleBracket} />
             </div>
-            <Toggle on={bracket} onClick={toggleBracket} />
+            {/* Exit style: bank the whole position at TP1, or bank half and let
+                the monitor trail the rest (futures; spot always banks all). */}
+            {bracket && (
+              <div style={{ marginTop: 11 }}>
+                <Segmented options={[{ value: 'full', label: 'Bank all at TP1' }, { value: 'trail', label: 'Half out · trail rest' }]} value={exitMode} onChange={changeExitMode} style={{ marginBottom: 7 }} />
+                <div style={{ fontSize: 11, color: 'var(--muted)', lineHeight: 1.5 }}>{exitMode === 'trail'
+                  ? 'Futures: takes half off at TP1, moves the stop to breakeven, then trails the runner (1R behind the peak, ½R after TP2) until it’s stopped out. Spot still banks the full position.'
+                  : 'Closes the whole position the moment TP1 prints — maximizes realized win rate.'}</div>
+              </div>
+            )}
           </div>
         </div>
       )}

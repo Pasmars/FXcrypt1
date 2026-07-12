@@ -17,6 +17,7 @@
 //     pnl (USDT), pnlPct (% of tradeUSDT margin), pnlEstimated: bool }
 const axios = require('axios')
 const crypto = require('crypto')
+const cexTrader = require('./cex-trader')
 
 const API_TIMEOUT = 10000
 const MAX_OPEN_MS = 30 * 24 * 3600000 // close as 'timeout' after 30 days
@@ -176,6 +177,110 @@ const openedMsOf = (t) => {
   return +o || 0
 }
 
+// Close-patch for a trade doc. pnlPct is relative to the margin (tradeUSDT).
+function closePatch(trade, exitReason, exitPrice, pnl, estimated) {
+  const margin = parseFloat(trade.tradeUSDT) || 0
+  return {
+    status: 'closed', exitReason,
+    exitPrice: exitPrice != null ? +exitPrice : null,
+    pnl: pnl != null ? +(+pnl).toFixed(4) : null,
+    pnlPct: pnl != null && margin > 0 ? +((pnl / margin) * 100).toFixed(2) : null,
+    pnlEstimated: !!estimated,
+  }
+}
+
+// Label a real exit by proximity to the trade's levels.
+function labelExitFor(trade, exitPrice) {
+  const tp1 = parseFloat(trade.tp1), sl = parseFloat(trade.stopLoss)
+  if (exitPrice > 0 && tp1 > 0 && Math.abs(exitPrice - tp1) / tp1 < 0.01) return 'tp1'
+  if (exitPrice > 0 && sl > 0 && Math.abs(exitPrice - sl) / sl < 0.01) return 'sl'
+  return 'manual'
+}
+
+// ── Trail-runner manager (Binance futures, bracket.mode === 'trail') ─────────
+// Lifecycle of a trail trade:
+//   armed   → half-position TP1 (reduceOnly) + full stop live on the exchange
+//   TP1 fills → cancel the stop, re-place it at BREAKEVEN, start trailing
+//   each run  → ratchet the stop behind the candle peak: gap = 1R (entry↔SL),
+//               tightening to 0.5R once price has cleared TP2; never below BE
+//   position flat → close the doc with REAL PnL from fills (TP1 + runner)
+// Returns { close: patch } | { patch: docPatch, note? } | null (nothing to do).
+async function manageTrailRunner(trade, creds, fetchCandles, now = Date.now()) {
+  const br = trade.bracket || {}
+  const symbol = trade.symbol
+  const long = trade.bias !== 'short'
+  const entry = parseFloat(trade.entryPrice), origSl = parseFloat(trade.stopLoss)
+  const tp1 = parseFloat(trade.tp1), tp2 = parseFloat(trade.tp2)
+  const openedMs = openedMsOf(trade)
+  const trail = trade.trail || null
+  if (!(entry > 0) || !(origSl > 0) || !(tp1 > 0) || !openedMs) return null
+
+  // 1) Position flat → the trade is done (stop fired, TP'd out, or manual).
+  const size = await binanceFuturesPositionAmt(creds.apiKey, creds.secret, symbol)
+  if (size === 0) {
+    let real = null
+    try { real = await binanceFuturesRealized(creds.apiKey, creds.secret, symbol, openedMs) } catch (_) {}
+    // Leftover reduce-only/closePosition orders on a flat position are inert,
+    // but clean them up so the order book stays tidy.
+    for (const oid of [trail?.stopOrderId, br.slOrderId, br.tpOrderId]) {
+      if (oid) await cexTrader.cancelBinanceFuturesOrder(creds.apiKey, creds.secret, symbol, oid).catch(() => {})
+    }
+    if (real && real.pnl != null) {
+      return { close: closePatch(trade, trail?.active ? 'trail' : labelExitFor(trade, real.exitPrice), real.exitPrice, real.pnl, false) }
+    }
+    // No fill history (window passed) → estimate: banked half at TP1 (if it
+    // fired) + runner out at the last trail stop, else the plain TP1/SL walk.
+    if (trail?.active) {
+      const q = baseQty(trade), dir = long ? 1 : -1
+      const est = (q / 2) * (tp1 - entry) * dir + (q / 2) * ((trail.stop || entry) - entry) * dir
+      return { close: closePatch(trade, 'trail', trail.stop || null, +est.toFixed(4), true) }
+    }
+    const candles = await fetchCandles(symbol)
+    const hit = candles && walkTp1Sl(candles, openedMs, trade.bias, tp1, origSl)
+    if (hit) return { close: closePatch(trade, hit.exitReason, hit.exitPrice, estPnl(trade, hit.exitPrice), true) }
+    const last = candles && candles[candles.length - 1]
+    return { close: closePatch(trade, 'manual', last ? last.close : null, last ? estPnl(trade, last.close) : null, true) }
+  }
+
+  // 2) TP1 not banked yet → poll the partial TP order.
+  if (!trail || !trail.active) {
+    if (!br.tpOrderId) return null
+    const ord = await cexTrader.getBinanceFuturesOrder(creds.apiKey, creds.secret, symbol, br.tpOrderId).catch(() => null)
+    if (!ord || ord.status !== 'FILLED') return null // still waiting (or API hiccup — retry next run)
+    // TP1 banked → swap the original stop for a breakeven stop and go live.
+    if (br.slOrderId) await cexTrader.cancelBinanceFuturesOrder(creds.apiKey, creds.secret, symbol, br.slOrderId).catch(() => {})
+    const { orderId, stopPrice } = await cexTrader.placeBinanceFuturesStopClose(
+      creds.apiKey, creds.secret, symbol, long ? 'SELL' : 'BUY', entry)
+    return {
+      patch: { partialTp1: true, trail: { active: true, stop: stopPrice, stopOrderId: orderId, peak: tp1, activatedAt: now } },
+      note: 'tp1-banked',
+    }
+  }
+
+  // 3) Trailing → ratchet the stop behind the candle peak since activation.
+  const candles = await fetchCandles(symbol)
+  if (!candles) return null
+  let peak = +trail.peak || tp1
+  for (const c of candles) {
+    if (c.time + 3600000 <= (trail.activatedAt || openedMs)) continue
+    peak = long ? Math.max(peak, c.high) : Math.min(peak, c.low)
+  }
+  const risk = Math.abs(entry - origSl)
+  const clearedTp2 = tp2 > 0 && (long ? peak >= tp2 : peak <= tp2)
+  const gap = clearedTp2 ? risk * 0.5 : risk
+  const cand = long ? peak - gap : peak + gap
+  const newStop = long ? Math.max(+trail.stop, cand, entry) : Math.min(+trail.stop, cand, entry)
+  // Only touch the exchange when the improvement is meaningful (> 0.05%).
+  const improved = long ? newStop > trail.stop * 1.0005 : newStop < trail.stop * 0.9995
+  if (!improved) {
+    return peak !== trail.peak ? { patch: { trail: { ...trail, peak } } } : null
+  }
+  if (trail.stopOrderId) await cexTrader.cancelBinanceFuturesOrder(creds.apiKey, creds.secret, symbol, trail.stopOrderId).catch(() => {})
+  const { orderId, stopPrice } = await cexTrader.placeBinanceFuturesStopClose(
+    creds.apiKey, creds.secret, symbol, long ? 'SELL' : 'BUY', newStop)
+  return { patch: { trail: { ...trail, stop: stopPrice, stopOrderId: orderId, peak } } }
+}
+
 // ── Per-trade resolution. Returns a patch to close the doc, or null to keep it
 // open. Never throws (caller logs), exchange calls each guarded. ─────────────
 async function resolveTrade(trade, creds, fetchCandles, now = Date.now()) {
@@ -183,21 +288,8 @@ async function resolveTrade(trade, creds, fetchCandles, now = Date.now()) {
   if (!openedMs) return null
   const symbol = trade.symbol
   const isFut = trade.marketType === 'futures'
-  const margin = parseFloat(trade.tradeUSDT) || 0
-  const finish = (exitReason, exitPrice, pnl, estimated) => ({
-    status: 'closed', exitReason,
-    exitPrice: exitPrice != null ? +exitPrice : null,
-    pnl: pnl != null ? +(+pnl).toFixed(4) : null,
-    pnlPct: pnl != null && margin > 0 ? +((pnl / margin) * 100).toFixed(2) : null,
-    pnlEstimated: !!estimated,
-  })
-  // Label the exit by proximity to the trade's levels (for real fills).
-  const labelExit = (exitPrice) => {
-    const tp1 = parseFloat(trade.tp1), sl = parseFloat(trade.stopLoss)
-    if (exitPrice > 0 && tp1 > 0 && Math.abs(exitPrice - tp1) / tp1 < 0.01) return 'tp1'
-    if (exitPrice > 0 && sl > 0 && Math.abs(exitPrice - sl) / sl < 0.01) return 'sl'
-    return 'manual'
-  }
+  const finish = (exitReason, exitPrice, pnl, estimated) => closePatch(trade, exitReason, exitPrice, pnl, estimated)
+  const labelExit = (exitPrice) => labelExitFor(trade, exitPrice)
 
   // 1) Futures: is the position flat on the exchange?
   if (isFut && creds) {
@@ -285,13 +377,50 @@ async function processCexExits(ctx) {
     return creds
   }
 
-  let closed = 0
+  let closed = 0, trailed = 0
   for (const doc of snap.docs) {
     const trade = doc.data()
     const uid = doc.ref.parent.parent && doc.ref.parent.parent.id
     if (!uid || !trade.symbol) continue
     try {
       const creds = await getCreds(uid, trade.exchange)
+
+      // Trail-runner trades (Binance futures, opt-in mode) get active exit
+      // management; everything else goes through the passive resolution ladder.
+      if (creds && trade.exchange === 'binance' && trade.marketType === 'futures' && trade.bracket?.mode === 'trail') {
+        const act = await manageTrailRunner(trade, creds, getCandles)
+        if (act?.patch) {
+          await doc.ref.set(act.patch, { merge: true })
+          trailed++
+          if (act.note === 'tp1-banked' && notify) {
+            await notify(uid, {
+              category: 'trades',
+              title: `🎯 ${trade.symbol} TP1 banked — half out`,
+              body: `Runner trailing · stop moved to breakeven ($${act.patch.trail.stop})`,
+              link: '/?goto=signals', tag: 'cex-exit',
+            }).catch(() => {})
+          }
+          continue
+        }
+        if (act?.close) {
+          act.close.closedAt = admin.firestore.FieldValue.serverTimestamp()
+          await doc.ref.set(act.close, { merge: true })
+          closed++
+          if (notify) {
+            const sign = act.close.pnl != null ? (act.close.pnl >= 0 ? '+' : '−') : ''
+            const amt = act.close.pnl != null ? `${sign}$${Math.abs(act.close.pnl).toFixed(2)}` : 'closed'
+            await notify(uid, {
+              category: 'trades',
+              title: `🏁 ${trade.symbol} runner closed ${amt}${act.close.pnlEstimated ? ' (est.)' : ''}`,
+              body: `${(trade.bias || 'long').toUpperCase()} futures · entry $${trade.entryPrice}${act.close.exitPrice ? ` → exit $${act.close.exitPrice}` : ''}`,
+              link: '/?goto=signals', tag: 'cex-exit',
+            }).catch(() => {})
+          }
+          continue
+        }
+        continue // position still open, nothing to ratchet this run
+      }
+
       const patch = await resolveTrade(trade, creds, getCandles)
       if (!patch) continue
       patch.closedAt = admin.firestore.FieldValue.serverTimestamp()
@@ -312,7 +441,7 @@ async function processCexExits(ctx) {
       console.warn(`cex-exit ${trade.symbol} (${uid.slice(0, 6)}): ${e.message}`)
     }
   }
-  return { checked: snap.size, closed }
+  return { checked: snap.size, closed, trailed }
 }
 
-module.exports = { processCexExits, resolveTrade, walkTp1Sl, estPnl, baseQty }
+module.exports = { processCexExits, resolveTrade, manageTrailRunner, walkTp1Sl, estPnl, baseQty }

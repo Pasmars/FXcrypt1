@@ -40,7 +40,9 @@ A correctness pass over the whole signal-bot loop plus the missing piece of trad
 - **Wrong-direction executions** — spot orders ignored `side` (a SHORT spot signal was market-*bought*; now refused with a clear "shorts are futures" error), and **Telegram approvals dropped marketType/leverage/side** (futures shorts became unleveraged spot buys; now full parity with the app path incl. bracket attach).
 - **Auto-execute decoupled from Telegram** — it only ran inside the TG-delivery block, so traders without Telegram never auto-executed.
 
-**[LIVE] CEX exit monitor (`processCexExits`, every 10 min)** — `cexTrades` docs now **close with realized PnL** (they were opened and never closed). Exchange truth first: futures position-flat detection with **real PnL from fills** (Binance `userTrades`, Bybit `closed-pnl`), spot **OCO leg status** for bracket trades; candle-walk TP1/SL estimate as fallback (flagged `pnlEstimated`); 30-day timeout close. Docs get `exitPrice / exitReason (tp1|sl|manual|timeout) / pnl / pnlPct`, one in-app push per close. This is the "lightweight CEX exit monitor" the roadmap called for — the *foundation* for partial-at-TP1 + trailing runners.
+**[LIVE] CEX exit monitor (`processCexExits`, every 10 min)** — `cexTrades` docs now **close with realized PnL** (they were opened and never closed). Exchange truth first: futures position-flat detection with **real PnL from fills** (Binance `userTrades`, Bybit `closed-pnl`), spot **OCO leg status** for bracket trades; candle-walk TP1/SL estimate as fallback (flagged `pnlEstimated`); 30-day timeout close. Docs get `exitPrice / exitReason (tp1|sl|manual|trail|timeout) / pnl / pnlPct`, one in-app push per close.
+
+**[LIVE] Trailing-runner exit mode (`exitMode: 'trail'`, Binance futures, opt-in)** — the "partial at TP1 + trail the runner" mode from the roadmap, built on the monitor: entry places a **half-position TP1** (reduce-only) + full hard stop; when TP1 banks, the monitor **moves the stop to breakeven** and then **ratchets it behind the 1h-candle peak** (1R gap, tightening to 0.5R once price clears TP2, never below BE) until the runner is stopped out — closed with **real PnL from fills** (TP1 partial + runner summed). Signals UI: "Bank all at TP1" / "Half out · trail rest" selector under the bracket toggle. Spot keeps full-close (OCO can't split).
 
 ---
 
@@ -304,7 +306,7 @@ If 2,000 active traders route **$3M/mo** swap volume at a blended **0.5%** -> **
 **Next 90 days (the remaining high-leverage work):**
 1. **WalletConnect / external signing + security audit** — the #1 trust and liability item; keys are still custodial. Do this before scaling spend.
 2. **Reliability**: RPC/endpoint redundancy + a public status/health page (paying users now expect uptime).
-3. **Finish CEX exit management** — extend the bracket-exit to **Bybit/MEXC** and add a **"partial at TP1 + trail the runner"** mode. The prerequisite **CEX exit monitor is now LIVE** (`processCexExits` closes `cexTrades` with realized PnL every 10 min); build the trailing mode on top of it. Validate the Binance bracket live with small size.
+3. **Finish CEX exit management** — the **exit monitor AND the "partial at TP1 + trail the runner" mode are now LIVE** (Binance futures). Remaining: extend brackets/trailing to **Bybit/MEXC**, and validate the Binance bracket + trail live with small size.
 4. **Growth**: exchange affiliate links, shareable trade/PnL cards, validate native APK push.
 5. **Depth**: backtesting, cross-session Pointer memory, chart-image/voice input; activate Glassnode MCP (public toggle) and lead marketing with the AI × on-chain-analytics differentiator.
 6. **Compliance**: Terms/disclaimers, geo-restriction review, and counsel on the now-live trading fee + auto-execution.

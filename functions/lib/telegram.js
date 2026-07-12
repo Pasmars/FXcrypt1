@@ -3432,6 +3432,7 @@ async function executeTgTrade(bot, db, admin, encryption, masterSecret, cexTrade
           symbol: signal.symbol, marketType, entrySide: side,
           tp1: parseFloat(signal.tp1), sl: parseFloat(signal.stopLoss),
           qty: parseFloat(result && result.raw && result.raw.executedQty) || 0,
+          mode: agentSettings.exitMode === 'trail' ? 'trail' : 'full',
         })
         bracket = { ok: true, data, note: null }
       } catch (e) {

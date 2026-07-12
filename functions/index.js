@@ -1656,7 +1656,7 @@ exports.processCexExits = functions.region('europe-west1')
       fetchCandles: signalTracker.fetchCandles,
       notify: (uid, msg) => notify.send(db, admin, uid, msg),
     })
-    if (res.closed) console.log(`cex exits: closed ${res.closed} of ${res.checked} open trades`)
+    if (res.closed || res.trailed) console.log(`cex exits: closed ${res.closed}, trail-managed ${res.trailed} of ${res.checked} open trades`)
     return null
   })
 
@@ -1959,6 +1959,8 @@ async function maybeAttachBracket(agentSettings, ex, creds, signal, marketType, 
     const data = await cexTrader.attachBracketExit(ex, creds, {
       symbol: signal.symbol, marketType, entrySide: side, tp1, sl,
       qty: parseFloat(entryResult && entryResult.raw && entryResult.raw.executedQty) || 0,
+      // 'trail' → half out at TP1, monitor moves stop to BE and trails the rest.
+      mode: agentSettings.exitMode === 'trail' ? 'trail' : 'full',
     })
     return { ok: true, data, note: null }
   } catch (e) {
@@ -2088,7 +2090,7 @@ exports.saveAgentSettings = fn.https.onCall(async (data, context) => {
   if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
 
   const uid = context.auth.uid
-  const allowed = ['enabled', 'exchanges', 'timeframe', 'minConfidence', 'riskPercent', 'maxConcurrentTrades', 'autoExecute', 'telegramSignals', 'scanInterval', 'marketTypes', 'riskMode', 'riskUsd', 'bracketExit']
+  const allowed = ['enabled', 'exchanges', 'timeframe', 'minConfidence', 'riskPercent', 'maxConcurrentTrades', 'autoExecute', 'telegramSignals', 'scanInterval', 'marketTypes', 'riskMode', 'riskUsd', 'bracketExit', 'exitMode']
   const settings = {}
   for (const k of allowed) {
     if (data[k] !== undefined) settings[k] = data[k]
@@ -2098,6 +2100,9 @@ exports.saveAgentSettings = fn.https.onCall(async (data, context) => {
   if (settings.riskMode !== undefined) settings.riskMode = settings.riskMode === 'fixed' ? 'fixed' : 'percent'
   if (settings.riskUsd !== undefined) { const n = parseFloat(settings.riskUsd); settings.riskUsd = Number.isFinite(n) ? Math.max(1, Math.min(n, 1000000)) : 50 }
   if (settings.bracketExit !== undefined) settings.bracketExit = !!settings.bracketExit
+  // Exit style when the bracket is on: 'full' banks everything at TP1;
+  // 'trail' banks half and trails the runner (Binance futures).
+  if (settings.exitMode !== undefined) settings.exitMode = settings.exitMode === 'trail' ? 'trail' : 'full'
   await db.doc(`users/${uid}`).set({ agentSettings: settings }, { merge: true })
   return { success: true }
 })
