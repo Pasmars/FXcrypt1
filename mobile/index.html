@@ -30,6 +30,15 @@
     @keyframes fxsweep { from { transform: translateX(-100%); } to { transform: translateX(350%); } }
     @keyframes fxblink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
 
+    /* Onboarding/auth: each step renders as a fixed-height column inside the
+       overflow-hidden app root, with a flex spacer pinning the social buttons +
+       sign-in toggle to the bottom edge. On short viewports (laptops, landscape)
+       that bottom row overflows and — with no scroll — becomes unreachable. Let
+       the active step scroll so it stays reachable. No-op on tall phone screens
+       where everything already fits. Applies at all widths. */
+    .fx-onboard { overflow: hidden; }
+    .fx-onboard > * { min-height: 0; overflow-y: auto; }
+
     /* ═══ Desktop (≥1024px): left nav rail, centered content column, dialog
        sheets. The app's styles are inline React styles, so structural overrides
        here need !important to win. Below 1024px nothing in this block applies —
