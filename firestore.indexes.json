@@ -71,6 +71,15 @@
       ]
     },
     {
+      "collectionGroup": "cexTrades",
+      "fieldPath": "status",
+      "indexes": [
+        { "order": "ASCENDING", "queryScope": "COLLECTION" },
+        { "order": "DESCENDING", "queryScope": "COLLECTION" },
+        { "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" }
+      ]
+    },
+    {
       "collectionGroup": "priceAlerts",
       "fieldPath": "on",
       "indexes": [

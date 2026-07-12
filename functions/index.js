@@ -20,6 +20,7 @@ const payments       = require('./lib/payments')
 const metering       = require('./lib/metering')
 const positions      = require('./lib/positions')
 const signalTracker  = require('./lib/signal-tracker')
+const cexExitMonitor = require('./lib/cex-exit-monitor')
 const gemTracker     = require('./lib/gem-tracker')
 const notify         = require('./lib/notify')
 const copytrader     = require('./lib/copytrader')
@@ -1639,6 +1640,23 @@ exports.processSignalOutcomes = functions.region('europe-west1')
   .onRun(async () => {
     const res = await signalTracker.resolveSignals(db, admin)
     if (res.resolved) console.log(`signal outcomes: resolved ${res.resolved} of ${res.checked} recent signals · recorded ${res.recorded} durable`)
+    return null
+  })
+
+// ── CEX Exit Monitor (runs every 10 minutes) ──────────────────────────────
+// Closes open cexTrades docs with realized PnL: exchange truth first (futures
+// position flat → real fill PnL; spot OCO leg status), candle-based TP1/SL
+// estimate as fallback (flagged pnlEstimated), 30-day timeout close.
+exports.processCexExits = functions.region('europe-west1')
+  .runWith({ timeoutSeconds: 300, memory: '512MB', secrets: ALL_SECRETS })
+  .pubsub.schedule('every 10 minutes')
+  .onRun(async () => {
+    const res = await cexExitMonitor.processCexExits({
+      db, admin, encryption, masterSecret: MASTER_SECRET(),
+      fetchCandles: signalTracker.fetchCandles,
+      notify: (uid, msg) => notify.send(db, admin, uid, msg),
+    })
+    if (res.closed) console.log(`cex exits: closed ${res.closed} of ${res.checked} open trades`)
     return null
   })
 
