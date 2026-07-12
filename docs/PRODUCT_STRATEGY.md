@@ -30,7 +30,21 @@ Sections 4/6/7/10 below are annotated with **[LIVE]** where a proposal has shipp
 
 ---
 
-## 0.1 Latest increment — signal-bot hardening + track-record depth (2026-07-11)
+## 0.2 Latest increment — signal-bot correctness audit + CEX exit monitor (2026-07-12)
+
+A correctness pass over the whole signal-bot loop plus the missing piece of trade accounting. All live in production:
+
+**Critical bugs fixed (full audit of generation → delivery → execution → resolution):**
+- **Track-record corruption** — the resolver's Bybit candle fallback read the wrong kline fields (its "high" was the low, "low" the close, "close" the turnover), corrupting any outcome resolved via Bybit. Fixed + parser-tested.
+- **Futures signals missing from the record** — the resolver only fetched Binance/Bybit *spot* candles, so futures-only symbols never resolved; now falls through **7 venues** (Binance spot/USDM ×3 bases, Bybit spot+linear, MEXC spot+contract, KuCoin).
+- **Wrong-direction executions** — spot orders ignored `side` (a SHORT spot signal was market-*bought*; now refused with a clear "shorts are futures" error), and **Telegram approvals dropped marketType/leverage/side** (futures shorts became unleveraged spot buys; now full parity with the app path incl. bracket attach).
+- **Auto-execute decoupled from Telegram** — it only ran inside the TG-delivery block, so traders without Telegram never auto-executed.
+
+**[LIVE] CEX exit monitor (`processCexExits`, every 10 min)** — `cexTrades` docs now **close with realized PnL** (they were opened and never closed). Exchange truth first: futures position-flat detection with **real PnL from fills** (Binance `userTrades`, Bybit `closed-pnl`), spot **OCO leg status** for bracket trades; candle-walk TP1/SL estimate as fallback (flagged `pnlEstimated`); 30-day timeout close. Docs get `exitPrice / exitReason (tp1|sl|manual|timeout) / pnl / pnlPct`, one in-app push per close. This is the "lightweight CEX exit monitor" the roadmap called for — the *foundation* for partial-at-TP1 + trailing runners.
+
+---
+
+## 0.1 Previous increment — signal-bot hardening + track-record depth (2026-07-11)
 
 A focused build-out that makes the **CEX signal bot** trustworthy and analyzable end-to-end, deepens the **verified track records**, and closes several delivery/UX gaps. All shipped to production (fxcrypt-app + fxcrypt-webapp + Cloud Functions):
 
@@ -184,7 +198,7 @@ Prioritized by **Impact x Effort** (a lightweight RICE view). [STAR] = highest l
 ### 6.2 Productivity / "make it stickier"
 | Feature | Status |
 |---|---|
-| **Auto-trade automation**: SL/TP, trailing stop, max-hold, auto-buy | **[LIVE]** DEX exit monitor + gem auto-buy with armed exits; **[LIVE] CEX bracket-exit (Binance): TP1 + hard stop** (Bybit/MEXC bracket + partial-at-TP1/trail still open) |
+| **Auto-trade automation**: SL/TP, trailing stop, max-hold, auto-buy | **[LIVE]** DEX exit monitor + gem auto-buy with armed exits; **[LIVE] CEX bracket-exit (Binance): TP1 + hard stop**; **[LIVE] CEX exit monitor** closing trades with realized PnL (Bybit/MEXC bracket + partial-at-TP1/trail still open) |
 | **CEX signal quality**: de-dup, cooldowns, opposite-bias guard, spot+futures, fixed-$ sizing | **[LIVE]** all shipped this cycle |
 | **Copy-trading / wallet mirroring** | **[LIVE]** follow → alert → Elite auto-copy + leaderboard |
 | **Real PnL** auto-computed | **[LIVE]** Position Manager (from executed trades) — *full on-chain-holdings link still open* |
@@ -290,7 +304,7 @@ If 2,000 active traders route **$3M/mo** swap volume at a blended **0.5%** -> **
 **Next 90 days (the remaining high-leverage work):**
 1. **WalletConnect / external signing + security audit** — the #1 trust and liability item; keys are still custodial. Do this before scaling spend.
 2. **Reliability**: RPC/endpoint redundancy + a public status/health page (paying users now expect uptime).
-3. **Finish CEX exit management** — extend the bracket-exit to **Bybit/MEXC** and add a **"partial at TP1 + trail the runner"** mode (needs a lightweight CEX exit monitor); validate the Binance bracket live with small size.
+3. **Finish CEX exit management** — extend the bracket-exit to **Bybit/MEXC** and add a **"partial at TP1 + trail the runner"** mode. The prerequisite **CEX exit monitor is now LIVE** (`processCexExits` closes `cexTrades` with realized PnL every 10 min); build the trailing mode on top of it. Validate the Binance bracket live with small size.
 4. **Growth**: exchange affiliate links, shareable trade/PnL cards, validate native APK push.
 5. **Depth**: backtesting, cross-session Pointer memory, chart-image/voice input; activate Glassnode MCP (public toggle) and lead marketing with the AI × on-chain-analytics differentiator.
 6. **Compliance**: Terms/disclaimers, geo-restriction review, and counsel on the now-live trading fee + auto-execution.
