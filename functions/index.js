@@ -1919,6 +1919,7 @@ exports.runAgentScan = functions
       if (!signal) continue
       const ref = await db.collection(`users/${uid}/signals`).add(signal)
       newSignals.push({ ...signal, id: ref.id })
+      recentSignals.push(signal) // in-run dedup (e.g. opposite-bias pair in the same scan)
     }
 
     await db.doc(`users/${uid}`).set(
@@ -2189,82 +2190,92 @@ exports.processAgentScans = functions
         })
       }
 
-      // Send Telegram signals
-      if (chatId && tgToken && agentSettings.telegramSignals !== false && newSignals.length > 0) {
-        const bot = tg.createBot(tgToken)
+      // Auto-execute if enabled and API key is set. Runs INDEPENDENT of the
+      // Telegram block below — a trader without Telegram linked (or with signal
+      // cards muted, or a failed card send) must still get their executions.
+      const tgBot = chatId && tgToken ? tg.createBot(tgToken) : null
+      if (autoExecute && newSignals.length > 0) {
+        const keys = agentSettings.cexKeys || {}
+        const futuresExchanges = new Set(['binance', 'bybit', 'mexc'])
+        for (const signal of newSignals.slice(0, 5)) {
+          const ex       = signal.exchange
+          const mktType  = signal.marketType || 'spot'
+          const leverage = signal.leverage   || 5
+          const side     = signal.bias === 'short' ? 'sell' : 'buy'
+
+          // Futures signals only supported on compatible exchanges; spot has no
+          // short side (placeOrderSafe would refuse) — skip both quietly.
+          if (mktType === 'futures' && !futuresExchanges.has(ex)) {
+            console.log(`Auto-execute skipped: ${signal.symbol} futures not supported on ${ex}`)
+            continue
+          }
+          if (mktType === 'spot' && side === 'sell') {
+            console.log(`Auto-execute skipped: ${signal.symbol} spot short (informational signal)`)
+            continue
+          }
+          if (!keys[ex]?.encryptedApiKey) continue
+
+          try {
+            const apiKey     = encryption.decrypt(keys[ex].encryptedApiKey, uid, ms)
+            const secret     = encryption.decrypt(keys[ex].encryptedSecret, uid, ms)
+            const passphrase = keys[ex].encryptedPassphrase
+              ? encryption.decrypt(keys[ex].encryptedPassphrase, uid, ms) : ''
+            const creds = { apiKey, secret, passphrase }
+
+            let usdtBalance = 100
+            try {
+              const bal = mktType === 'futures'
+                ? await cexTrader.getFuturesBalance(ex, creds, 'USDT')
+                : await cexTrader.getSpotBalance(ex, creds, 'USDT')
+              usdtBalance = bal.free
+            } catch (_) {}
+
+            const tradeAmt = signalGen.sizeTradeUsd(agentSettings, usdtBalance, null)
+            if (!(tradeAmt > 0)) { console.warn(`auto-exec ${signal.symbol}: trade size 0 (balance ${usdtBalance})`); continue }
+
+            const result = await cexTrader.placeOrderSafe(
+              ex, creds, signal.symbol, tradeAmt, signal.currentPrice, mktType, leverage, side
+            )
+
+            await db.doc(`users/${uid}/signals/${signal.id}`).update({
+              status: 'executed', approvedAt: admin.firestore.FieldValue.serverTimestamp(),
+              executedAt: admin.firestore.FieldValue.serverTimestamp(), orderId: result.orderId, tradeAmt,
+            })
+            const abx = await maybeAttachBracket(agentSettings, ex, creds, signal, mktType, side, result)
+            await db.collection(`users/${uid}/cexTrades`).add({
+              signalId: signal.id, exchange: ex, symbol: signal.symbol, bias: signal.bias,
+              marketType: mktType, leverage: mktType === 'futures' ? leverage : null,
+              orderId: result.orderId, tradeUSDT: tradeAmt, entryPrice: signal.entry,
+              stopLoss: signal.stopLoss, tp1: signal.tp1, tp2: signal.tp2, tp3: signal.tp3,
+              riskReward: signal.riskReward, confidence: signal.confidence,
+              bracket: abx.data, bracketPlaced: abx.ok, bracketNote: abx.note,
+              source: 'auto-agent', status: 'open', pnl: null,
+              openedAt: admin.firestore.FieldValue.serverTimestamp(), closedAt: null,
+            })
+            if (tgBot) await tgBot.sendMessage(chatId,
+              `🤖 *Auto-Executed!* ${signal.symbol} ${signal.bias.toUpperCase()}` +
+              (mktType === 'futures' ? ` ⚡${leverage}x` : '') +
+              `\nOrder ID: \`${result.orderId}\``,
+              { parse_mode: 'Markdown' }
+            ).catch(() => {})
+          } catch (execErr) {
+            console.error(`Auto-execute ${signal.symbol}:`, execErr.message)
+            if (tgBot) await tgBot.sendMessage(chatId, `⚠️ Auto-execute failed for ${signal.symbol}: ${execErr.message}`).catch(() => {})
+          }
+        }
+      }
+
+      // Send Telegram signal cards (delivery only — execution happens above).
+      if (tgBot && agentSettings.telegramSignals !== false && newSignals.length > 0) {
         for (const signal of newSignals.slice(0, 5)) {
           try {
             const { text, keyboard } = signalGen.formatTelegramSignalWithButtons(signal, signal.id)
-            const sentMsg = await bot.sendMessage(chatId, text, {
+            const sentMsg = await tgBot.sendMessage(chatId, text, {
               parse_mode: 'HTML',
               reply_markup: keyboard,
             })
             const msgId = sentMsg?.result?.message_id
             if (msgId) await db.doc(`users/${uid}/signals/${signal.id}`).update({ telegramMessageId: msgId })
-
-            // Auto-execute if enabled and API key is set
-            if (autoExecute) {
-              const keys       = agentSettings.cexKeys || {}
-              const ex         = signal.exchange
-              const mktType    = signal.marketType || 'spot'
-              const leverage   = signal.leverage   || 5
-              const side       = signal.bias === 'short' ? 'sell' : 'buy'
-              const futuresExchanges = new Set(['binance', 'bybit', 'mexc'])
-
-              // Futures signals only supported on compatible exchanges
-              if (mktType === 'futures' && !futuresExchanges.has(ex)) {
-                console.log(`Auto-execute skipped: ${signal.symbol} futures not supported on ${ex}`)
-              } else if (keys[ex]?.encryptedApiKey) {
-                try {
-                  const apiKey     = encryption.decrypt(keys[ex].encryptedApiKey, uid, ms)
-                  const secret     = encryption.decrypt(keys[ex].encryptedSecret, uid, ms)
-                  const passphrase = keys[ex].encryptedPassphrase
-                    ? encryption.decrypt(keys[ex].encryptedPassphrase, uid, ms) : ''
-                  const creds = { apiKey, secret, passphrase }
-
-                  let usdtBalance = 100
-                  try {
-                    const bal = mktType === 'futures'
-                      ? await cexTrader.getFuturesBalance(ex, creds, 'USDT')
-                      : await cexTrader.getSpotBalance(ex, creds, 'USDT')
-                    usdtBalance = bal.free
-                  } catch (_) {}
-
-                  const tradeAmt = signalGen.sizeTradeUsd(agentSettings, usdtBalance, null)
-                  if (!(tradeAmt > 0)) { console.warn(`auto-exec ${signal.symbol}: trade size 0 (balance ${usdtBalance})`); continue }
-
-                  const result = await cexTrader.placeOrderSafe(
-                    ex, creds, signal.symbol, tradeAmt, signal.currentPrice, mktType, leverage, side
-                  )
-
-                  await db.doc(`users/${uid}/signals/${signal.id}`).update({
-                    status: 'executed', approvedAt: admin.firestore.FieldValue.serverTimestamp(),
-                    executedAt: admin.firestore.FieldValue.serverTimestamp(), orderId: result.orderId, tradeAmt,
-                  })
-                  const abx = await maybeAttachBracket(agentSettings, ex, creds, signal, mktType, side, result)
-                  await db.collection(`users/${uid}/cexTrades`).add({
-                    signalId: signal.id, exchange: ex, symbol: signal.symbol, bias: signal.bias,
-                    marketType: mktType, leverage: mktType === 'futures' ? leverage : null,
-                    orderId: result.orderId, tradeUSDT: tradeAmt, entryPrice: signal.entry,
-                    stopLoss: signal.stopLoss, tp1: signal.tp1, tp2: signal.tp2, tp3: signal.tp3,
-                    riskReward: signal.riskReward, confidence: signal.confidence,
-                    bracket: abx.data, bracketPlaced: abx.ok, bracketNote: abx.note,
-                    source: 'auto-agent', status: 'open', pnl: null,
-                    openedAt: admin.firestore.FieldValue.serverTimestamp(), closedAt: null,
-                  })
-                  await bot.sendMessage(chatId,
-                    `🤖 *Auto-Executed!* ${signal.symbol} ${signal.bias.toUpperCase()}` +
-                    (mktType === 'futures' ? ` ⚡${leverage}x` : '') +
-                    `\nOrder ID: \`${result.orderId}\``,
-                    { parse_mode: 'Markdown' }
-                  ).catch(() => {})
-                } catch (execErr) {
-                  console.error(`Auto-execute ${signal.symbol}:`, execErr.message)
-                  await bot.sendMessage(chatId, `⚠️ Auto-execute failed for ${signal.symbol}: ${execErr.message}`).catch(() => {})
-                }
-              }
-            }
-
             await new Promise(r => setTimeout(r, 500)) // rate limit between TG messages
           } catch (tgErr) {
             const tgDesc = tgErr && tgErr.response && tgErr.response.data && tgErr.response.data.description

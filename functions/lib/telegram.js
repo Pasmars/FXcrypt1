@@ -1457,7 +1457,8 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
         const exchanges   = agentSet.exchanges   || ['binance', 'mexc', 'bybit', 'kucoin']
         const timeframe   = agentSet.timeframe   || '4H'
         const minConf     = agentSet.minConfidence || 70
-        const marketTypes = agentSet.marketTypes || ['spot']
+        // Default to BOTH spot + futures (same as the app's scans).
+        const marketTypes = agentSet.marketTypes && agentSet.marketTypes.length ? agentSet.marketTypes : ['spot', 'futures']
 
         const allAnalyses = []
         if (marketTypes.includes('spot')) {
@@ -3066,7 +3067,8 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
             const exchanges  = agentSet.exchanges  || ['binance', 'mexc', 'bybit', 'kucoin']
             const timeframe  = agentSet.timeframe  || '4H'
             const minConf    = agentSet.minConfidence || 70
-            const marketTypes = agentSet.marketTypes || ['spot']
+            // Default to BOTH spot + futures (same as the app's scans).
+            const marketTypes = agentSet.marketTypes && agentSet.marketTypes.length ? agentSet.marketTypes : ['spot', 'futures']
 
             const allAnalyses = []
             // Spot scan — limit to 2 exchanges for Telegram-triggered scans
@@ -3384,23 +3386,58 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
 }
 
 // ── Shared CEX trade executor (used by both direct and picker paths) ──────────
+// Mirrors the app's approveTrade path: honours the signal's marketType /
+// leverage / side (a futures short must NOT become a spot buy), sizes from the
+// matching account balance, and best-effort attaches the TP1+SL bracket when
+// the trader opted in.
 async function executeTgTrade(bot, db, admin, encryption, masterSecret, cexTrader, signalGen, chatId, uid, signalId, signal, agentSettings, keys, ex) {
-  await bot.sendMessage(chatId, `⏳ Executing *${signal.symbol}* ${signal.bias?.toUpperCase()} on *${ex.toUpperCase()}*…`, { parse_mode: 'Markdown' }).catch(() => {})
+  const marketType = signal.marketType || 'spot'
+  const leverage   = signal.leverage   || 5
+  const side       = signal.bias === 'short' ? 'sell' : 'buy'
+
+  if (marketType === 'futures' && !['binance', 'bybit', 'mexc'].includes(ex)) {
+    await bot.sendMessage(chatId, `❌ *${signal.symbol}* is a futures signal — supported on Binance, Bybit and MEXC only (not ${ex.toUpperCase()}).`, { parse_mode: 'Markdown' }).catch(() => {})
+    return
+  }
+
+  await bot.sendMessage(chatId, `⏳ Executing *${signal.symbol}* ${signal.bias?.toUpperCase()}${marketType === 'futures' ? ` ⚡${leverage}x` : ''} on *${ex.toUpperCase()}*…`, { parse_mode: 'Markdown' }).catch(() => {})
   try {
     const apiKey     = encryption.decrypt(keys[ex].encryptedApiKey, uid, masterSecret)
     const secret     = encryption.decrypt(keys[ex].encryptedSecret, uid, masterSecret)
     const passphrase = keys[ex].encryptedPassphrase
       ? encryption.decrypt(keys[ex].encryptedPassphrase, uid, masterSecret) : ''
+    const creds = { apiKey, secret, passphrase }
 
-    let usdtBal   = 100
-    try { const b = await cexTrader.getSpotBalance(ex, { apiKey, secret, passphrase }, 'USDT'); usdtBal = b.free } catch (_) {}
+    // Balance from the account that will actually hold the trade.
+    let usdtBal = 100
+    try {
+      const b = marketType === 'futures'
+        ? await cexTrader.getFuturesBalance(ex, creds, 'USDT')
+        : await cexTrader.getSpotBalance(ex, creds, 'USDT')
+      usdtBal = b.free
+    } catch (_) {}
 
     // Size by the trader's configured mode: % of balance or fixed USDT amount.
     const tradeAmt = signalGen.sizeTradeUsd(agentSettings, usdtBal, null)
 
     // placeOrderSafe validates symbol listing, min notional, and uses each
     // exchange's "buy by quote" endpoint so step-size precision never causes 400s
-    const result = await cexTrader.placeOrderSafe(ex, { apiKey, secret, passphrase }, signal.symbol, tradeAmt, signal.currentPrice)
+    const result = await cexTrader.placeOrderSafe(ex, creds, signal.symbol, tradeAmt, signal.currentPrice, marketType, leverage, side)
+
+    // Best-effort exchange-side TP1 + hard stop (opt-in, same policy as the app).
+    let bracket = { ok: false, data: null, note: null }
+    if (agentSettings.bracketExit === true && signal.tp1 > 0 && signal.stopLoss > 0) {
+      try {
+        const data = await cexTrader.attachBracketExit(ex, creds, {
+          symbol: signal.symbol, marketType, entrySide: side,
+          tp1: parseFloat(signal.tp1), sl: parseFloat(signal.stopLoss),
+          qty: parseFloat(result && result.raw && result.raw.executedQty) || 0,
+        })
+        bracket = { ok: true, data, note: null }
+      } catch (e) {
+        bracket = { ok: false, data: null, note: e && e.unsupported ? `${ex.toUpperCase()} auto-bracket isn't supported yet` : `bracket failed: ${(e && e.message) || 'error'}` }
+      }
+    }
 
     await db.doc(`users/${uid}/signals/${signalId}`).update({
       status: 'executed', approvedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -3409,21 +3446,24 @@ async function executeTgTrade(bot, db, admin, encryption, masterSecret, cexTrade
     })
     await db.collection(`users/${uid}/cexTrades`).add({
       signalId, exchange: ex, symbol: signal.symbol, bias: signal.bias,
+      marketType, leverage: marketType === 'futures' ? leverage : null,
       orderId: result.orderId, tradeUSDT: tradeAmt, entryPrice: signal.entry,
       stopLoss: signal.stopLoss, tp1: signal.tp1, tp2: signal.tp2, tp3: signal.tp3,
       riskReward: signal.riskReward, confidence: signal.confidence,
+      bracket: bracket.data, bracketPlaced: bracket.ok, bracketNote: bracket.note,
       source: 'telegram-approval', status: 'open', pnl: null,
       openedAt: admin.firestore.FieldValue.serverTimestamp(), closedAt: null,
     })
 
     await bot.sendMessage(chatId,
       `✅ *Trade Executed!*\n\n` +
-      `Pair: *${signal.symbol}* ${signal.bias?.toUpperCase()}\n` +
+      `Pair: *${signal.symbol}* ${signal.bias?.toUpperCase()}${marketType === 'futures' ? ` ⚡${leverage}x` : ''}\n` +
       `Exchange: *${ex.toUpperCase()}*\n` +
       `USDT Value: ~$${tradeAmt.toFixed(2)}\n` +
       `Order ID: \`${result.orderId}\`\n\n` +
       `🛑 SL: $${signalGen.fmtPrice(signal.stopLoss)}\n` +
-      `🎯 TP1: $${signalGen.fmtPrice(signal.tp1)}`,
+      `🎯 TP1: $${signalGen.fmtPrice(signal.tp1)}` +
+      (bracket.ok ? `\n🧷 TP/SL placed on the exchange` : bracket.note ? `\n⚠️ ${bracket.note}` : ''),
       { parse_mode: 'Markdown' }
     ).catch(() => {})
   } catch (err) {

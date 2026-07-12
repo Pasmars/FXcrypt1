@@ -19,20 +19,59 @@ const axios = require('axios')
 const TRACK_WINDOW_MS = 7 * 24 * 3600000   // give a filled trade 7 days to resolve
 const LOOKBACK_MS = 8 * 24 * 3600000       // query window (> track window + slack)
 
-// 1h candles (up to ~8.3 days) as [{ time, high, low }]. Binance first (matches
-// most signals), Bybit as fallback for pairs Binance doesn't list.
+// 1h candles (up to ~8.3 days) as [{ time, high, low, close }], tried across
+// venues in order so every signal source can resolve: Binance spot, Binance
+// USDM futures (futures-only symbols like 1000PEPEUSDT), Bybit spot + linear,
+// MEXC spot + contract, KuCoin spot. First venue with data wins — cross-venue
+// 1h highs/lows track each other closely enough for TP/SL resolution.
 async function fetchCandles(symbol) {
+  // Binance-compatible kline rows: [openTime, open, high, low, close, …]
+  // (fapi1/fapi2 are official alternates — same rotation market-analyzer uses.)
+  for (const url of [
+    `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1h&limit=200`,
+    `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=1h&limit=200`,
+    `https://fapi1.binance.com/fapi/v1/klines?symbol=${symbol}&interval=1h&limit=200`,
+    `https://fapi2.binance.com/fapi/v1/klines?symbol=${symbol}&interval=1h&limit=200`,
+  ]) {
+    try {
+      const { data } = await axios.get(url, { timeout: 10000 })
+      if (Array.isArray(data) && data.length) return data.map((k) => ({ time: +k[0], high: +k[2], low: +k[3], close: +k[4] }))
+    } catch (_) { /* fall through */ }
+  }
+  // Bybit v5 rows (newest first): [startTime, open, high, low, close, volume, turnover]
+  for (const category of ['spot', 'linear']) {
+    try {
+      const { data } = await axios.get(`https://api.bybit.com/v5/market/kline?category=${category}&symbol=${symbol}&interval=60&limit=200`, { timeout: 10000 })
+      const list = data?.result?.list
+      if (Array.isArray(list) && list.length) {
+        return list.map((k) => ({ time: +k[0], high: +k[2], low: +k[3], close: +k[4] })).sort((a, b) => a.time - b.time)
+      }
+    } catch (_) { /* fall through */ }
+  }
+  // MEXC spot (Binance-compatible; 1h interval is "60m")
   try {
-    const { data } = await axios.get(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1h&limit=200`, { timeout: 10000 })
-    if (Array.isArray(data) && data.length) return data.map((k) => ({ time: k[0], high: +k[2], low: +k[3], close: +k[4] }))
+    const { data } = await axios.get(`https://api.mexc.com/api/v3/klines?symbol=${symbol}&interval=60m&limit=200`, { timeout: 10000 })
+    if (Array.isArray(data) && data.length) return data.map((k) => ({ time: +k[0], high: +k[2], low: +k[3], close: +k[4] }))
   } catch (_) { /* fall through */ }
+  // MEXC contract (BTCUSDT → BTC_USDT; parallel arrays, time in seconds)
   try {
-    const { data } = await axios.get(`https://api.bybit.com/v5/market/kline?category=spot&symbol=${symbol}&interval=60&limit=200`, { timeout: 10000 })
-    const list = data?.result?.list
-    if (Array.isArray(list) && list.length) {
-      return list.map((k) => ({ time: +k[0], high: +k[3], low: +k[4], close: +k[6] || +k[4] })).sort((a, b) => a.time - b.time)
+    const fxSym = symbol.replace(/USDT$/, '_USDT')
+    const end = Math.floor(Date.now() / 1000), start = end - 205 * 3600
+    const { data } = await axios.get(`https://contract.mexc.com/api/v1/contract/kline/${fxSym}?interval=Hour1&start=${start}&end=${end}`, { timeout: 10000 })
+    const d = data?.data
+    if (d?.time?.length) {
+      return d.time.map((t, i) => ({ time: +t * 1000, high: +d.high[i], low: +d.low[i], close: +d.close[i] }))
     }
-  } catch (_) { /* no data */ }
+  } catch (_) { /* fall through */ }
+  // KuCoin spot (BTCUSDT → BTC-USDT; rows newest first: [time(s), open, close, high, low, …])
+  try {
+    const kSym = symbol.replace(/USDT$/, '-USDT')
+    const { data } = await axios.get(`https://api.kucoin.com/api/v1/market/candles?type=1hour&symbol=${kSym}`, { timeout: 10000 })
+    const list = data?.data
+    if (Array.isArray(list) && list.length) {
+      return list.map((k) => ({ time: +k[0] * 1000, high: +k[3], low: +k[4], close: +k[2] })).sort((a, b) => a.time - b.time)
+    }
+  } catch (_) { /* no data anywhere */ }
   return null
 }
 
@@ -125,8 +164,11 @@ const outcomeRecord = (uid, sigId, s, res) => ({
 // and fold outcomes into the daily aggregates.
 async function resolveSignals(db, admin) {
   const cutoff = Date.now() - LOOKBACK_MS
+  // Generous limit: the query can't exclude already-resolved docs (Firestore
+  // can't filter on a missing field), so a low cap risks starving unresolved
+  // signals behind resolved ones.
   const snap = await db.collectionGroup('signals')
-    .where('generatedAt', '>', cutoff).limit(400).get()
+    .where('generatedAt', '>', cutoff).limit(1000).get()
   if (snap.empty) return { checked: 0, resolved: 0 }
 
   const unresolved = snap.docs.filter((d) => !d.data().outcome)

@@ -564,6 +564,11 @@ async function placeOrderSafe(exchange, credentials, symbol, usdtAmount, _curren
   }
 
   // ── Spot path ─────────────────────────────────────────────────────────────
+  // Spot has no short side — silently market-buying a 'sell' entry would place
+  // a bet in the WRONG direction. Refuse with a clear message instead.
+  if (String(side).toLowerCase() === 'sell') {
+    throw new Error(`${symbol} is a SHORT setup — spot orders can only buy. Execute shorts as futures on Binance, Bybit or MEXC.`)
+  }
   const info = await getSymbolInfo(exchange, symbol)
   if (info === null) {
     throw new Error(`${symbol} is not listed on ${exchange.toUpperCase()}. Choose another exchange for this trade.`)
