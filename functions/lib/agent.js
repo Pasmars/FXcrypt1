@@ -59,7 +59,7 @@ const SYSTEM = `You are the FXcrypt Operations Agent — the brain that monitors
 
 The app trades memecoins/tokens across BSC, ETH, SOL, Base and TON via DEXs, runs a "gem scanner" that hunts new tokens, and supports CEX/arbitrage. You can read live app state with your tools and answer questions, summarize activity, flag risks, and recommend actions.
 
-You have read/analysis access to most of the app: live balances, bot config, recent trades and gem alerts, the gem scanner, token price/safety lookups, cross-DEX arbitrage scanning, the CEX/futures signal engine (technical analysis across Binance/MEXC/Bybit/KuCoin), recent signals, CEX exchange balances, token holder counts, and the **Token Tracker** — you can view the owner's tracked-token watchlist (with live prices), pull full info for any token, add/remove tokens from the watchlist, search tokens across all chains by name or contract address, and run **bubble-map holder analysis** (top holders, top-10 concentration, linked-wallet clusters) to flag whale/insider/bundling risk.
+You have read/analysis access to most of the app: live balances, bot config, recent trades and gem alerts, the gem scanner, token price/safety lookups, cross-DEX arbitrage scanning, the CEX/futures signal engine (technical analysis across Binance/MEXC/Bybit/KuCoin), deep single-symbol TA via analyze_symbol (score/bias/structure + trade levels), macro context (get_market_context: global mcap, BTC dominance, Fear & Greed), perp funding rates, recent signals, the owner's CEX signal-bot trades with realized PnL and trailing-stop state (get_cex_trades) and signal-bot config (get_signal_settings), CEX exchange balances, token holder counts, and the **Token Tracker** — you can view the owner's tracked-token watchlist (with live prices), pull full info for any token, add/remove tokens from the watchlist, search tokens across all chains by name or contract address, and run **bubble-map holder analysis** (top holders, top-10 concentration, linked-wallet clusters) to flag whale/insider/bundling risk. For a trade opinion on a specific coin: analyze_symbol first, add get_market_context / get_funding_rate for backdrop, then give one clear verdict with levels and invalidation.
 
 OFF-LIMITS: you have NO access to the user's Wallet page (portfolio management, send/receive, private keys) or the PnL Calculator. If asked to do either, politely decline and say it's not available to you.
 
@@ -82,17 +82,22 @@ const TOOLS = [
   fnTool('get_crypto_price', 'Quick spot USD price + 24h change for coins by CoinGecko id (e.g. bitcoin, ethereum, solana, binancecoin). Use lookup_token if you only know the name/ticker.', { properties: { ids: { type: 'array', items: { type: 'string' } } }, required: ['ids'] }),
   fnTool('web_search', 'Search the live web & news for crypto research — project/coin background, market trends & narratives, regulation and GOVERNMENT POLICY, hacks, exchange listings, partnerships, macro events, and anything current. Returns recent articles (title, source, date, link, snippet). Use this for current events, opinions, policy and "what is happening with X" — anything beyond on-chain/market-data tools.', { properties: { query: { type: 'string', description: 'What to research, e.g. "US crypto regulation 2026" or "Solana ecosystem news"' }, recency: { type: 'string', enum: ['day', 'week', 'month', 'any'], description: 'How fresh, default week' } }, required: ['query'] }),
   fnTool('check_token', 'Safety/honeypot check for a token contract on a chain (tax, honeypot risk).', { properties: { chain: { type: 'string', enum: ['bsc', 'eth', 'sol', 'base'] }, address: { type: 'string' } }, required: ['chain', 'address'] }),
-  fnTool('get_token_holders', 'Holder count for a token contract (tracker / bubble-map data).', { properties: { chain: { type: 'string', enum: ['bsc', 'eth', 'sol'] }, address: { type: 'string' } }, required: ['chain', 'address'] }),
+  fnTool('get_token_holders', 'Holder count for a token contract (tracker / bubble-map data).', { properties: { chain: { type: 'string', enum: ['bsc', 'eth', 'sol', 'base'] }, address: { type: 'string' } }, required: ['chain', 'address'] }),
   fnTool('scan_arbitrage', 'Scan cross-DEX arbitrage opportunities (price spreads for the same token across DEXs).', { properties: { chains: { type: 'array', items: { type: 'string', enum: ['bsc', 'sol'] }, description: 'default bsc,sol' }, minSpread: { type: 'number', description: 'min % spread, default 0.3' }, minLiqUsd: { type: 'integer', description: 'min liquidity USD, default 20000' } } }),
   fnTool('scan_signals', 'Generate CEX/futures trade signals via technical analysis on an exchange. Slow (~20-40s).', { properties: { exchange: { type: 'string', enum: ['binance', 'mexc', 'bybit', 'kucoin'], description: 'default binance' }, timeframe: { type: 'string', description: 'e.g. 1H, 4H, 1D (default 4H)' }, marketType: { type: 'string', enum: ['spot', 'futures'], description: 'default spot' }, minScore: { type: 'integer' } } }),
   fnTool('get_recent_signals', 'Most recent trade signals the AI signal agent generated.', { properties: { limit: { type: 'integer', description: 'How many (max 20)' } } }),
   fnTool('get_track_record', "The VERIFIED performance track record of the app's own two bots — the CEX/futures SIGNAL scanner and the on-chain GEM scanner. Signals are resolved server-side against their SL/TP using exchange candles (win rate, avg R multiple, TP1/2/3 vs SL breakdown) over 30 & 90 days. Gems are re-priced at their 24h/7d marks (median/best return, up-rate) plus a 90-day win/loss record. Also returns a sample of individual recent WON/LOST outcomes — for signals each item includes when it was CALLED (generatedAt) and when it HIT TP/SL (hitAt) in epoch ms, entry, stopLoss, tp1/2/3, outcomeR (R multiple), confidence, exchange, timeframe, marketType and leverage — so you can analyze timing, hold duration and setup quality. Use this whenever the owner asks how the signal bot or gem scanner has performed, its win rate/edge, or to analyze/critique either track record.", { properties: { bot: { type: 'string', enum: ['signal', 'gem', 'both'], description: "Which bot's record (default both)" }, outcomes: { type: 'boolean', description: 'Include a sample of individual won/lost items with full per-signal detail (default true)' } } }),
   fnTool('get_cex_balances', "USDT spot (and futures) balances on the owner's connected CEX exchange API keys.", { properties: {} }),
-  fnTool('get_token_info', 'Full Token-Tracker view for one token by contract address: price, market cap, 24h volume, liquidity, 24h change, holders.', { properties: { chain: { type: 'string', enum: ['bsc', 'eth', 'sol'] }, address: { type: 'string' } }, required: ['chain', 'address'] }),
+  fnTool('get_token_info', 'Full Token-Tracker view for one token by contract address: price, market cap, 24h volume, liquidity, 24h change, holders.', { properties: { chain: { type: 'string', enum: ['bsc', 'eth', 'sol', 'base'] }, address: { type: 'string' } }, required: ['chain', 'address'] }),
   fnTool('get_tracked_tokens', "The owner's FULL watchlist — both their Markets-tab starred coins/tokens AND their Token Tracker list, merged and deduped — each with live price, 24h change, market cap, volume, liquidity. Use this whenever they mention 'my watchlist', 'my tracked tokens', 'coins I'm watching', etc.", { properties: {} }),
   fnTool('track_token', "Add a token to the owner's Token Tracker watchlist. Accepts a name/symbol (resolved automatically to the best-liquidity match) OR a contract address. Do NOT ask the user for a contract address — pass the name as `query`.", { properties: { query: { type: 'string', description: 'Token name, symbol, or contract address' }, chain: { type: 'string', enum: ['bsc', 'eth', 'sol', 'base'], description: 'Optional — narrows the search if known' }, address: { type: 'string', description: 'Optional — only if you already have the exact contract' }, name: { type: 'string' }, symbol: { type: 'string' } } }),
   fnTool('untrack_token', "Remove a token from the owner's Token Tracker watchlist.", { properties: { chain: { type: 'string', enum: ['bsc', 'eth', 'sol'] }, address: { type: 'string' } }, required: ['chain', 'address'] }),
   fnTool('get_bubble_map', 'Bubble-map holder analysis for a token: top holders with %, top-10 concentration, contract holders, and connected-wallet clusters (whale/insider/bundling risk). EVM via Moralis, SOL via Helius.', { properties: { chain: { type: 'string', enum: ['bsc', 'eth', 'base', 'sol'] }, address: { type: 'string' } }, required: ['chain', 'address'] }),
+  fnTool('analyze_symbol', "Deep on-demand technical analysis of ONE CEX symbol (e.g. BTCUSDT, SOLUSDT) — the same engine the signal scanner uses, focused on a single pair so it's fast (~3s). Returns the full read: score (0-100), bias (long/short/neutral), RSI, MACD, EMAs, ATR, volume ratio, ADX, market structure (BOS/CHoCH, order blocks, FVGs, swing points), and — when the setup qualifies — computed trade levels (entry zone, stop, TP1/2/3, R:R, suggested leverage for futures). Use this whenever the owner asks 'analyze X', 'is X a long or short here', 'levels for X', or before giving any trade opinion on a specific coin.", { properties: { symbol: { type: 'string', description: 'Pair symbol like BTCUSDT (USDT-quoted)' }, exchange: { type: 'string', enum: ['binance', 'bybit', 'mexc', 'kucoin'], description: 'default binance' }, timeframe: { type: 'string', description: '15M, 1H, 4H or 1D (default 4H)' }, marketType: { type: 'string', enum: ['spot', 'futures'], description: 'default spot; futures adds TradingView confirmation + leverage' } }, required: ['symbol'] }),
+  fnTool('get_market_context', 'Macro market context for framing any analysis: global crypto market cap + 24h change, BTC dominance, total volume (CoinGecko global) and the Fear & Greed index (value, label, yesterday). Cheap and fast — call it when the owner asks how the market is doing, or to set the backdrop before a trade opinion.', { properties: {} }),
+  fnTool('get_funding_rate', 'Perpetual futures funding rate + mark price for a symbol (Binance USDM, Bybit fallback). Positive = longs pay shorts (crowded longs); negative = shorts pay. Useful for futures bias, squeeze risk and sentiment on a specific coin.', { properties: { symbol: { type: 'string', description: 'Pair like BTCUSDT' } }, required: ['symbol'] }),
+  fnTool('get_cex_trades', "The owner's CEX signal-bot trades (the `cexTrades` record): open positions and closed trades with realized PnL. Each item: symbol, bias, spot/futures + leverage, entry, size (USDT), SL/TP levels, whether an exchange-side bracket was placed, trail state (partial TP1 banked? current trailing stop?), and for closed trades exitPrice / exitReason (tp1|sl|manual|trail|timeout) / pnl / pnlPct / pnlEstimated. Use for 'how are my trades doing', 'what's open', 'what did the bot make this week'.", { properties: { status: { type: 'string', enum: ['open', 'closed', 'all'], description: 'default all' }, limit: { type: 'integer', description: 'max 25, default 10' } } }),
+  fnTool('get_signal_settings', "The owner's CEX signal-bot configuration: auto-scan on/off, auto-execute on/off, market types scanned, timeframe, min confidence, position sizing mode (% of balance vs fixed $ and the values), exchange-side bracket (TP1+stop) on/off and its exit style (bank-all-at-TP1 vs half-out-and-trail-the-runner), and which exchanges have API keys connected (never the keys). Use when the owner asks about their bot setup or you want to recommend a config change.", { properties: {} }),
   fnTool('propose_trade', 'Propose a trade for the owner to approve. Does NOT execute — it shows an Approve/Reject card to the owner and the trade runs only if they approve, from their own wallet. You MUST pass the exact on-chain contract address obtained from lookup_token / check_token / a gem scan — NEVER invent, guess, or recall an address from memory. Pass the real tokenSymbol too. Do NOT set slippage — the app uses the owner\'s configured slippage automatically. For buys, amount is the native-token amount (e.g. 0.01 BNB). For sells, percent is 1-100 (% of holdings).', { properties: { chain: { type: 'string', enum: ['bsc', 'eth', 'sol', 'base'] }, action: { type: 'string', enum: ['buy', 'sell'] }, tokenAddress: { type: 'string', description: 'Exact contract address from a tool lookup — never guessed' }, tokenSymbol: { type: 'string' }, amount: { type: 'string', description: 'Native amount for buys' }, percent: { type: 'integer', description: '1-100 for sells' }, rationale: { type: 'string', description: 'Why, including the safety read' } }, required: ['chain', 'action', 'tokenAddress', 'rationale'] }),
 ]
 
@@ -114,7 +119,9 @@ const SYSTEM_POINTER = `You are Pointer — the in-app AI assistant inside the F
 
 The app trades memecoins/tokens across BSC, ETH, SOL and Base via DEXs, runs a "gem scanner" for new tokens, tracks tokens, analyzes holders (bubble maps), and generates CEX/futures signals. You can read live app/market/wallet state with your tools and answer questions, summarize activity, flag risks, and recommend actions.
 
-You CAN: read the owner's wallet balances (BNB/ETH/SOL/MATIC/TON) and bot/wallet configuration (addresses and settings — never private keys) and their connected CEX exchange balances; **search the entire market — ANY coin or token by name, ticker, or contract address — via lookup_token (CoinGecko-listed coins with market-cap rank + on-chain DEX tokens across all chains)**; browse the live market (top coins, gainers, losers, volume) via get_market; **research the live web & news with web_search (crypto trends, narratives, project background, regulation & government policy, hacks, listings, macro)**; get live prices and market data; run the gem scanner; scan cross-DEX arbitrage; generate and read CEX/futures signals (technical analysis on Binance/MEXC/Bybit/KuCoin); **analyze the VERIFIED track record of the app's own signal & gem scanners — win rate, avg R, 24h/7d gem returns, and individual recent won/lost outcomes — via get_track_record (use it whenever they ask how a bot has performed or whether it has an edge)**; check token safety/honeypot risk and holder counts; view & manage the owner's **Token Tracker** watchlist (add/remove/search tokens); pull full info for any token; and run **bubble-map holder analysis** (top holders, top-10 concentration, linked-wallet clusters) to flag whale/insider/bundling risk.
+You CAN: read the owner's wallet balances (BNB/ETH/SOL/MATIC/TON) and bot/wallet configuration (addresses and settings — never private keys) and their connected CEX exchange balances; **search the entire market — ANY coin or token by name, ticker, or contract address — via lookup_token (CoinGecko-listed coins with market-cap rank + on-chain DEX tokens across all chains)**; browse the live market (top coins, gainers, losers, volume) via get_market; **research the live web & news with web_search (crypto trends, narratives, project background, regulation & government policy, hacks, listings, macro)**; get live prices and market data; run the gem scanner; scan cross-DEX arbitrage; generate and read CEX/futures signals (technical analysis on Binance/MEXC/Bybit/KuCoin); **run deep single-symbol technical analysis via analyze_symbol (score, bias, RSI/MACD/EMAs/ADX, market structure — BOS/CHoCH/order blocks/FVGs — plus computed entry/SL/TP levels when the setup qualifies)**; read macro context via get_market_context (global market cap, BTC dominance, Fear & Greed) and perp **funding rates via get_funding_rate**; **see the owner's CEX signal-bot trades via get_cex_trades (open positions, trailing-stop state, and closed trades with realized PnL)** and their **signal-bot configuration via get_signal_settings (auto-execute, sizing, bracket & exit style)**; **analyze the VERIFIED track record of the app's own signal & gem scanners — win rate, avg R, 24h/7d gem returns, and individual recent won/lost outcomes — via get_track_record (use it whenever they ask how a bot has performed or whether it has an edge)**; check token safety/honeypot risk and holder counts; view & manage the owner's **Token Tracker** watchlist (add/remove/search tokens); pull full info for any token; and run **bubble-map holder analysis** (top holders, top-10 concentration, linked-wallet clusters) to flag whale/insider/bundling risk.
+
+ANALYSIS METHOD: when the owner asks for a read on a specific coin ("analyze SOL", "long or short?", "levels for BTC"), do it like a pro desk: (1) analyze_symbol for the technical read (use futures marketType when they trade futures — it adds TradingView confirmation and leverage), (2) get_market_context for the macro backdrop, (3) get_funding_rate when it's a perp/futures question (crowded funding changes the risk), and (4) web_search only when a news catalyst could matter. Synthesize into ONE clear verdict: bias, key levels, invalidation, and what would change your mind. For on-chain tokens use check_token + get_bubble_map instead of analyze_symbol (they're not on CEXs). Never give a trade opinion on a specific coin without at least the analyze_symbol (or token-safety) read — data first, then the take.
 
 PRIVATE KEYS: you never see or expose private keys, seed phrases or the means to move funds without approval. You can report balances and addresses, but never reveal secrets.
 
@@ -558,12 +565,15 @@ async function runTool(name, input, ctx) {
 
       // Resolve the token: CoinGecko first (majors like BTC), DexScreener fallback
       // (on-chain tokens). Store the canonical id so the monitor prices it.
+      // Accept a CG match on EITHER the symbol or the coin name — "bitcoin" must
+      // resolve to BTC, not fall through to a same-named on-chain memecoin.
       let target = null
       try {
         const { data } = await axios.get('https://api.coingecko.com/api/v3/search?query=' + encodeURIComponent(q), { timeout: 10000 })
-        const c = (data?.coins || [])[0]
-        if (c && (c.symbol || '').toLowerCase() === q.toLowerCase().replace(/^\$/, '')) target = { cg: c.id, sym: c.symbol.toUpperCase(), name: c.name }
-        else if (c && !target) target = null // ambiguous CG match — try DexScreener before settling
+        const qn = q.toLowerCase().replace(/^\$/, '')
+        const c = (data?.coins || []).find((x) => (x.symbol || '').toLowerCase() === qn || (x.name || '').toLowerCase() === qn)
+          || ((data?.coins || [])[0] && (data.coins[0].market_cap_rank || 9999) <= 100 ? data.coins[0] : null)
+        if (c) target = { cg: c.id, sym: (c.symbol || q).toUpperCase(), name: c.name }
       } catch { /* fall through */ }
       if (!target) {
         try {
@@ -658,6 +668,141 @@ async function runTool(name, input, ctx) {
         } catch (e) { out[ex] = { error: e.message } }
       }))
       return out
+    }
+    case 'analyze_symbol': {
+      const symbol = String(input.symbol || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '')
+      if (!symbol) return { error: 'symbol required (e.g. BTCUSDT)' }
+      const sym = symbol.endsWith('USDT') ? symbol : symbol + 'USDT'
+      const ex = ['binance', 'bybit', 'mexc', 'kucoin'].includes(input.exchange) ? input.exchange : 'binance'
+      const tf = ['15M', '1H', '4H', '1D'].includes(String(input.timeframe || '').toUpperCase()) ? String(input.timeframe).toUpperCase() : '4H'
+      const mt = input.marketType === 'futures' ? 'futures' : 'spot'
+      const a = mt === 'futures'
+        ? await marketAnalyzer.analyzeSymbolFutures(sym, ['binance', 'bybit', 'mexc'].includes(ex) ? ex : 'binance', tf)
+        : await marketAnalyzer.analyzeSymbol(sym, ex, tf)
+      if (!a) return { error: `No candle data for ${sym} on ${ex.toUpperCase()} (${mt}) — check the symbol or try another exchange.` }
+      // Trade levels when the setup would qualify as a signal; otherwise the raw
+      // read still comes back so the model can explain WHY it doesn't qualify.
+      const sig = signalGen.generateSignal(a, [ex])
+      return {
+        symbol: sym, exchange: ex, timeframe: tf, marketType: mt,
+        score: a.score, bias: a.bias, currentPrice: a.currentPrice, reasons: a.reasons,
+        indicators: {
+          rsi: a.indicators.rsi != null ? Math.round(a.indicators.rsi) : null,
+          macdBullish: a.indicators.macd ? a.indicators.macd.histogram > 0 : null,
+          ema50: a.indicators.ema50 || null, ema200: a.indicators.ema200 || null,
+          priceVsEma50: a.indicators.ema50 ? +((a.currentPrice / a.indicators.ema50 - 1) * 100).toFixed(2) + '%' : null,
+          atr: a.indicators.atr || null,
+          volumeRatio: a.indicators.volumeRatio != null ? +a.indicators.volumeRatio.toFixed(2) : null,
+          adx: a.indicators.adx != null ? Math.round(a.indicators.adx) : null,
+        },
+        structure: {
+          bias: a.structure.bias, bos: a.structure.bos, choch: a.structure.choch,
+          nearOrderBlock: !!(a.structure.nearBullOB || a.structure.nearBearOB),
+          hasFVG: !!a.structure.relevantFVG,
+          lastSwingHigh: a.structure.swingHighs?.length ? a.structure.swingHighs[a.structure.swingHighs.length - 1].price : null,
+          lastSwingLow: a.structure.swingLows?.length ? a.structure.swingLows[a.structure.swingLows.length - 1].price : null,
+        },
+        tvRecommend: a.tvRecommend ? { label: a.tvRecommend.label, adx: a.tvRecommend.adx } : null,
+        qualifiesAsSignal: !!sig,
+        tradeLevels: sig ? { entry: sig.entry, entryZone: [sig.entryLow || sig.entry, sig.entryHigh || sig.entry], stopLoss: sig.stopLoss, tp1: sig.tp1, tp2: sig.tp2, tp3: sig.tp3, riskReward: sig.riskReward, leverage: sig.leverage, setup: sig.setup } : null,
+      }
+    }
+    case 'get_market_context': {
+      const out = {}
+      try {
+        const { data } = await axios.get('https://api.coingecko.com/api/v3/global', { timeout: 10000 })
+        const g = data?.data
+        if (g) out.global = {
+          totalMarketCapUsd: g.total_market_cap?.usd || null,
+          marketCapChange24h: g.market_cap_change_percentage_24h_usd != null ? +g.market_cap_change_percentage_24h_usd.toFixed(2) : null,
+          totalVolume24hUsd: g.total_volume?.usd || null,
+          btcDominance: g.market_cap_percentage?.btc != null ? +g.market_cap_percentage.btc.toFixed(1) : null,
+          ethDominance: g.market_cap_percentage?.eth != null ? +g.market_cap_percentage.eth.toFixed(1) : null,
+        }
+      } catch { out.global = { error: 'global market data unavailable' } }
+      try {
+        const { data } = await axios.get('https://api.alternative.me/fng/?limit=2', { timeout: 10000 })
+        const [today, yesterday] = data?.data || []
+        if (today) out.fearGreed = { value: +today.value, label: today.value_classification, yesterday: yesterday ? +yesterday.value : null }
+      } catch { out.fearGreed = { error: 'fear & greed unavailable' } }
+      try {
+        const { data } = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd&include_24hr_change=true', { timeout: 10000 })
+        out.majors = {
+          btc: data?.bitcoin ? { priceUsd: data.bitcoin.usd, change24h: +(data.bitcoin.usd_24h_change || 0).toFixed(2) } : null,
+          eth: data?.ethereum ? { priceUsd: data.ethereum.usd, change24h: +(data.ethereum.usd_24h_change || 0).toFixed(2) } : null,
+        }
+      } catch { /* majors optional */ }
+      return out
+    }
+    case 'get_funding_rate': {
+      const symbol = String(input.symbol || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '')
+      if (!symbol) return { error: 'symbol required' }
+      const sym = symbol.endsWith('USDT') ? symbol : symbol + 'USDT'
+      try {
+        const { data } = await axios.get(`https://fapi.binance.com/fapi/v1/premiumIndex?symbol=${sym}`, { timeout: 10000 })
+        if (data?.lastFundingRate != null) {
+          const rate = parseFloat(data.lastFundingRate)
+          return { symbol: sym, exchange: 'binance', fundingRatePct: +(rate * 100).toFixed(4), annualizedPct: +(rate * 3 * 365 * 100).toFixed(1), markPrice: parseFloat(data.markPrice) || null, nextFundingTime: data.nextFundingTime || null, read: rate > 0.0003 ? 'longs crowded (paying)' : rate < -0.0003 ? 'shorts crowded (paying)' : 'balanced' }
+        }
+      } catch { /* try bybit */ }
+      try {
+        const { data } = await axios.get(`https://api.bybit.com/v5/market/tickers?category=linear&symbol=${sym}`, { timeout: 10000 })
+        const t = data?.result?.list?.[0]
+        if (t?.fundingRate != null) {
+          const rate = parseFloat(t.fundingRate)
+          return { symbol: sym, exchange: 'bybit', fundingRatePct: +(rate * 100).toFixed(4), annualizedPct: +(rate * 3 * 365 * 100).toFixed(1), markPrice: parseFloat(t.markPrice) || null, read: rate > 0.0003 ? 'longs crowded (paying)' : rate < -0.0003 ? 'shorts crowded (paying)' : 'balanced' }
+        }
+      } catch { /* no data */ }
+      return { error: `No perpetual funding data found for ${sym} (is it listed on Binance/Bybit futures?)` }
+    }
+    case 'get_cex_trades': {
+      const n = Math.min(parseInt(input.limit) || 10, 25)
+      const status = ['open', 'closed', 'all'].includes(input.status) ? input.status : 'all'
+      let q = db.collection(`users/${uid}/cexTrades`).orderBy('openedAt', 'desc').limit(status === 'all' ? n : 50)
+      const snap = await q.get().catch(() => null)
+      if (!snap) return []
+      let rows = snap.docs.map((d) => {
+        const x = d.data()
+        return {
+          symbol: x.symbol, bias: x.bias, marketType: x.marketType || 'spot',
+          leverage: x.leverage || null, exchange: x.exchange,
+          sizeUsdt: x.tradeUSDT, entry: x.entryPrice, stopLoss: x.stopLoss, tp1: x.tp1,
+          status: x.status, source: x.source,
+          bracketPlaced: !!x.bracketPlaced, exitStyle: x.bracket?.mode || (x.bracketPlaced ? 'full' : null),
+          partialTp1Banked: !!x.partialTp1,
+          trailingStop: x.trail?.active ? x.trail.stop : null,
+          exitPrice: x.exitPrice ?? null, exitReason: x.exitReason || null,
+          pnl: x.pnl ?? null, pnlPct: x.pnlPct ?? null, pnlEstimated: x.pnlEstimated ?? null,
+          openedAt: x.openedAt?.toMillis ? x.openedAt.toMillis() : (x.openedAt || null),
+          closedAt: x.closedAt?.toMillis ? x.closedAt.toMillis() : (x.closedAt || null),
+        }
+      })
+      if (status !== 'all') rows = rows.filter((r) => r.status === status)
+      rows = rows.slice(0, n)
+      const closed = rows.filter((r) => r.status === 'closed' && r.pnl != null)
+      return {
+        note: 'CEX signal-bot trades. pnlEstimated=false means realized PnL from exchange fills; true = candle-based estimate. exitReason trail = runner mode (half at TP1, trailed rest).',
+        summary: { returned: rows.length, open: rows.filter((r) => r.status === 'open').length, closedWithPnl: closed.length, totalPnlUsdt: +closed.reduce((s, r) => s + r.pnl, 0).toFixed(2) },
+        trades: rows,
+      }
+    }
+    case 'get_signal_settings': {
+      const keys = agentSettings.cexKeys || {}
+      return {
+        autoScanEnabled: !!agentSettings.enabled,
+        autoExecute: !!agentSettings.autoExecute,
+        telegramSignals: agentSettings.telegramSignals !== false,
+        marketTypes: agentSettings.marketTypes && agentSettings.marketTypes.length ? agentSettings.marketTypes : ['spot', 'futures'],
+        timeframe: agentSettings.timeframe || '4H',
+        minConfidence: agentSettings.minConfidence || 70,
+        sizing: agentSettings.riskMode === 'fixed'
+          ? { mode: 'fixed', usdtPerTrade: agentSettings.riskUsd != null ? agentSettings.riskUsd : 50 }
+          : { mode: 'percent', percentOfBalance: agentSettings.riskPercent != null ? agentSettings.riskPercent : 2 },
+        bracketExit: agentSettings.bracketExit === true,
+        exitStyle: agentSettings.exitMode === 'trail' ? 'trail (half out at TP1, runner trailed 1R→0.5R behind peak)' : 'full (bank everything at TP1)',
+        connectedExchanges: Object.keys(keys).filter((k) => keys[k]?.encryptedApiKey),
+        note: 'bracketExit places exchange-side TP1+stop at entry (futures: Binance/Bybit/MEXC; spot: Binance OCO). The CEX exit monitor closes trades with realized PnL every 10 min.',
+      }
     }
     default:
       return { error: 'unknown tool' }
@@ -804,7 +949,10 @@ async function executeProposedTrade(ctx, p) {
   if (!wallets[p.chain]?.encryptedKey) throw new Error(`No ${p.chain.toUpperCase()} wallet configured`)
 
   const pk   = encryption.decrypt(wallets[p.chain].encryptedKey, uid, masterSecret)
-  const slip = settings.defaultSlippage || 5
+  // Use the slippage the approval card DISPLAYED (stamped on the proposal at
+  // propose time) so what the owner approved is what executes; same fallback
+  // semantics as the card for legacy proposals without one.
+  const slip = p.slippage != null ? p.slippage : (settings.defaultSlippage != null ? settings.defaultSlippage : 10)
   const gasX = settings.defaultGasMultiplier || 1.2
 
   let result
