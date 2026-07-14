@@ -199,6 +199,26 @@ export async function sendEvmToken(chain, contractAddr, to, amount, decimals, pr
 const RELAY_API = 'https://api.relay.link';
 const ZERO_ADDR = '0x0000000000000000000000000000000000000000';
 
+// Normalize a raw Relay /quote response into the shape the bridge UI shows.
+// Shared by the server-proxied path (preferred — some ISPs break browser TLS
+// to api.relay.link) and the direct-fetch fallback below.
+export function normalizeRelayQuote(body, outSymbol, amountNative) {
+  const steps = ((body && body.steps) || []).filter((s) => s.kind === 'transaction' && Array.isArray(s.items) && s.items.length);
+  if (!steps.length) throw new Error('Bridge route unavailable for this amount right now');
+  const d = (body && body.details) || {};
+  return {
+    steps,
+    amountIn: d.currencyIn?.amountFormatted || String(amountNative),
+    amountInUsd: d.currencyIn?.amountUsd || null,
+    amountOut: d.currencyOut?.amountFormatted || null,
+    amountOutUsd: d.currencyOut?.amountUsd || null,
+    outSymbol,
+    timeEstimateSec: d.timeEstimate != null ? +d.timeEstimate : null,
+    totalImpactUsd: d.totalImpact?.usd || null,
+    requestId: (steps[0] && steps[0].requestId) || (body && body.requestId) || null,
+  };
+}
+
 export async function relayBridgeQuote({ fromChain, toChain = 'rhood', amountNative, address }) {
   const from = CHAIN_CFG[fromChain]; const to = CHAIN_CFG[toChain];
   if (!from) throw new Error('Bridging from ' + String(fromChain).toUpperCase() + ' is not supported');
@@ -216,20 +236,7 @@ export async function relayBridgeQuote({ fromChain, toChain = 'rhood', amountNat
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body?.message || 'Bridge quote failed (' + res.status + ')');
-  const steps = (body.steps || []).filter((s) => s.kind === 'transaction' && Array.isArray(s.items) && s.items.length);
-  if (!steps.length) throw new Error('Bridge route unavailable for this amount right now');
-  const d = body.details || {};
-  return {
-    steps,
-    amountIn: d.currencyIn?.amountFormatted || String(amountNative),
-    amountInUsd: d.currencyIn?.amountUsd || null,
-    amountOut: d.currencyOut?.amountFormatted || null,
-    amountOutUsd: d.currencyOut?.amountUsd || null,
-    outSymbol: to.symbol,
-    timeEstimateSec: d.timeEstimate != null ? +d.timeEstimate : null,
-    totalImpactUsd: d.totalImpact?.usd || null,
-    requestId: (steps[0] && steps[0].requestId) || body.requestId || null,
-  };
+  return normalizeRelayQuote(body, to.symbol, amountNative);
 }
 
 // Sign & broadcast the quote's origin-chain transaction(s). Returns the last

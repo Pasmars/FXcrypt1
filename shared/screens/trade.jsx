@@ -507,6 +507,12 @@ function GemScanner({ go, onTrade, locked, onUpsell }) {
   const [scan, setScan] = tS({ on: false, ago: 'cached', found: 0 });
   // Scan progress modal: shows the scanning steps then the fresh gems.
   const [modal, setModal] = tS({ open: false, done: false, found: 0, total: 0, err: '' });
+  // Manually scanned gems get their OWN page ('results' view) so the user's
+  // scan isn't buried under the record cards and the auto-scanned feed. The
+  // last manual scan stays reachable from the main view.
+  const [manual, setManual] = tS([]);
+  const [manualAt, setManualAt] = tS(null);   // when the manual scan ran
+  const [view, setView] = tS('main');          // 'main' | 'results'
   // Telegram auto-alerts (botSettings.gemAutoEnabled). null = unknown/loading.
   const [tgAlerts, setTgAlerts] = tS(null);
   const [tgLinked, setTgLinked] = tS(false);
@@ -573,7 +579,7 @@ function GemScanner({ go, onTrade, locked, onUpsell }) {
       };
       const res = await window.FXAPI.scanGems(opts);
       const arr = Array.isArray(res) ? res : [];
-      if (arr.length) { setGems(arr); window.FX.gems = arr; }
+      if (arr.length) { setGems(arr); window.FX.gems = arr; setManual(arr); setManualAt(Date.now()); }
       const hi = arr.filter(g => g.score >= 80).length;
       setScan({ on: false, ago: 'just now', found: hi });
       setModal({ open: true, done: true, found: hi, total: arr.length, err: '' });
@@ -588,6 +594,72 @@ function GemScanner({ go, onTrade, locked, onUpsell }) {
   if (narr !== 'All') list = list.filter(g => g.narrative === narr);
   if (chain !== 'All') list = list.filter(g => g.chain === chain);
   if (safe) list = list.filter(g => g.safe);
+
+  // One gem card — shared by the main feed and the manual-scan results page.
+  const gemCard = (g, idx) => {
+    const lock = locked && idx >= 3;
+    return (
+      <Card key={g.sym} pad={14} onClick={() => { if (lock) { onUpsell(); return; } go('token', { token: gemToken(g) }); }} style={{ position: 'relative', overflow: 'hidden', cursor: 'pointer' }}>
+        {lock && <div style={{ position: 'absolute', inset: 0, background: 'var(--overlay)', backdropFilter: 'blur(6px)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6, zIndex: 2 }}>
+          <Icon name="lock" size={22} color="var(--accent)" /><div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>Upgrade to see all scans</div>
+          <Btn size="sm" icon="crown" onClick={onUpsell}>Unlock Pro</Btn>
+        </div>}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 11 }}>
+          <Logo color={'#' + (g.sym.charCodeAt(0) * 4321 % 0xffffff).toString(16).padStart(6, '0')} sym={g.sym} chain={g.chain} img={g.img} address={g.address || g.tokenAddress} size={40} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontWeight: 800, fontSize: 15 }}>${g.sym}</span>
+              <Pill tone="muted">{g.narrative}</Pill>
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: 5 }}><Icon name="clock" size={11} /> {g.age} old · {g.holders} holders</div>
+          </div>
+          <ScoreRing score={g.score} />
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: 12 }}>
+          {[['MCap', g.mcap], ['Liq', g.liq], ['Vol', g.vol]].map(([k, v]) => (
+            <div key={k} style={{ background: 'var(--surface2)', borderRadius: 9, padding: '7px 9px' }}>
+              <div style={{ fontSize: 10.5, color: 'var(--muted)' }}>{k}</div>
+              <div style={{ fontSize: 13, fontWeight: 700, marginTop: 1 }}>{v}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Pill tone={g.ch >= 0 ? 'up' : 'down'} style={{ fontSize: 13 }}>{g.ch >= 0 ? '+' : ''}{g.ch}%</Pill>
+          {g.safe ? <Pill tone="up"><Icon name="shield" size={12} /> Safe</Pill> : <Pill tone="down"><Icon name="alert" size={12} /> Risky</Pill>}
+          <Btn size="sm" kind="soft" icon="external" onClick={(e) => { e.stopPropagation(); const u = gemDexUrl(g); if (u) { try { window.open(u, '_blank', 'noopener,noreferrer'); } catch (_) {} } }} style={{ marginLeft: 'auto' }}>DEX</Btn>
+          <Btn size="sm" icon="zap" onClick={(e) => { e.stopPropagation(); onTrade(gemToken(g), 'buy'); }}>Ape</Btn>
+        </div>
+      </Card>
+    );
+  };
+
+  // ── Manual-scan results: a dedicated page so the user's own scan is never
+  // mixed into the record cards / auto-scanned feed of the main screen. ──
+  if (view === 'results') {
+    const ranAgo = manualAt ? Math.max(0, Math.round((Date.now() - manualAt) / 60000)) : null;
+    return (
+      <div>
+        <TopBar left={<button onClick={() => setView('main')} style={{ width: 38, height: 38, borderRadius: 11, background: 'var(--surface2)', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text)' }}><Icon name="chevL" size={20} /></button>}
+          title="Scan results" sub={manual.length + (manual.length === 1 ? ' gem' : ' gems') + (ranAgo != null ? ' · ' + (ranAgo === 0 ? 'just now' : ranAgo + ' min ago') : '')} />
+        <div style={{ padding: '0 16px 10px', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <Pill tone="muted">{narr === 'All' ? 'Any narrative' : narr}</Pill>
+          <Pill tone="muted">{chain === 'All' ? 'All chains' : chain.toUpperCase()}</Pill>
+          <Pill tone="muted">min score {cfg.minScore}</Pill>
+          <Btn size="sm" kind="soft" icon="scan" onClick={() => { setView('main'); runScan(); }} style={{ marginLeft: 'auto' }}>Rescan</Btn>
+        </div>
+        <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {manual.length === 0 && (
+            <div style={{ textAlign: 'center', padding: '36px 20px', color: 'var(--muted)' }}>
+              <Icon name="scan" size={28} color="var(--faint)" style={{ marginBottom: 10 }} />
+              <div style={{ fontSize: 14.5, fontWeight: 700, color: 'var(--text)' }}>No results from your last scan</div>
+              <div style={{ fontSize: 12.5, marginTop: 3 }}>Run a new scan from the scanner page.</div>
+            </div>
+          )}
+          {manual.map((g, idx) => gemCard(g, idx))}
+        </div>
+      </div>
+    );
+  }
 
   // Compact toggle card — used for the Safe / Telegram / Auto-execute row.
   const toggleCard = ({ icon, tint, label, on, onClick }) => (
@@ -724,6 +796,20 @@ function GemScanner({ go, onTrade, locked, onUpsell }) {
           </div>
         </div>
       )}
+      {/* Your last manual scan → its own results page */}
+      {manual.length > 0 && (
+        <div style={{ padding: '0 16px 12px' }}>
+          <div onClick={() => setView('results')} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, background: 'var(--surface)', borderRadius: 14, padding: '12px 14px', boxShadow: 'inset 0 0 0 1px var(--line)' }}>
+            <div style={{ width: 34, height: 34, borderRadius: 10, background: 'var(--glow)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent)', flexShrink: 0 }}><Icon name="scan" size={17} /></div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 800 }}>Your last scan</div>
+              <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 1 }}>{manual.length} gem{manual.length === 1 ? '' : 's'} · {manual.filter((g) => g.score >= 80).length} scored 80+</div>
+            </div>
+            <Pill tone="accent">View results</Pill>
+            <Icon name="chevR" size={16} color="var(--faint)" />
+          </div>
+        </div>
+      )}
       {/* Auto-scanned feed — the 5-min scheduler's finds (also pushed to
           Telegram), so they're listed in the app and tracked on the record. */}
       {alerts.length > 0 && (
@@ -767,47 +853,12 @@ function GemScanner({ go, onTrade, locked, onUpsell }) {
             <Icon name="checkCircle" size={16} /> {scan.found} new tokens found · scored 80+
           </div>
         )}
-        {list.map((g, idx) => {
-          const lock = locked && idx >= 3;
-          return (
-            <Card key={g.sym} pad={14} onClick={() => { if (lock) { onUpsell(); return; } go('token', { token: gemToken(g) }); }} style={{ position: 'relative', overflow: 'hidden', cursor: 'pointer' }}>
-              {lock && <div style={{ position: 'absolute', inset: 0, background: 'var(--overlay)', backdropFilter: 'blur(6px)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6, zIndex: 2 }}>
-                <Icon name="lock" size={22} color="var(--accent)" /><div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>Upgrade to see all scans</div>
-                <Btn size="sm" icon="crown" onClick={onUpsell}>Unlock Pro</Btn>
-              </div>}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 11 }}>
-                <Logo color={'#' + (g.sym.charCodeAt(0) * 4321 % 0xffffff).toString(16).padStart(6, '0')} sym={g.sym} chain={g.chain} img={g.img} address={g.address || g.tokenAddress} size={40} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ fontWeight: 800, fontSize: 15 }}>${g.sym}</span>
-                    <Pill tone="muted">{g.narrative}</Pill>
-                  </div>
-                  <div style={{ fontSize: 12, color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: 5 }}><Icon name="clock" size={11} /> {g.age} old · {g.holders} holders</div>
-                </div>
-                <ScoreRing score={g.score} />
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: 12 }}>
-                {[['MCap', g.mcap], ['Liq', g.liq], ['Vol', g.vol]].map(([k, v]) => (
-                  <div key={k} style={{ background: 'var(--surface2)', borderRadius: 9, padding: '7px 9px' }}>
-                    <div style={{ fontSize: 10.5, color: 'var(--muted)' }}>{k}</div>
-                    <div style={{ fontSize: 13, fontWeight: 700, marginTop: 1 }}>{v}</div>
-                  </div>
-                ))}
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Pill tone={g.ch >= 0 ? 'up' : 'down'} style={{ fontSize: 13 }}>{g.ch >= 0 ? '+' : ''}{g.ch}%</Pill>
-                {g.safe ? <Pill tone="up"><Icon name="shield" size={12} /> Safe</Pill> : <Pill tone="down"><Icon name="alert" size={12} /> Risky</Pill>}
-                <Btn size="sm" kind="soft" icon="external" onClick={(e) => { e.stopPropagation(); const u = gemDexUrl(g); if (u) { try { window.open(u, '_blank', 'noopener,noreferrer'); } catch (_) {} } }} style={{ marginLeft: 'auto' }}>DEX</Btn>
-                <Btn size="sm" icon="zap" onClick={(e) => { e.stopPropagation(); onTrade(gemToken(g), 'buy'); }}>Ape</Btn>
-              </div>
-            </Card>
-          );
-        })}
+        {list.map((g, idx) => gemCard(g, idx))}
       </div>
       <GemSettingsSheet open={setOpen} onClose={() => setSetOpen(false)} cfg={cfg} onSaved={(s) => { setCfg(s); setSetOpen(false); }} />
       <ScanModal
         open={modal.open} done={modal.done} error={modal.err}
-        onClose={() => setModal(m => ({ ...m, open: false }))}
+        onClose={() => { const openResults = modal.done && modal.total > 0; setModal(m => ({ ...m, open: false })); if (openResults) setView('results'); }}
         title="Gem scan" steps={GEM_SCAN_STEPS}
         summary={modal.total > 0 ? modal.total + (modal.total === 1 ? ' gem found' : ' gems found') : 'No gems found'}
         result={modal.total > 0 ? (
@@ -822,7 +873,7 @@ function GemScanner({ go, onTrade, locked, onUpsell }) {
                 {g.safe ? <Pill tone="up"><Icon name="shield" size={11} /> {g.score}</Pill> : <Pill tone="down"><Icon name="alert" size={11} /> {g.score}</Pill>}
               </div>
             ))}
-            <div style={{ fontSize: 12, color: 'var(--muted)', textAlign: 'center', marginTop: 2 }}>{modal.found > 0 ? modal.found + ' scored 80+ · ' : ''}Listed below.</div>
+            <div style={{ fontSize: 12, color: 'var(--muted)', textAlign: 'center', marginTop: 2 }}>{modal.found > 0 ? modal.found + ' scored 80+ · ' : ''}Close to open the results page.</div>
           </div>
         ) : (
           <div style={{ fontSize: 13.5, color: 'var(--muted)', textAlign: 'center', lineHeight: 1.5 }}>No tokens matched your filters this scan. Try widening liquidity, volume or age in scan settings.</div>

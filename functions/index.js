@@ -473,6 +473,38 @@ exports.getHolderGraph = functions.region('europe-west1')
   return evmHolderGraph(chain, addr.toLowerCase(), topN, key)
 })
 
+// ── Bridge quote proxy (Relay) ───────────────────────────────────────────────
+// Browsers on some networks can't reach api.relay.link directly (Cloudflare
+// ECH vs ISP middleboxes → "Failed to fetch" even though the API allows CORS),
+// so the quote is fetched server-side where connectivity is reliable. The
+// client still signs and broadcasts the returned origin-chain transaction(s)
+// locally — no keys or funds ever touch the server.
+exports.bridgeQuote = fn.https.onCall(async (data, context) => {
+  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
+  const axios = require('axios')
+  const BRIDGE_CHAINS = { eth: 1, base: 8453, bsc: 56, matic: 137, rhood: 4663 }
+  const origin = BRIDGE_CHAINS[data && data.fromChain]
+  const dest = BRIDGE_CHAINS[(data && data.toChain) || 'rhood']
+  const user = String((data && data.user) || '')
+  const recipient = String((data && data.recipient) || user)
+  const amount = String((data && data.amountWei) || '')
+  if (!origin || !dest || origin === dest) throw new functions.https.HttpsError('invalid-argument', 'Unsupported bridge route')
+  if (!/^0x[0-9a-fA-F]{40}$/.test(user) || !/^0x[0-9a-fA-F]{40}$/.test(recipient)) throw new functions.https.HttpsError('invalid-argument', 'Invalid address')
+  if (!/^[0-9]{1,30}$/.test(amount) || /^0+$/.test(amount)) throw new functions.https.HttpsError('invalid-argument', 'Invalid amount')
+  try {
+    const { data: body } = await axios.post('https://api.relay.link/quote', {
+      user, recipient, originChainId: origin, destinationChainId: dest,
+      originCurrency: '0x0000000000000000000000000000000000000000',
+      destinationCurrency: '0x0000000000000000000000000000000000000000',
+      amount, tradeType: 'EXACT_INPUT',
+    }, { timeout: 20000 })
+    return body
+  } catch (e) {
+    const msg = (e.response && e.response.data && e.response.data.message) || e.message || 'quote failed'
+    throw new functions.https.HttpsError('unavailable', 'Bridge quote failed: ' + msg)
+  }
+})
+
 // ── Deep IN/OUT transfer history between two wallets ────────────────────────
 exports.getPairTransfers = fn.https.onCall(async (data, context) => {
   if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')

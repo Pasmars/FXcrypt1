@@ -16,14 +16,15 @@
 //
 // Everything reactive emits 'fx:update' (the shell already re-renders on it).
 
-import { db, auth } from './firebase';
+import { db, auth, fns } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
+import { httpsCallable } from 'firebase/functions';
 import { doc, getDoc, setDoc, updateDoc, deleteField } from 'firebase/firestore';
 import {
   encryptData, decryptData, buildAuthCheck, verifyAuthCheck,
   createWallet, importWallet, getBalanceNum, getTokenBalanceNum,
   getTxs, fetchTokenPrices, chainMeta, isValidAddress, send as sendImpl,
-  initTonWeb, CHAINS, getTokenMeta, relayBridgeQuote, relayBridgeExecute,
+  initTonWeb, CHAINS, getTokenMeta, relayBridgeQuote, relayBridgeExecute, normalizeRelayQuote,
 } from './wallet-crypto';
 
 // Chains where custom tokens are supported today (EVM read/send + Solana read).
@@ -277,7 +278,20 @@ async function bridgeQuote({ fromChain, amount }) {
   if (!w) throw new Error('No ' + String(fromChain).toUpperCase() + ' wallet to bridge from');
   if (!(Number(amount) > 0)) throw new Error('Enter a valid amount');
   const recipient = (wallets.rhood && wallets.rhood.address) || w.address;
-  const q = await relayBridgeQuote({ fromChain, toChain: 'rhood', amountNative: amount, address: w.address });
+  // Preferred: quote via our Cloud Function — some ISPs break browser TLS to
+  // api.relay.link ("Failed to fetch") while server connectivity is reliable.
+  // Fall back to the direct browser fetch if the callable is unavailable.
+  let q;
+  try {
+    const amountWei = window.ethers.utils.parseEther(String(amount)).toString();
+    const res = await httpsCallable(fns, 'bridgeQuote')({ fromChain, toChain: 'rhood', user: w.address, recipient, amountWei });
+    q = normalizeRelayQuote(res.data, 'ETH', amount);
+  } catch (e) {
+    // Surface real quote problems (bad route/amount) — only fall through on
+    // transport/auth-type failures where the direct call may still work.
+    if (e && /route unavailable/i.test(e.message || '')) throw e;
+    q = await relayBridgeQuote({ fromChain, toChain: 'rhood', amountNative: amount, address: w.address });
+  }
   return { ...q, recipient, recipientIsRhoodWallet: !!(wallets.rhood && wallets.rhood.address) };
 }
 async function bridgeExecute({ fromChain, quote }) {
