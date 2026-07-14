@@ -7,9 +7,13 @@ const PANCAKESWAP_ROUTER = '0x10ED43C718714eb63d5aA57B78B54704E256024E'
 const UNISWAP_V2_ROUTER  = '0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D'
 // BaseSwap V2 — Uniswap V2 fork on Base; widest V2-compatible liquidity on Base
 const BASESWAP_ROUTER    = '0x327Df1E6de05895d2ab08513aaDD9313Fe505d86'
-const WBNB  = '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c'
-const WETH  = '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2'
-const WBASE = '0x4200000000000000000000000000000000000006' // WETH on Base
+// Uniswap V2 Router02 on Robinhood Chain (official Uniswap deployment, verified
+// on-chain: router.factory() and router.WETH() match the docs + live pairs).
+const RHOOD_ROUTER       = '0x89e5db8b5aa49aa85ac63f691524311aeb649eba'
+const WBNB   = '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c'
+const WETH   = '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2'
+const WBASE  = '0x4200000000000000000000000000000000000006' // WETH on Base
+const WRHOOD = '0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73' // WETH on Robinhood Chain
 
 const ROUTER_ABI = [
   'function swapExactETHForTokens(uint amountOutMin, address[] calldata path, address to, uint deadline) external payable returns (uint[] memory amounts)',
@@ -69,6 +73,9 @@ const BASE_RPCS = [
   'https://base.publicnode.com',
   'https://base-mainnet.public.blastapi.io',
 ]
+const RHOOD_RPCS = [
+  'https://rpc.mainnet.chain.robinhood.com',
+]
 
 // ── EVM helpers ────────────────────────────────────────────────────────────
 function makeProvider(rpcUrl, chainId) {
@@ -78,9 +85,10 @@ function makeProvider(rpcUrl, chainId) {
 }
 
 function chainConfig(chain) {
-  if (chain === 'bsc')  return { chainId: 56,   rpcs: BSC_RPCS  }
-  if (chain === 'base') return { chainId: 8453,  rpcs: BASE_RPCS }
-  return                       { chainId: 1,     rpcs: ETH_RPCS  }
+  if (chain === 'bsc')   return { chainId: 56,   rpcs: BSC_RPCS   }
+  if (chain === 'base')  return { chainId: 8453, rpcs: BASE_RPCS  }
+  if (chain === 'rhood') return { chainId: 4663, rpcs: RHOOD_RPCS }
+  return                        { chainId: 1,    rpcs: ETH_RPCS   }
 }
 
 async function getWorkingProvider(chain, preferredRpc) {
@@ -110,12 +118,14 @@ async function buyTokenEVM(chain, privateKey, tokenAddress, amountNative, slippa
   // Use working provider with RPC fallback — avoids single-point failures
   const provider = await getWorkingProvider(chain, rpcUrl)
   const wallet   = new ethers.Wallet(privateKey, provider)
-  const routerAddr    = chain === 'bsc'  ? PANCAKESWAP_ROUTER
-                      : chain === 'base' ? BASESWAP_ROUTER
+  const routerAddr    = chain === 'bsc'   ? PANCAKESWAP_ROUTER
+                      : chain === 'base'  ? BASESWAP_ROUTER
+                      : chain === 'rhood' ? RHOOD_ROUTER
                       : UNISWAP_V2_ROUTER
   const router        = new ethers.Contract(routerAddr, ROUTER_ABI, wallet)
-  const wrappedNative = chain === 'bsc'  ? WBNB
-                      : chain === 'base' ? WBASE
+  const wrappedNative = chain === 'bsc'   ? WBNB
+                      : chain === 'base'  ? WBASE
+                      : chain === 'rhood' ? WRHOOD
                       : WETH
   const gross    = ethers.parseEther(String(amountNative))
   // Platform fee is skimmed from the native input BEFORE the swap, so only the
@@ -181,13 +191,15 @@ async function sellTokenEVM(chain, privateKey, tokenAddress, percentToSell, slip
 
   const provider      = evmProvider(chain, rpcUrl)
   const wallet        = new ethers.Wallet(privateKey, provider)
-  const routerAddr    = chain === 'bsc'  ? PANCAKESWAP_ROUTER
-                      : chain === 'base' ? BASESWAP_ROUTER
+  const routerAddr    = chain === 'bsc'   ? PANCAKESWAP_ROUTER
+                      : chain === 'base'  ? BASESWAP_ROUTER
+                      : chain === 'rhood' ? RHOOD_ROUTER
                       : UNISWAP_V2_ROUTER
   const router        = new ethers.Contract(routerAddr, ROUTER_ABI, wallet)
   const token         = new ethers.Contract(tokenAddress, ERC20_ABI, wallet)
-  const wrappedNative = chain === 'bsc'  ? WBNB
-                      : chain === 'base' ? WBASE
+  const wrappedNative = chain === 'bsc'   ? WBNB
+                      : chain === 'base'  ? WBASE
+                      : chain === 'rhood' ? WRHOOD
                       : WETH
 
   const balance  = await token.balanceOf(wallet.address)
@@ -484,7 +496,7 @@ async function getTONBalance(address) {
 
 // ── Token safety / price check via DexScreener ────────────────────────────
 async function checkToken(tokenAddress, chain) {
-  const chainMap = { bsc: 'bsc', eth: 'ethereum', sol: 'solana' }
+  const chainMap = { bsc: 'bsc', eth: 'ethereum', sol: 'solana', base: 'base', rhood: 'robinhood' }
   try {
     const { data } = await axios.get(
       `https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`,

@@ -3,7 +3,7 @@
 // checks on EVM chains, and returns the top-scoring gems.
 
 export const GEM_CHAIN_MAP: Record<string, string> = {
-  bsc: 'bsc', eth: 'ethereum', sol: 'solana', base: 'base', ton: 'ton', matic: 'polygon'
+  bsc: 'bsc', eth: 'ethereum', sol: 'solana', base: 'base', ton: 'ton', matic: 'polygon', rhood: 'robinhood'
 };
 export const GEM_DEX_LABELS: Record<string, string> = {
   pancakeswap: 'PancakeSwap', pancakeswap_v3: 'PancakeSwap V3',
@@ -101,7 +101,7 @@ export async function checkGemHoneypot(tokenAddress: string, chainID = 56) {
   }
 }
 
-const PAIR_CHAIN: Record<string, string> = { bsc: 'bsc', ethereum: 'eth', solana: 'sol', base: 'base', ton: 'ton', polygon: 'matic' };
+const PAIR_CHAIN: Record<string, string> = { bsc: 'bsc', ethereum: 'eth', solana: 'sol', base: 'base', ton: 'ton', polygon: 'matic', robinhood: 'rhood' };
 
 // ── GeckoTerminal (free, paginated — new pools + established/old pools) ───────
 const GT_NET: Record<string, string> = { eth: 'eth', bsc: 'bsc', sol: 'solana', base: 'base', matic: 'polygon_pos', ton: 'ton' };
@@ -302,7 +302,7 @@ export async function scanGems(cfg: GemConfig, onStep: (s: string) => void): Pro
       safety = await checkGemHoneypot(pair.baseToken?.address || addr, chain === 'eth' ? 1 : 56);
       if (safety.isHoneypot === true) continue;
       if (safety.sellTax != null && safety.sellTax > 15) continue;
-    } else if (chain === 'base' || chain === 'ton') safety = { riskLevel: 'UNVERIFIED' };
+    } else if (chain === 'base' || chain === 'ton' || chain === 'rhood') safety = { riskLevel: 'UNVERIFIED' }; // no honeypot simulator covers these chains yet
 
     const ageHours = pair.pairCreatedAt ? (Date.now() - pair.pairCreatedAt) / 3.6e6 : null;
     gems.push({

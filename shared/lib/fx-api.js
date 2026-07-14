@@ -79,7 +79,7 @@ function gemSettingsDefault() {
 
 // Chains the Telegram gem-alert scheduler can cover. Matches the scanner's
 // supported chains (no TON — the gem scanner doesn't index it).
-const TG_GEM_CHAINS = ['bsc', 'eth', 'sol', 'base'];
+const TG_GEM_CHAINS = ['bsc', 'eth', 'sol', 'base', 'rhood'];
 // Sanitize a chain list → an ordered, deduped subset of the supported chains;
 // falls back to all when nothing valid is selected (an empty list would silently
 // disable the scheduler, which is never what a user means by "save").
@@ -527,7 +527,7 @@ window.FXAPI = {
   followWallet: async ({ chain, address, label }) => {
     const u = auth.currentUser;
     if (!u) throw new Error('Sign in to follow wallets.');
-    const ch = ['bsc', 'eth', 'base', 'sol'].includes(chain) ? chain : null;
+    const ch = ['bsc', 'eth', 'base', 'sol', 'rhood'].includes(chain) ? chain : null;
     const addr = String(address || '').trim();
     const okEvm = /^0x[0-9a-fA-F]{40}$/.test(addr);
     const okSol = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(addr);

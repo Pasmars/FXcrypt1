@@ -54,6 +54,7 @@ function Wallet({ go }) {
   const [tab, setTab] = wS('tokens');
   const [send, setSend] = wS(false);
   const [recv, setRecv] = wS(false);
+  const [bridge, setBridge] = wS(false);
   const [manage, setManage] = wS(false);
   const [hide, setHide] = wS(false);
   const holdings = W.holdings;
@@ -78,7 +79,7 @@ function Wallet({ go }) {
               <span style={{ color: 'var(--muted)' }}>{todayVal >= 0 ? '+' : '-'}{dim(fmtUsd(Math.abs(todayVal)))} today</span>
             </div>
             <div style={{ display: 'flex', gap: 9, marginTop: 16 }}>
-              {[['send', 'Send', () => setSend(true)], ['receive', 'Receive', () => setRecv(true)], ['swap', 'Swap', () => go('trade')], ['dollar', 'PnL', () => setTab('pnl')]].map(([ic, l, fn]) => (
+              {[['send', 'Send', () => setSend(true)], ['receive', 'Receive', () => setRecv(true)], ['swap', 'Swap', () => go('trade')], ['globe', 'Bridge', () => setBridge(true)], ['dollar', 'PnL', () => setTab('pnl')]].map(([ic, l, fn]) => (
                 <button key={l} onClick={fn} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text)', fontFamily: 'inherit' }}>
                   <span style={{ width: 46, height: 46, borderRadius: 14, background: 'var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--on-accent)' }}><Icon name={ic} size={21} /></span>
                   <span style={{ fontSize: 12, fontWeight: 600 }}>{l}</span>
@@ -126,6 +127,7 @@ function Wallet({ go }) {
       {tab === 'activity' && <Activity wallets={W.wallets} />}
 
       <Sheet open={send} onClose={() => setSend(false)} title="Send"><SendForm onClose={() => setSend(false)} go={go} /></Sheet>
+      <Sheet open={bridge} onClose={() => setBridge(false)} title="Bridge to Robinhood"><GateThen><BridgeForm onClose={() => setBridge(false)} /></GateThen></Sheet>
       <Sheet open={recv} onClose={() => setRecv(false)} title="Receive"><ReceiveBody /></Sheet>
       <Sheet open={manage} onClose={() => setManage(false)} height="86%"><WalletManage onClose={() => setManage(false)} go={go} /></Sheet>
     </div>
@@ -415,6 +417,84 @@ function ReceiveBody() {
   );
 }
 
+
+// ─── Bridge to Robinhood Chain (Relay) ───
+// Deposits only: pick a funded EVM wallet, quote via Relay (receive amount,
+// USD, ETA), then sign the origin-chain transaction locally. Withdrawals go
+// through the official portal (7-day challenge period) — out of scope here.
+function BridgeForm({ onClose }) {
+  const W = useFXW();
+  const sources = FXW().bridgeSupportedFrom();
+  const [fromChain, setFromChain] = wS(sources[0] || 'eth');
+  const [amount, setAmount] = wS('');
+  const [quote, setQuote] = wS(null);
+  const [busy, setBusy] = wS(false);
+  const [err, setErr] = wS('');
+  const [done, setDone] = wS(null); // { txHash }
+  const meta = (c) => (window.FXWallet.chains || []).find((x) => x.key === c) || {};
+  const srcMeta = meta(fromChain);
+  const bal = (W.allHoldings.find((h) => h.chain === fromChain && h.native) || {});
+
+  const getQuote = async () => {
+    setBusy(true); setErr(''); setQuote(null);
+    try { setQuote(await FXW().bridgeQuote({ fromChain, amount })); }
+    catch (e) { setErr(e.message || 'Quote failed'); }
+    finally { setBusy(false); }
+  };
+  const execute = async () => {
+    setBusy(true); setErr('');
+    try { setDone(await FXW().bridgeExecute({ fromChain, quote })); }
+    catch (e) { setErr(e.message || 'Bridge failed'); }
+    finally { setBusy(false); }
+  };
+
+  if (!sources.length) {
+    return <div style={{ textAlign: 'center', padding: '26px 10px' }}>
+      <div style={{ fontSize: 15, fontWeight: 800 }}>No wallet to bridge from</div>
+      <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 8, lineHeight: 1.5 }}>Add an Ethereum, Base, BNB Chain or Polygon wallet with funds first — then bridge them onto Robinhood Chain here.</div>
+    </div>;
+  }
+  if (done) {
+    return <div style={{ textAlign: 'center', padding: '22px 6px' }}>
+      <div style={{ width: 58, height: 58, borderRadius: 18, background: 'var(--up)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: '#fff', marginBottom: 12 }}><Icon name="check" size={28} /></div>
+      <div style={{ fontSize: 17, fontWeight: 800 }}>Bridge submitted</div>
+      <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 8, lineHeight: 1.55 }}>Funds usually arrive on Robinhood Chain within seconds to a couple of minutes.{!quote.recipientIsRhoodWallet && <><br />They'll land at your {srcMeta.label} address — import that wallet's key on Robinhood (Manage → Add or import) to see it here.</>}</div>
+      {done.txHash && <a href={(srcMeta.txExplorer || '#') + done.txHash} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 14, fontSize: 13, fontWeight: 700, color: 'var(--accent)' }}>View origin transaction <Icon name="arrowUR" size={14} /></a>}
+      <div style={{ marginTop: 18 }}><Btn full onClick={onClose}>Done</Btn></div>
+    </div>;
+  }
+  return (
+    <div style={{ paddingBottom: 8 }}>
+      <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--muted)', margin: '0 2px 8px' }}>From network</div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+        {sources.map((c) => { const m = meta(c); const on = c === fromChain; return (
+          <button key={c} onClick={() => { setFromChain(c); setQuote(null); setErr(''); }} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '9px 13px', borderRadius: 12, border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: 700, background: on ? 'var(--glow)' : 'var(--surface)', color: on ? 'var(--accent)' : 'var(--text2)', boxShadow: on ? 'inset 0 0 0 1.5px var(--accent)' : 'inset 0 0 0 1px var(--line)' }}>
+            <span style={{ width: 10, height: 10, borderRadius: '50%', background: m.color }} /> {m.label}
+          </button>
+        ); })}
+      </div>
+      <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--muted)', margin: '0 2px 8px' }}>Amount ({srcMeta.symbol}){bal.amount ? ` · balance ${bal.amount}` : ''}</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, background: 'var(--surface)', borderRadius: 13, padding: '12px 14px', boxShadow: 'inset 0 0 0 1px var(--line)', marginBottom: 12 }}>
+        <input value={amount} onChange={(e) => { setAmount(e.target.value.replace(/[^0-9.]/g, '')); setQuote(null); }} inputMode="decimal" placeholder="0.0"
+          style={{ flex: 1, border: 'none', background: 'transparent', outline: 'none', color: 'var(--text)', fontSize: 20, fontWeight: 800, fontFamily: 'inherit', minWidth: 0 }} />
+        <span style={{ fontSize: 13, color: 'var(--muted)', fontWeight: 700 }}>{srcMeta.symbol} → ETH on Robinhood</span>
+      </div>
+      {quote && (
+        <div style={{ background: 'var(--surface)', borderRadius: 13, padding: '12px 14px', boxShadow: 'inset 0 0 0 1px var(--line)', marginBottom: 12, fontSize: 13 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}><span style={{ color: 'var(--muted)' }}>You receive</span><b>{quote.amountOut ? (+quote.amountOut).toFixed(6) : '—'} ETH{quote.amountOutUsd ? ` (≈$${(+quote.amountOutUsd).toFixed(2)})` : ''}</b></div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}><span style={{ color: 'var(--muted)' }}>Estimated time</span><b>{quote.timeEstimateSec != null ? (quote.timeEstimateSec <= 60 ? '~' + quote.timeEstimateSec + 's' : '~' + Math.round(quote.timeEstimateSec / 60) + ' min') : 'seconds'}</b></div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--muted)' }}>Destination</span><b style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>{truncAddr(quote.recipient)}</b></div>
+          {!quote.recipientIsRhoodWallet && <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--muted)', lineHeight: 1.45 }}>No Robinhood wallet in the app yet — funds go to the same address you control on Robinhood Chain. Import this wallet's key there afterwards to see them.</div>}
+        </div>
+      )}
+      {err && <div style={{ marginBottom: 12, fontSize: 13, color: 'var(--down)', background: 'var(--down-bg)', borderRadius: 11, padding: '10px 12px', fontWeight: 600 }}>{err}</div>}
+      {!quote
+        ? <Btn size="lg" full icon="globe" onClick={getQuote} disabled={!(Number(amount) > 0) || busy} style={{ opacity: busy ? 0.6 : 1 }}>{busy ? 'Getting quote…' : 'Get bridge quote'}</Btn>
+        : <Btn size="lg" full kind="up" icon="check" onClick={execute} disabled={busy} style={{ opacity: busy ? 0.6 : 1 }}>{busy ? 'Bridging…' : 'Confirm bridge'}</Btn>}
+      <div style={{ fontSize: 11, color: 'var(--faint)', marginTop: 9, textAlign: 'center', lineHeight: 1.45 }}>Bridged via Relay. Bridging is irreversible once submitted — double-check the amount.</div>
+    </div>
+  );
+}
 
 // ─── Wallet management (multi-view sheet) ───
 function WMHeader({ title, sub, onBack, onClose, action }) {
@@ -981,7 +1061,7 @@ function ImportSeedFlow({ onBack, onDone }) {
     <div style={{ paddingBottom: 10 }}>
       <WMHeader title="Import seed phrase" sub="Restore a wallet" onBack={onBack} />
       <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--muted)', margin: '0 2px 8px' }}>Network</div>
-      <ChainChips value={chain} onChange={setChain} only={['eth', 'bsc', 'base', 'matic', 'ton']} />
+      <ChainChips value={chain} onChange={setChain} only={['eth', 'bsc', 'base', 'matic', 'rhood', 'ton']} />
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, background: 'var(--surface)', borderRadius: 13, padding: '13px 14px', boxShadow: 'inset 0 0 0 1px var(--line)', marginBottom: 10 }}>
         <Icon name="receive" size={18} color="var(--muted)" style={{ marginTop: 2 }} />
         <textarea value={phrase} onChange={(e) => setPhrase(e.target.value)} placeholder="Enter your 12 or 24-word recovery phrase, separated by spaces" rows={4} style={{ flex: 1, border: 'none', background: 'transparent', outline: 'none', color: 'var(--text)', fontSize: 14, fontFamily: 'inherit', resize: 'none', minWidth: 0 }} />

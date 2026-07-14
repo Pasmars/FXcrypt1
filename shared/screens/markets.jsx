@@ -465,7 +465,7 @@ function BubbleCanvas({ nodes, links, selectedId, onSelect }) {
 function BubbleMap({ token, go }) {
   const [sel, setSel] = mS(null);
   const addr = token.address || token.tokenAddress;
-  const supported = ['sol', 'eth', 'bsc', 'base'].includes(token.chain);
+  const supported = ['sol', 'eth', 'bsc', 'base', 'rhood'].includes(token.chain);
   // Real holder graph when we have a contract address on a supported chain
   // (majors like BTC/ETH have no single contract → nothing to map).
   const [state, setState] = mS({ loading: !!(addr && supported), nodes: null, links: null, summary: null, source: '', holderCount: 0, totalHolders: 0, err: '' });

@@ -96,6 +96,90 @@ async function evmHolderGraph(chain, addr, topN, key) {
   return { token, holders, edges, transfers, meta: { source: 'moralis', fetchedAt: Date.now(), totalHolders } }
 }
 
+// ── Robinhood Chain holder graph (Blockscout v2 API) ────────────────────────
+// Moralis doesn't index chain 4663 yet; the chain's own Blockscout exposes
+// holders + token transfers publicly, which is everything the bubble map
+// needs. Price comes from DexScreener (best pair).
+const BLOCKSCOUT_RHOOD = 'https://robinhoodchain.blockscout.com/api/v2'
+
+async function blockscoutGet(path) {
+  const res = await fetch(`${BLOCKSCOUT_RHOOD}${path}`, { headers: { accept: 'application/json' } })
+  if (!res.ok) throw new Error(`Blockscout error: ${res.status}`)
+  return res.json()
+}
+
+async function rhoodHolderGraph(addr, topN) {
+  // Token metadata (+ true holder total when Blockscout exposes it).
+  const token = { address: addr, chain: 'rhood', name: '', symbol: '', decimals: 18, priceUsd: null }
+  let totalSupply = 0, totalHolders = null
+  try {
+    const t = await blockscoutGet(`/tokens/${addr}`)
+    token.name = t.name || ''
+    token.symbol = t.symbol || ''
+    token.decimals = t.decimals != null ? parseInt(t.decimals, 10) : 18
+    totalSupply = t.total_supply != null ? Number(t.total_supply) / Math.pow(10, token.decimals) : 0
+    totalHolders = t.holders != null ? parseInt(t.holders, 10) : (t.holders_count != null ? parseInt(t.holders_count, 10) : null)
+  } catch (_) {}
+  try {
+    const r = await fetch(`https://api.dexscreener.com/token-pairs/v1/robinhood/${addr}`, { headers: { accept: 'application/json' } })
+    const pairs = await r.json()
+    if (Array.isArray(pairs) && pairs.length) {
+      pairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))
+      token.priceUsd = parseFloat(pairs[0].priceUsd) || null
+      if (!token.symbol) token.symbol = pairs[0].baseToken?.symbol || ''
+      if (!token.name) token.name = pairs[0].baseToken?.name || ''
+    }
+  } catch (_) {}
+
+  // Top holders (50/page, cursor via next_page_params).
+  const holders = []
+  let params = ''
+  for (let page = 0; page < Math.min(8, Math.ceil(topN / 50)) && holders.length < topN; page++) {
+    let json
+    try { json = await blockscoutGet(`/tokens/${addr}/holders${params}`) } catch (e) { if (page === 0) throw e; break }
+    for (const r of (json.items || [])) {
+      const balance = Number(r.value || 0) / Math.pow(10, token.decimals)
+      holders.push({
+        address: (r.address?.hash || '').toLowerCase(),
+        balance,
+        pct: totalSupply > 0 ? (balance / totalSupply) * 100 : null,
+        usdValue: token.priceUsd != null ? balance * token.priceUsd : null,
+        isContract: !!r.address?.is_contract,
+        label: r.address?.name || (Array.isArray(r.address?.public_tags) && r.address.public_tags[0]?.display_name) || '',
+      })
+      if (holders.length >= topN) break
+    }
+    const np = json.next_page_params
+    if (!np) break
+    params = '?' + new URLSearchParams(np).toString()
+  }
+
+  // Recent token transfers → wallet-to-wallet link edges among the top holders.
+  const transfers = []
+  params = ''
+  for (let page = 0; page < 12; page++) {
+    let json
+    try { json = await blockscoutGet(`/tokens/${addr}/transfers${params}`) } catch (_) { break }
+    for (const r of (json.items || [])) {
+      const total = r.total || {}
+      const dec = total.decimals != null ? parseInt(total.decimals, 10) : token.decimals
+      transfers.push({
+        from: r.from?.hash || '', to: r.to?.hash || '',
+        value: total.value != null ? Number(total.value) / Math.pow(10, dec) : 0,
+        txHash: r.tx_hash || r.transaction_hash || '',
+        ts: r.timestamp ? Date.parse(r.timestamp) : 0,
+      })
+    }
+    const np = json.next_page_params
+    if (!np) break
+    params = '?' + new URLSearchParams(np).toString()
+  }
+
+  const nodeSet = new Set(holders.map(h => h.address))
+  const edges = buildEdges(transfers, nodeSet)
+  return { token, holders, edges, transfers, meta: { source: 'blockscout', fetchedAt: Date.now(), totalHolders: totalHolders != null ? totalHolders : holders.length } }
+}
+
 // ── Solana holder graph (Helius DAS) ────────────────────────────────────────
 async function solHolderGraph(addr, topN, key) {
   const rpc = `https://mainnet.helius-rpc.com/?api-key=${key}`
@@ -162,4 +246,4 @@ async function solHolderGraph(addr, topN, key) {
   return { token, holders, edges, transfers, meta: { source: 'helius', fetchedAt: Date.now(), totalHolders } }
 }
 
-module.exports = { evmHolderGraph, solHolderGraph, buildEdges, MORALIS_CHAIN_HEX }
+module.exports = { evmHolderGraph, solHolderGraph, rhoodHolderGraph, buildEdges, MORALIS_CHAIN_HEX }

@@ -5,7 +5,7 @@ const signalGen  = require('./signal-generator')
 const marketAnalyzer = require('./market-analyzer')
 
 
-const VALID_CHAINS  = new Set(['bsc', 'eth', 'sol', 'base', 'ton'])
+const VALID_CHAINS  = new Set(['bsc', 'eth', 'sol', 'base', 'ton', 'rhood'])
 const TG_API_TIMEOUT = 10000
 
 // Minimal Telegram client using direct REST calls — no third-party bot library
@@ -28,10 +28,11 @@ function createBot(token) {
 }
 
 function explorerUrl(chain, txHash) {
-  const base = chain === 'bsc'  ? 'https://bscscan.com/tx/' :
-               chain === 'eth'  ? 'https://etherscan.io/tx/' :
-               chain === 'base' ? 'https://basescan.org/tx/' :
-               chain === 'ton'  ? 'https://tonscan.org/tx/' :
+  const base = chain === 'bsc'   ? 'https://bscscan.com/tx/' :
+               chain === 'eth'   ? 'https://etherscan.io/tx/' :
+               chain === 'base'  ? 'https://basescan.org/tx/' :
+               chain === 'ton'   ? 'https://tonscan.org/tx/' :
+               chain === 'rhood' ? 'https://robinhoodchain.blockscout.com/tx/' :
                'https://solscan.io/tx/'
   return base + txHash
 }
@@ -485,18 +486,34 @@ async function fetchWalletTokens(chain, address, heliusKey, moralisKey) {
       .sort((a, b) => (b.usdValue || 0) - (a.usdValue || 0))
   }
 
-  // ── EVM: BSC / ETH / BASE — Moralis + DexScreener enrichment ─────────────
-  if (!moralisKey) throw new Error('Moralis API key not configured on the server.')
-  const chainHex = chain === 'bsc' ? '0x38' : chain === 'base' ? '0x2105' : '0x1'
-  const { data: moralisData } = await axios.get(
-    `https://deep-index.moralis.io/api/v2.2/${address}/erc20?chain=${chainHex}`,
-    { headers: { 'X-API-Key': moralisKey }, timeout: 15000 }
-  )
-  const raw = (moralisData || []).filter(t => parseFloat(t.balance) > 0)
+  // ── EVM: BSC / ETH / BASE / RHOOD — Moralis (or Blockscout) + DexScreener ──
+  let raw
+  if (chain === 'rhood') {
+    // Robinhood Chain: Moralis doesn't index 4663 — its Blockscout exposes the
+    // same token-balance view keylessly. Normalized to the Moralis row shape.
+    const { data: bs } = await axios.get(
+      `https://robinhoodchain.blockscout.com/api/v2/addresses/${address}/token-balances`,
+      { timeout: 15000 }
+    )
+    raw = (Array.isArray(bs) ? bs : []).map(t => ({
+      token_address: t.token?.address || t.token?.address_hash || '',
+      symbol: t.token?.symbol || '?', name: t.token?.name || '?',
+      decimals: t.token?.decimals != null ? parseInt(t.token.decimals, 10) : 18,
+      balance: t.value || '0',
+    })).filter(t => t.token_address && parseFloat(t.balance) > 0)
+  } else {
+    if (!moralisKey) throw new Error('Moralis API key not configured on the server.')
+    const chainHex = chain === 'bsc' ? '0x38' : chain === 'base' ? '0x2105' : '0x1'
+    const { data: moralisData } = await axios.get(
+      `https://deep-index.moralis.io/api/v2.2/${address}/erc20?chain=${chainHex}`,
+      { headers: { 'X-API-Key': moralisKey }, timeout: 15000 }
+    )
+    raw = (moralisData || []).filter(t => parseFloat(t.balance) > 0)
+  }
   if (!raw.length) return []
 
   // Enrich with DexScreener prices in batches of 30
-  const dsChain = chain === 'bsc' ? 'bsc' : chain === 'base' ? 'base' : 'ethereum'
+  const dsChain = chain === 'bsc' ? 'bsc' : chain === 'base' ? 'base' : chain === 'rhood' ? 'robinhood' : 'ethereum'
   const pairMap = {}
   for (let i = 0; i < raw.length; i += 30) {
     const chunk = raw.slice(i, i + 30).map(t => t.token_address).join(',')

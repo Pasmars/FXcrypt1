@@ -73,11 +73,11 @@ const TG_TOKEN = () => {
 }
 
 // ── Input validators ───────────────────────────────────────────────────────
-const VALID_CHAINS = new Set(['bsc', 'eth', 'sol', 'base', 'ton'])
+const VALID_CHAINS = new Set(['bsc', 'eth', 'sol', 'base', 'ton', 'rhood'])
 
 function validateChain(chain) {
   if (!VALID_CHAINS.has(chain))
-    throw new functions.https.HttpsError('invalid-argument', 'Chain must be bsc, eth, sol, base, or ton')
+    throw new functions.https.HttpsError('invalid-argument', 'Chain must be bsc, eth, sol, base, ton, or rhood')
 }
 
 function validateAddress(chain, address) {
@@ -466,6 +466,8 @@ exports.getHolderGraph = functions.region('europe-west1')
     if (!key) throw new functions.https.HttpsError('failed-precondition', 'Solana provider not configured.')
     return solHolderGraph(addr, topN, key)
   }
+  // Robinhood Chain: Moralis doesn't index 4663 — use the chain's Blockscout.
+  if (chain === 'rhood') return require('./lib/holdergraph').rhoodHolderGraph(addr.toLowerCase(), topN)
   const key = SECRET_MORALIS.value()
   if (!key) throw new functions.https.HttpsError('failed-precondition', 'EVM provider not configured.')
   return evmHolderGraph(chain, addr.toLowerCase(), topN, key)

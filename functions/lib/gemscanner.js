@@ -13,11 +13,12 @@ const DEXSCREENER_SEARCH = 'https://api.dexscreener.com/latest/dex/search?q='
 
 // Chain ID mappings for DexScreener
 const CHAIN_MAP = {
-  bsc:  'bsc',
-  eth:  'ethereum',
-  sol:  'solana',
-  base: 'base',
-  ton:  'ton',
+  bsc:   'bsc',
+  eth:   'ethereum',
+  sol:   'solana',
+  base:  'base',
+  ton:   'ton',
+  rhood: 'robinhood', // Robinhood Chain (Arbitrum Orbit L2, chain id 4663)
 }
 
 // ── Narratives (meme/theme keyword buckets) ────────────────────────────────

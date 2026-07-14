@@ -14,14 +14,15 @@
 // monitor). Clients read them and may edit exit/exitArmed — enforced by rules.
 const axios = require('axios')
 
-const DS_CID = { bsc: 'bsc', eth: 'ethereum', sol: 'solana', base: 'base' }
-const CG_NATIVE = { bsc: 'binancecoin', eth: 'ethereum', base: 'ethereum', sol: 'solana' }
-const NATIVE_SYM = { bsc: 'BNB', eth: 'ETH', base: 'ETH', sol: 'SOL' }
+const DS_CID = { bsc: 'bsc', eth: 'ethereum', sol: 'solana', base: 'base', rhood: 'robinhood' }
+const CG_NATIVE = { bsc: 'binancecoin', eth: 'ethereum', base: 'ethereum', sol: 'solana', rhood: 'ethereum' }
+const NATIVE_SYM = { bsc: 'BNB', eth: 'ETH', base: 'ETH', sol: 'SOL', rhood: 'ETH' }
 const EXPLORER = {
   bsc: (h) => `https://bscscan.com/tx/${h}`,
   eth: (h) => `https://etherscan.io/tx/${h}`,
   base: (h) => `https://basescan.org/tx/${h}`,
   sol: (h) => `https://solscan.io/tx/${h}`,
+  rhood: (h) => `https://robinhoodchain.blockscout.com/tx/${h}`,
 }
 
 // Paper positions live in the SAME collection but under a `paper_` id prefix

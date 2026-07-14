@@ -2,7 +2,7 @@
 // safety verdicts, Elite auto-copy toggle, and the wallet leaderboard.
 const { useState: ctS, useEffect: ctE } = React;
 
-const CT_CHAINS = [['bsc', 'BSC'], ['eth', 'Ethereum'], ['base', 'Base'], ['sol', 'Solana']];
+const CT_CHAINS = [['bsc', 'BSC'], ['eth', 'Ethereum'], ['base', 'Base'], ['sol', 'Solana'], ['rhood', 'Robinhood']];
 const ctShort = (a) => String(a).slice(0, 6) + '…' + String(a).slice(-4);
 const ctAgo = (ms) => {
   const m = Math.max(1, Math.round((Date.now() - ms) / 60000));

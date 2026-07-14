@@ -32,6 +32,22 @@ async function fetchRecentBuys(chain, address, sinceMs, keys) {
       }
       return out
     }
+    if (chain === 'rhood') {
+      // Robinhood Chain: Moralis doesn't index 4663 — the chain's Blockscout
+      // exposes the same incoming-ERC20 view keylessly.
+      const { data } = await axios.get(
+        `https://robinhoodchain.blockscout.com/api/v2/addresses/${address}/token-transfers?type=ERC-20&filter=to`,
+        { timeout: 12000 })
+      const out = []
+      for (const tr of data?.items || []) {
+        const at = tr.timestamp ? Date.parse(tr.timestamp) : 0
+        if (at < sinceMs) continue
+        const tok = tr.token?.address || tr.token?.address_hash
+        if (tok) out.push({ tx: tr.tx_hash || tr.transaction_hash, tokenAddress: tok, at })
+        if (out.length >= 15) break
+      }
+      return out
+    }
     if (!EVM_CHAINS[chain] || !keys.moralisKey) return []
     const { data } = await axios.get(
       `https://deep-index.moralis.io/api/v2.2/${address}/erc20/transfers?chain=${EVM_CHAINS[chain]}&limit=15&order=DESC`,

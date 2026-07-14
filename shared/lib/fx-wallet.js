@@ -23,11 +23,11 @@ import {
   encryptData, decryptData, buildAuthCheck, verifyAuthCheck,
   createWallet, importWallet, getBalanceNum, getTokenBalanceNum,
   getTxs, fetchTokenPrices, chainMeta, isValidAddress, send as sendImpl,
-  initTonWeb, CHAINS, getTokenMeta,
+  initTonWeb, CHAINS, getTokenMeta, relayBridgeQuote, relayBridgeExecute,
 } from './wallet-crypto';
 
 // Chains where custom tokens are supported today (EVM read/send + Solana read).
-const TOKEN_CHAINS = ['eth', 'bsc', 'base', 'matic', 'sol'];
+const TOKEN_CHAINS = ['eth', 'bsc', 'base', 'matic', 'rhood', 'sol'];
 // EVM contract addresses are case-insensitive (store lowercased); Solana mints
 // are base58 and case-sensitive (store verbatim). Used for dedupe + lookups.
 const normTokenAddr = (chain, a) => (chain === 'sol' ? String(a || '').trim() : String(a || '').trim().toLowerCase());
@@ -263,6 +263,38 @@ async function sendAsset({ chain, to, amount, token }) {
   return await sendImpl.evmNative(chain, to, amount, pk);
 }
 
+// ── Bridge to Robinhood Chain (Relay) ──
+// Quote is read-only; execute is password-gated exactly like sendAsset. The
+// destination is the user's Robinhood wallet if they added one, else the same
+// address as the source wallet (same key controls it on any EVM chain — the UI
+// nudges them to import the key on Robinhood afterwards so the app shows it).
+function bridgeSupportedFrom() {
+  return ['eth', 'base', 'bsc', 'matic'].filter((c) => wallets[c] && wallets[c].address);
+}
+async function bridgeQuote({ fromChain, amount }) {
+  await ensureLibs();
+  const w = wallets[fromChain];
+  if (!w) throw new Error('No ' + String(fromChain).toUpperCase() + ' wallet to bridge from');
+  if (!(Number(amount) > 0)) throw new Error('Enter a valid amount');
+  const recipient = (wallets.rhood && wallets.rhood.address) || w.address;
+  const q = await relayBridgeQuote({ fromChain, toChain: 'rhood', amountNative: amount, address: w.address });
+  return { ...q, recipient, recipientIsRhoodWallet: !!(wallets.rhood && wallets.rhood.address) };
+}
+async function bridgeExecute({ fromChain, quote }) {
+  await ensureLibs();
+  if (!sessionPwd) throw new Error('Unlock your wallet to bridge');
+  const w = wallets[fromChain];
+  if (!w) throw new Error('No ' + String(fromChain).toUpperCase() + ' wallet to bridge from');
+  const pk = await decryptData(w.encPrivateKey, sessionPwd).catch(async () => {
+    const ok = await unlockable(sessionPwd).catch(() => false);
+    if (!ok) { lock(); throw new Error('Your wallet password has changed since you unlocked — unlock again with your current password.'); }
+    throw new Error('This ' + fromChain.toUpperCase() + ' wallet was encrypted with a different password than your current one. Re-import it to fix it.');
+  });
+  const res = await relayBridgeExecute({ fromChain, quote, privKey: pk });
+  refreshPortfolio();
+  return res;
+}
+
 // ── Change password (re-encrypt every secret + the auth check) ──
 async function changePassword(oldPw, newPw) {
   const id = uid(); if (!id) throw new Error('Sign in required');
@@ -412,6 +444,8 @@ window.FXWallet = {
   detectToken, addToken, removeToken, tokenChains: () => [...TOKEN_CHAINS],
   // money
   send: sendAsset, refreshPortfolio, txHistory,
+  // bridge (→ Robinhood Chain via Relay)
+  bridgeQuote, bridgeExecute, bridgeSupportedFrom,
   // settings
   saveSettings, toggleHidden,
   addContact, removeContact, removeConnectedApp,

@@ -50,6 +50,19 @@ A correctness pass over the whole signal-bot loop plus the missing piece of trad
 
 ---
 
+## 0.3 Latest increment — Robinhood Chain integration (2026-07-14)
+
+**[LIVE] Robinhood Chain (`rhood`, chain id 4663)** across every on-chain surface, two weeks after the chain's mainnet launch. All parameters verified on-chain before wiring (Uniswap V2 Router02 `0x89e5…9eba` → `WETH()`/`factory()` cross-checked against live pairs and Uniswap's deployment docs):
+- **Wallet**: create/import/send/receive + custom tokens on Robinhood (generic EVM engine + chain registry; Blockscout tx history & explorer links; CoinGecko platform `robinhood` for token prices).
+- **Bridge (new feature)**: a **Bridge** action in the wallet — quote + one-tap deposit from ETH/Base/BSC/Polygon onto Robinhood via **Relay** (seconds-fast, officially supports 4663). Deposits only; the quote (receive amount, USD, ETA, destination) is shown before the user confirms and signs locally.
+- **Gem scanner**: DexScreener slug `robinhood` in all discovery paths (29 live candidates found on first scan); UI chain chips + Telegram alert chains.
+- **Safety**: GoPlus/Honeypot.is don't cover 4663 yet (probed) → tokens pass as UNVERIFIED per the outage semantic, plus a **Blockscout contract-verification signal** (isOpenSource).
+- **Bubble maps**: full holder graph (top holders, %, concentration, transfer-link clusters) via the chain's **Blockscout v2 API** — Moralis doesn't index 4663.
+- **DEX trading**: buy/sell through the on-chain Uniswap V2 router (auto-buy, snipes, proposals, exits all inherit it); copy-trading buy detection via Blockscout; positions/gem-tracker/Telegram/Pointer chain maps all extended.
+- Verified with **13/13 live read-only tests** against the real chain (RPC, token lookup, holder graph, safety, gem scan, bridge quote).
+
+---
+
 ## 0.1 Previous increment — signal-bot hardening + track-record depth (2026-07-11)
 
 A focused build-out that makes the **CEX signal bot** trustworthy and analyzable end-to-end, deepens the **verified track records**, and closes several delivery/UX gaps. All shipped to production (fxcrypt-app + fxcrypt-webapp + Cloud Functions):

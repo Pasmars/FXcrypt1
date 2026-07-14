@@ -226,6 +226,19 @@ function evalHoneypotIs(r) {
   }
 }
 
+// ── Blockscout contract verification (Robinhood Chain) ───────────────────
+// GoPlus and Honeypot.is don't cover chain 4663 yet, so tokens there pass as
+// UNVERIFIED (the designed outage semantic). The chain's own Blockscout does
+// tell us whether the contract source is verified — a cheap, soft quality
+// signal we surface as isOpenSource. Never a hard fail on its own.
+const BLOCKSCOUT_RHOOD = 'https://robinhoodchain.blockscout.com/api/v2'
+async function checkBlockscoutVerified(address) {
+  try {
+    const { data } = await axios.get(`${BLOCKSCOUT_RHOOD}/smart-contracts/${address}`, { timeout: TIMEOUT })
+    return { isVerified: data?.is_verified === true || !!data?.source_code }
+  } catch { return null }
+}
+
 // ── Main: batch safety filter ─────────────────────────────────────────────
 // Input:  candidates[] = [{ address, ...anything }]
 // Output: passing candidates with `.safetyData` attached
@@ -238,11 +251,11 @@ async function filterSafeTokens(candidates, chain) {
   const gpChainId = chain === 'bsc'  ? '56'
     : chain === 'eth'  ? '1'
     : chain === 'base' ? '8453'
-    : null
+    : null // rhood (4663) not on GoPlus yet — probed 2026-07 (code 2022)
 
   const hpChainId = chain === 'base' ? 8453 : 56
 
-  const [gpBatch, hpResults, rcResults] = await Promise.all([
+  const [gpBatch, hpResults, rcResults, bsResults] = await Promise.all([
     gpChainId
       ? batchGoPlusEVM(addresses, gpChainId)
       : chain === 'sol' ? batchGoPlusSOL(addresses) : Promise.resolve({}),
@@ -252,7 +265,12 @@ async function filterSafeTokens(candidates, chain) {
     chain === 'sol'
       ? concurrentMap(addresses, checkRugCheck)
       : Promise.resolve(addresses.map(() => null)),
+    chain === 'rhood'
+      ? concurrentMap(addresses, checkBlockscoutVerified)
+      : Promise.resolve(addresses.map(() => null)),
   ])
+  const bsMap = {}
+  addresses.forEach((a, i) => { bsMap[a.toLowerCase()] = bsResults[i] })
 
   // Index individual results by address (lowercase)
   const hpMap = {}
@@ -309,7 +327,7 @@ async function filterSafeTokens(candidates, chain) {
       flags:        allFlags,
       buyTax,
       sellTax,
-      isOpenSource: evGP.isOpenSource ?? evHP.isOpenSource ?? null,
+      isOpenSource: evGP.isOpenSource ?? evHP.isOpenSource ?? (bsMap[key] ? bsMap[key].isVerified : null),
       isMintable:   evGP.isMintable ?? null,
       holderCount:  evGP.holderCount ?? null,
       ownerPercent: evGP.ownerPercent ?? null,

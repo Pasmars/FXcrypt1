@@ -10,6 +10,9 @@ export const BASE_RPCS  = ['https://mainnet.base.org', 'https://base.publicnode.
 export const BSC_RPCS   = ['https://bsc-dataseed.binance.org', 'https://bsc.publicnode.com', 'https://bsc-rpc.publicnode.com'];
 export const ETH_RPCS   = ['https://cloudflare-eth.com', 'https://eth.llamarpc.com', 'https://ethereum-rpc.publicnode.com'];
 export const MATIC_RPCS = ['https://polygon-bor-rpc.publicnode.com', 'https://polygon-rpc.com'];
+// Robinhood Chain (Arbitrum Orbit L2, mainnet 2026-07-01). Chain id 4663, ETH
+// gas. The public RPC is rate-limited but fine for wallet reads/sends.
+export const RHOOD_RPCS = ['https://rpc.mainnet.chain.robinhood.com'];
 export const SOL_RPCS    = ['https://api.mainnet-beta.solana.com', 'https://solana-rpc.publicnode.com'];
 export const SOL_RPC    = SOL_RPCS[0]; // primary endpoint (used for sending/confirming)
 export const TON_API    = 'https://toncenter.com/api/v2';
@@ -18,7 +21,8 @@ export const CHAIN_CFG: any = {
   base:  { rpcs: BASE_RPCS,  symbol: 'ETH',   chainId: 8453, explorer: 'https://basescan.org/tx/' },
   bsc:   { rpcs: BSC_RPCS,   symbol: 'BNB',   chainId: 56,   explorer: 'https://bscscan.com/tx/' },
   eth:   { rpcs: ETH_RPCS,   symbol: 'ETH',   chainId: 1,    explorer: 'https://etherscan.io/tx/' },
-  matic: { rpcs: MATIC_RPCS, symbol: 'MATIC', chainId: 137,  explorer: 'https://polygonscan.com/tx/' }
+  matic: { rpcs: MATIC_RPCS, symbol: 'MATIC', chainId: 137,  explorer: 'https://polygonscan.com/tx/' },
+  rhood: { rpcs: RHOOD_RPCS, symbol: 'ETH',   chainId: 4663, explorer: 'https://robinhoodchain.blockscout.com/tx/' }
 };
 
 // ── Web Crypto ──
@@ -187,6 +191,76 @@ export async function sendEvmToken(chain, contractAddr, to, amount, decimals, pr
   throw lastErr || new Error('Token transfer failed on all endpoints');
 }
 
+// ── Bridge (Relay) — move native funds from an EVM chain onto Robinhood Chain ──
+// Relay (relay.link) officially supports Robinhood Chain (4663) and quotes are
+// keyless. Flow: quote → user reviews receive-amount/fees/ETA → execute signs
+// the returned origin-chain transaction(s) with the local key. Deposits only;
+// withdrawals (7-day challenge path) stay on the official portal.
+const RELAY_API = 'https://api.relay.link';
+const ZERO_ADDR = '0x0000000000000000000000000000000000000000';
+
+export async function relayBridgeQuote({ fromChain, toChain = 'rhood', amountNative, address }) {
+  const from = CHAIN_CFG[fromChain]; const to = CHAIN_CFG[toChain];
+  if (!from) throw new Error('Bridging from ' + String(fromChain).toUpperCase() + ' is not supported');
+  if (!to) throw new Error('Unknown destination chain');
+  const e = getEthers();
+  const amount = e.utils.parseEther(String(amountNative)).toString();
+  const res = await fetch(`${RELAY_API}/quote`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      user: address, recipient: address,
+      originChainId: from.chainId, destinationChainId: to.chainId,
+      originCurrency: ZERO_ADDR, destinationCurrency: ZERO_ADDR,
+      amount, tradeType: 'EXACT_INPUT',
+    }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body?.message || 'Bridge quote failed (' + res.status + ')');
+  const steps = (body.steps || []).filter((s) => s.kind === 'transaction' && Array.isArray(s.items) && s.items.length);
+  if (!steps.length) throw new Error('Bridge route unavailable for this amount right now');
+  const d = body.details || {};
+  return {
+    steps,
+    amountIn: d.currencyIn?.amountFormatted || String(amountNative),
+    amountInUsd: d.currencyIn?.amountUsd || null,
+    amountOut: d.currencyOut?.amountFormatted || null,
+    amountOutUsd: d.currencyOut?.amountUsd || null,
+    outSymbol: to.symbol,
+    timeEstimateSec: d.timeEstimate != null ? +d.timeEstimate : null,
+    totalImpactUsd: d.totalImpact?.usd || null,
+    requestId: (steps[0] && steps[0].requestId) || body.requestId || null,
+  };
+}
+
+// Sign & broadcast the quote's origin-chain transaction(s). Returns the last
+// origin tx hash; Relay fills on the destination side (usually seconds).
+export async function relayBridgeExecute({ fromChain, quote, privKey }) {
+  const e = getEthers(); const cfg = CHAIN_CFG[fromChain];
+  if (!cfg) throw new Error('Unsupported source chain');
+  const rpcs = await _orderEvmRpcsByHealth(cfg.rpcs);
+  let lastHash = null;
+  for (const step of quote.steps) {
+    for (const item of step.items) {
+      const t = item.data || {};
+      if (t.chainId && +t.chainId !== cfg.chainId) throw new Error('Bridge step targets an unexpected chain — aborting');
+      let lastErr;
+      let sent = null;
+      for (const rpc of rpcs) {
+        try {
+          const provider = new e.providers.JsonRpcProvider(rpc);
+          const signer = new e.Wallet(privKey, provider);
+          sent = await signer.sendTransaction({ to: t.to, data: t.data || '0x', value: t.value ? e.BigNumber.from(t.value) : 0 });
+          await sent.wait(1);
+          break;
+        } catch (err) { lastErr = err; }
+      }
+      if (!sent) throw lastErr || new Error('Bridge transaction failed on all endpoints');
+      lastHash = sent.hash;
+    }
+  }
+  return { txHash: lastHash };
+}
+
 // ── Solana ──
 const _B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 function b58enc(bytes) { let n = 0n; for (const b of bytes) n = n * 256n + BigInt(b); let s = ''; while (n > 0n) { s = _B58[Number(n % 58n)] + s; n /= 58n; } for (const b of bytes) { if (b !== 0) break; s = '1' + s; } return s; }
@@ -246,6 +320,9 @@ export const CHAINS: ChainMeta[] = [
   { key: 'sol',   label: 'Solana',   symbol: 'SOL',   evm: false, coingeckoId: 'solana',           cgPlatform: null,                 dexId: 'solana',   explorer: 'https://solscan.io',     txExplorer: 'https://solscan.io/tx/',     addrExplorer: 'https://solscan.io/account/',     blockscout: null,                             twSlug: 'solana',     logo: NATIVE_LOGO.sol,   color: '#9945FF' },
   { key: 'base',  label: 'Base',     symbol: 'ETH',   evm: true,  coingeckoId: 'ethereum',         cgPlatform: 'base',               dexId: 'base',     explorer: 'https://basescan.org',   txExplorer: 'https://basescan.org/tx/',   addrExplorer: 'https://basescan.org/address/',   blockscout: 'https://base.blockscout.com',    twSlug: 'base',       logo: NATIVE_LOGO.eth,   color: '#0052FF' },
   { key: 'matic', label: 'Polygon',  symbol: 'MATIC', evm: true,  coingeckoId: 'matic-network',    cgPlatform: 'polygon-pos',        dexId: 'polygon',  explorer: 'https://polygonscan.com',txExplorer: 'https://polygonscan.com/tx/',addrExplorer: 'https://polygonscan.com/address/',blockscout: 'https://polygon.blockscout.com', twSlug: 'polygon',    logo: NATIVE_LOGO.matic, color: '#8247E5' },
+  // Robinhood Chain — Arbitrum Orbit L2 (chain id 4663, ETH gas), mainnet
+  // 2026-07-01. DexScreener slug 'robinhood', CoinGecko platform 'robinhood'.
+  { key: 'rhood', label: 'Robinhood', symbol: 'ETH',  evm: true,  coingeckoId: 'ethereum',         cgPlatform: 'robinhood',          dexId: 'robinhood', explorer: 'https://robinhoodchain.blockscout.com', txExplorer: 'https://robinhoodchain.blockscout.com/tx/', addrExplorer: 'https://robinhoodchain.blockscout.com/address/', blockscout: 'https://robinhoodchain.blockscout.com', twSlug: '', logo: NATIVE_LOGO.eth, color: '#C3F53C' },
   { key: 'ton',   label: 'TON',      symbol: 'TON',   evm: false, coingeckoId: 'the-open-network', cgPlatform: null,                 dexId: 'ton',      explorer: 'https://tonscan.org',    txExplorer: 'https://tonscan.org/tx/',    addrExplorer: 'https://tonscan.org/address/',    blockscout: null,                             twSlug: 'ton',        logo: NATIVE_LOGO.ton,   color: '#0098EA' }
 ];
 export const chainMeta = (key: string) => CHAINS.find((c) => c.key === key);

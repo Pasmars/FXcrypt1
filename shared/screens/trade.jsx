@@ -485,11 +485,11 @@ function gemAlertToken(a) {
 // Full blockchain narrative taxonomy — must mirror classifyNarrative() in
 // fx-api.js. "All" applies no filter (the scan is already narrative-agnostic).
 const GEM_NARRATIVES = ['All', 'AI', 'Meme', 'DeFi', 'DePIN', 'RWA', 'GameFi', 'SocialFi', 'Layer', 'Payments', 'New'];
-const GEM_CHAIN_OPTS = [['All', 'All chains'], ['sol', 'Solana'], ['eth', 'Ethereum'], ['base', 'Base'], ['bsc', 'BSC']];
+const GEM_CHAIN_OPTS = [['All', 'All chains'], ['sol', 'Solana'], ['eth', 'Ethereum'], ['base', 'Base'], ['bsc', 'BSC'], ['rhood', 'Robinhood']];
 const GEM_SORT_OPTS = [{ value: 'score', label: 'Top score' }, { value: 'trending', label: 'Trending' }, { value: 'new', label: 'Newest' }, { value: 'gainers', label: 'Top gainers' }];
 const GEM_AGE_UNITS = [{ value: 'hours', label: 'Hours' }, { value: 'days', label: 'Days' }, { value: 'weeks', label: 'Weeks' }, { value: 'months', label: 'Months' }, { value: 'years', label: 'Years' }];
 // Chains the Telegram auto-alert scheduler can scan + send (order = chip order).
-const GEM_TG_CHAINS = [['bsc', 'BSC'], ['eth', 'Ethereum'], ['base', 'Base'], ['sol', 'Solana']];
+const GEM_TG_CHAINS = [['bsc', 'BSC'], ['eth', 'Ethereum'], ['base', 'Base'], ['sol', 'Solana'], ['rhood', 'Robinhood']];
 const GEM_SETTINGS_DEFAULT = { minLiquidity: 5000, minVolume: 1000, minMarketCap: 0, minScore: 60, sort: 'score', minAgeAmount: 0, minAgeUnit: 'hours', minAgeHours: 0, maxAgeAmount: 1, maxAgeUnit: 'days', maxAgeHours: 24, buyAmountBsc: 0.005, buyAmountEth: 0.01, buyAmountSol: 0.05, buySlippage: 10, exitTp: 100, exitSl: 30, exitTrail: 0, exitMaxHold: 0, telegramChains: ['bsc', 'eth', 'sol', 'base'] };
 const GEM_SCAN_STEPS = [
   { icon: 'scan', label: 'Pulling fresh pairs', sub: 'DexScreener · GeckoTerminal' },
@@ -567,7 +567,7 @@ function GemScanner({ go, onTrade, locked, onUpsell }) {
       // The persisted settings (cfg) drive depth/sort so the sliders icon and the
       // manual scan share one source of truth with the auto scheduler.
       const opts = {
-        chains: chain !== 'All' ? [chain] : ['sol', 'eth', 'base', 'bsc'],
+        chains: chain !== 'All' ? [chain] : ['sol', 'eth', 'base', 'bsc', 'rhood'],
         minLiquidity: cfg.minLiquidity, minVolume: cfg.minVolume, minMarketCap: cfg.minMarketCap,
         minAgeHours: cfg.minAgeHours, maxAgeHours: cfg.maxAgeHours, minScore: cfg.minScore, sort: cfg.sort,
       };
