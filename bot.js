@@ -27,7 +27,9 @@ async function _decryptWalletKey(enc, password) {
   const te  = new TextEncoder()
   const km  = await crypto.subtle.importKey('raw', te.encode(password), 'PBKDF2', false, ['deriveKey'])
   const key = await crypto.subtle.deriveKey(
-    { name: 'PBKDF2', salt: _b64dec(enc.s), iterations: 100000, hash: 'SHA-256' },
+    // Honor the blob's own iteration count (`it`, 600k for wallets created in
+    // the mobile/webapp engine); blobs without it are legacy 100k.
+    { name: 'PBKDF2', salt: _b64dec(enc.s), iterations: enc.it || 100000, hash: 'SHA-256' },
     km, { name: 'AES-GCM', length: 256 }, false, ['decrypt']
   )
   const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: _b64dec(enc.i) }, key, _b64dec(enc.d))

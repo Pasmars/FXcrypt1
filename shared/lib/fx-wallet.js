@@ -241,7 +241,18 @@ async function sendAsset({ chain, to, amount, token }) {
   if (!w) throw new Error('No wallet on ' + chain.toUpperCase());
   if (!isValidAddress(chain, to)) throw new Error('Invalid ' + chain.toUpperCase() + ' recipient address');
   if (!(Number(amount) > 0)) throw new Error('Enter a valid amount');
-  const pk = await decryptData(w.encPrivateKey, sessionPwd).catch(() => { throw new Error('Could not unlock this wallet with your session password'); });
+  const pk = await decryptData(w.encPrivateKey, sessionPwd).catch(async () => {
+    // The session opened, but THIS key blob won't decrypt. Tell the user what
+    // actually happened instead of a dead-end "could not unlock":
+    //  - session stale (password changed on another device) → re-lock, re-unlock
+    //  - blob encrypted under a different/older password → re-import fixes it
+    const sessionStillValid = await unlockable(sessionPwd).catch(() => false);
+    if (!sessionStillValid) {
+      lock();
+      throw new Error('Your wallet password has changed since you unlocked — unlock again with your current password.');
+    }
+    throw new Error('This ' + chain.toUpperCase() + ' wallet was encrypted with a different password than your current one. Re-import it (Manage wallets → Add or import) using its recovery phrase or private key, then try again.');
+  });
 
   if (token && token.address) {
     if (chain === 'sol' || chain === 'ton') throw new Error('Token sends are supported on EVM chains only for now');

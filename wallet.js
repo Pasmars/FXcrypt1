@@ -73,24 +73,33 @@ const CHAIN_ORDER = ['ton', 'base', 'bsc', 'eth', 'matic', 'sol'];
 function b64enc(buf) { return btoa(String.fromCharCode(...new Uint8Array(buf))); }
 function b64dec(s)   { return Uint8Array.from(atob(s), c => c.charCodeAt(0)); }
 
+// Iteration counts MUST stay in sync with shared/lib/wallet-crypto.ts (the
+// mobile/webapp engine): new blobs are written at 600k and carry their count in
+// `it`; blobs without `it` are legacy 100k. Decrypt honors the blob's own count
+// so wallets created in EITHER app open in BOTH — a hardcoded 100k here was
+// failing every wallet the mobile/webapp created ("could not unlock this
+// wallet with your session password" despite the correct password).
+const PBKDF2_ITERATIONS = 600000;
+const LEGACY_PBKDF2_ITERATIONS = 100000;
+
 async function encryptData(plaintext, password) {
   const enc  = new TextEncoder();
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const iv   = crypto.getRandomValues(new Uint8Array(12));
   const km   = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
   const key  = await crypto.subtle.deriveKey(
-    { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' },
+    { name: 'PBKDF2', salt, iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' },
     km, { name: 'AES-GCM', length: 256 }, false, ['encrypt']
   );
   const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(plaintext));
-  return { d: b64enc(ct), i: b64enc(iv), s: b64enc(salt) };
+  return { d: b64enc(ct), i: b64enc(iv), s: b64enc(salt), it: PBKDF2_ITERATIONS };
 }
 
 async function decryptData(enc, password) {
   const te  = new TextEncoder();
   const km  = await crypto.subtle.importKey('raw', te.encode(password), 'PBKDF2', false, ['deriveKey']);
   const key = await crypto.subtle.deriveKey(
-    { name: 'PBKDF2', salt: b64dec(enc.s), iterations: 100000, hash: 'SHA-256' },
+    { name: 'PBKDF2', salt: b64dec(enc.s), iterations: enc.it || LEGACY_PBKDF2_ITERATIONS, hash: 'SHA-256' },
     km, { name: 'AES-GCM', length: 256 }, false, ['decrypt']
   );
   const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64dec(enc.i) }, key, b64dec(enc.d));
