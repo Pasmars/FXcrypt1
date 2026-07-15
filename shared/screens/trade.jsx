@@ -4,7 +4,18 @@ const { useState: tS, useEffect: tE } = React;
 // ─── Token picker: search any tradable token by name, ticker or contract ───
 // DexScreener's search endpoint handles all three query kinds; results are
 // filtered to the chains the DEX bot can actually execute on.
-const PICK_CHAIN_MAP = { bsc: 'bsc', ethereum: 'eth', solana: 'sol', base: 'base' };
+const PICK_CHAIN_MAP = { bsc: 'bsc', ethereum: 'eth', solana: 'sol', base: 'base', robinhood: 'rhood' };
+// Chains the trading engine can actually execute on (mirrors the backend's
+// validateChain + trader.js routers). A token on any other chain must never be
+// sent to the router — the trade would target the wrong network.
+const TRADE_CHAINS = ['sol', 'eth', 'bsc', 'base', 'rhood'];
+// CoinGecko platform slug → executable chain key (canonical-contract resolution
+// for curated market coins that arrive without a contract address).
+const CG_PLATFORM_CHAIN = { ethereum: 'eth', 'binance-smart-chain': 'bsc', base: 'base', solana: 'sol', robinhood: 'rhood' };
+// Session cache: cg id → resolved { ch, addr } (or null = known-unresolvable,
+// e.g. BTC). Contracts don't move, and caching keeps repeat trade opens off
+// CoinGecko's public rate limit.
+const _cgResolveCache = new Map();
 function TokenPickerSheet({ open, onClose, onPick }) {
   const [q, setQ] = tS('');
   const [rows, setRows] = tS(null); // null = idle, [] = no results
@@ -58,7 +69,7 @@ function TokenPickerSheet({ open, onClose, onPick }) {
       <div style={{ maxHeight: 380, overflowY: 'auto', margin: '0 -4px' }}>
         {rows == null && !busy && (
           <div style={{ textAlign: 'center', color: 'var(--muted)', padding: '26px 16px', fontSize: 13, lineHeight: 1.5 }}>
-            Search live markets on BSC, Ethereum, Base &amp; Solana.<br />Paste a contract address for an exact match.
+            Search live markets on BSC, Ethereum, Base, Solana &amp; Robinhood.<br />Paste a contract address for an exact match.
           </div>
         )}
         {rows != null && rows.length === 0 && !busy && (
@@ -103,15 +114,85 @@ function TradeFlow({ token, side = 'buy', go, onDone }) {
   const [txHash, setTxHash] = tS('');
   const [wasPaper, setWasPaper] = tS(false); // last fill was simulated (paper mode)
   const [pickOpen, setPickOpen] = tS(false); // token picker (name/ticker/contract)
+  const [resolving, setResolving] = tS(false); // auto-locating the token's on-chain market
   const txRef = React.useRef(null);
   const chain = (tok && FX.chains.find(c => c.id === tok.chain)) || FX.chains[0];
+
+  // Tokens arriving from Markets (CoinGecko top-100) carry no contract address
+  // and only a cosmetic chain hint. Resolve them via CoinGecko's platform list —
+  // the CANONICAL contract per chain (a DexScreener symbol search is spoofable
+  // by copycat tokens; an id-keyed platform lookup is not) — so the trade
+  // executes on the chain the token actually lives on, with the real contract.
+  tE(() => {
+    if (!tok || tok.tokenAddress || !tok.cg) { setResolving(false); return; }
+    let alive = true;
+    setResolving(true);
+    (async () => {
+      try {
+        let picked;
+        if (_cgResolveCache.has(tok.cg)) {
+          picked = _cgResolveCache.get(tok.cg);
+        } else {
+          const r = await fetch('https://api.coingecko.com/api/v3/coins/' + encodeURIComponent(tok.cg) + '?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false');
+          if (!r.ok) return; // rate-limited/unknown — user can still pick manually
+          const data = await r.json();
+          const plats = (data && data.platforms) || {};
+          const options = [];
+          for (const plat in plats) {
+            const ch = CG_PLATFORM_CHAIN[plat];
+            if (ch && plats[plat]) options.push({ ch, addr: plats[plat] });
+          }
+          // Prefer the token's own native-chain hint, then a fixed depth order.
+          const pref = [tok.chain, 'eth', 'sol', 'bsc', 'base', 'rhood'];
+          options.sort((a, b) => { const ia = pref.indexOf(a.ch), ib = pref.indexOf(b.ch); return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib); });
+          picked = options[0] || null;
+          _cgResolveCache.set(tok.cg, picked);
+        }
+        if (!picked || !alive) return;
+        // Enrich with the contract's own live pools (address-keyed — imposters
+        // can't appear here) for liquidity, DEX link and executable price.
+        let liqUsd = 0, dexUrl = null, px = 0;
+        try {
+          const dr = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + picked.addr);
+          const dd = await dr.json();
+          let bp = null;
+          for (const p of (dd && dd.pairs) || []) {
+            if (PICK_CHAIN_MAP[p.chainId] !== picked.ch) continue;
+            const a = (p.baseToken && p.baseToken.address) || '';
+            const same = picked.ch === 'sol' ? a === picked.addr : a.toLowerCase() === picked.addr.toLowerCase();
+            if (!same) continue;
+            if (!bp || ((p.liquidity && p.liquidity.usd) || 0) > ((bp.liquidity && bp.liquidity.usd) || 0)) bp = p;
+          }
+          if (bp) { liqUsd = (bp.liquidity && bp.liquidity.usd) || 0; dexUrl = bp.url || null; px = parseFloat(bp.priceUsd) || 0; }
+        } catch (e) { /* pools unavailable — chain + contract are still correct */ }
+        if (!alive) return;
+        setTok((cur) => (cur && cur.sym === tok.sym && !cur.tokenAddress) ? {
+          ...cur, chain: picked.ch, tokenAddress: picked.addr, liqUsd,
+          dexUrl: dexUrl || cur.dexUrl || null, price: cur.price || px,
+        } : cur);
+      } catch (e) { /* leave unresolved — startTrade prompts the picker */ }
+      finally { if (alive) setResolving(false); }
+    })();
+    return () => { alive = false; };
+  }, [tok && tok.sym, tok && tok.tokenAddress, tok && tok.cg]);
 
   // Every trade is REAL (or paper-mode simulated server-side) — it must have a
   // contract address the DEX router can swap. No fake client-side fills.
   const startTrade = () => {
     setTradeErr('');
     if (!tok.tokenAddress) {
-      setTradeErr('This asset has no DEX contract to trade. Tap the token above and pick one — search by name, ticker or contract address.');
+      setTradeErr(resolving
+        ? 'Still locating this token’s on-chain market — give it a second, or tap the token above to pick one yourself.'
+        : 'This asset has no DEX contract to trade. Tap the token above and pick one — search by name, ticker or contract address.');
+      setStage('form');
+      return;
+    }
+    // Execution must happen on the chain the token lives on — refuse chains the
+    // engine can't trade rather than silently routing elsewhere.
+    if (!TRADE_CHAINS.includes(tok.chain)) {
+      const cname = (FX.chains.find(c => c.id === tok.chain) || {}).name || String(tok.chain || '').toUpperCase();
+      setTradeErr('This token lives on ' + cname + ', which the trading engine doesn’t support yet. Supported: Solana, Ethereum, BNB Chain, Base & Robinhood — tap the token above to pick a market on one of those.');
+      setStage('form');
       return;
     }
     if (!window.FXAPI) { setTradeErr('Trading engine not loaded — refresh and try again.'); return; }
@@ -210,7 +291,7 @@ function TradeFlow({ token, side = 'buy', go, onDone }) {
             </div>
           ))}
           {txHash && (() => {
-            const url = ({ bsc: 'https://bscscan.com/tx/', eth: 'https://etherscan.io/tx/', base: 'https://basescan.org/tx/', sol: 'https://solscan.io/tx/' })[tok.chain];
+            const url = ({ bsc: 'https://bscscan.com/tx/', eth: 'https://etherscan.io/tx/', base: 'https://basescan.org/tx/', sol: 'https://solscan.io/tx/', rhood: 'https://robinhoodchain.blockscout.com/tx/' })[tok.chain];
             return (
               <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: 13.5 }}>
                 <span style={{ color: 'var(--muted)' }}>Tx</span>
@@ -241,7 +322,7 @@ function TradeFlow({ token, side = 'buy', go, onDone }) {
             <span style={{ fontWeight: 800, fontSize: 15.5 }}>{tok.sym}</span>
             <Icon name="chevD" size={15} color="var(--muted)" />
           </div>
-          <div style={{ fontSize: 12, color: 'var(--muted)' }}>{tok.tokenAddress ? `${chain.name} · ${chain.dex}` : 'Tap to pick a tradable token'}</div>
+          <div style={{ fontSize: 12, color: 'var(--muted)' }}>{tok.tokenAddress ? `${chain.name} · ${chain.dex}` : resolving ? 'Locating on-chain market…' : 'Tap to pick a tradable token'}</div>
         </div>
         <div style={{ textAlign: 'right' }}>
           <div style={{ fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{fmtUsd(tok.price)}</div>
@@ -437,7 +518,7 @@ function TradeProcessing({ s, tok, amt, payUnit, recv, chain, onComplete }) {
 // ─── Gem Scanner ───
 // Build a token-detail object from a gem card so tapping a gem opens the full
 // token view (with DexScreener / DEXTools / explorer research links).
-const GEM_DS_SLUG = { sol: 'solana', eth: 'ethereum', bsc: 'bsc', base: 'base', poly: 'polygon', arb: 'arbitrum' };
+const GEM_DS_SLUG = { sol: 'solana', eth: 'ethereum', bsc: 'bsc', base: 'base', poly: 'polygon', arb: 'arbitrum', rhood: 'robinhood' };
 function gemToken(g) {
   const strip = (v) => String(v == null ? '—' : v).replace(/^\$/, '');
   return {

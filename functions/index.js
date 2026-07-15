@@ -74,6 +74,9 @@ const TG_TOKEN = () => {
 
 // ── Input validators ───────────────────────────────────────────────────────
 const VALID_CHAINS = new Set(['bsc', 'eth', 'sol', 'base', 'ton', 'rhood'])
+// EVM chains share one key/address — a key saved for any of them is valid on
+// all of them (used for the unified-EVM wallet fan-out + trade fallback).
+const EVM_CHAINS = ['eth', 'bsc', 'base', 'rhood']
 
 function validateChain(chain) {
   if (!VALID_CHAINS.has(chain))
@@ -83,7 +86,7 @@ function validateChain(chain) {
 function validateAddress(chain, address) {
   if (typeof address !== 'string' || !address.trim())
     throw new functions.https.HttpsError('invalid-argument', 'Address is required')
-  const isEvm = chain === 'bsc' || chain === 'eth' || chain === 'base'
+  const isEvm = chain === 'bsc' || chain === 'eth' || chain === 'base' || chain === 'rhood'
   if (isEvm && !/^0x[0-9a-fA-F]{40}$/.test(address))
     throw new functions.https.HttpsError('invalid-argument', 'Invalid EVM address format')
   if (chain === 'sol' && !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address))
@@ -666,10 +669,19 @@ exports.executeTrade = fn.https.onCall(async (data, context) => {
     return { status: 'paper', simulated: true, txHash: null, chain, tokenAddress, priceUsd: info.priceUsd }
   }
 
-  if (!wallets[chain]?.encryptedKey)
+  // Unified EVM wallet: one key/address is valid on every EVM chain, so a trade
+  // on a chain without its own saved wallet falls back to any other EVM key —
+  // the trade still executes on the token's own chain, just signed by the
+  // user's (shared) EVM account.
+  let walletEntry = wallets[chain]
+  if (!walletEntry?.encryptedKey && EVM_CHAINS.includes(chain)) {
+    const alt = EVM_CHAINS.find((c) => wallets[c]?.encryptedKey)
+    if (alt) walletEntry = wallets[alt]
+  }
+  if (!walletEntry?.encryptedKey)
     throw new functions.https.HttpsError('failed-precondition', `No ${chain.toUpperCase()} wallet configured`)
 
-  const pk   = encryption.decrypt(wallets[chain].encryptedKey, uid, MASTER_SECRET())
+  const pk   = encryption.decrypt(walletEntry.encryptedKey, uid, MASTER_SECRET())
   const slip = slippage ? validateSlippage(slippage) : (settings.defaultSlippage || 5)
   const gasX = settings.defaultGasMultiplier || 1.2
 
@@ -797,8 +809,19 @@ exports.saveWallet = fn.https.onCall(async (data, context) => {
 
   const encryptedKey = encryption.encrypt(privateKey.trim(), uid, MASTER_SECRET())
 
+  // Unified EVM wallet: the same key/address is valid on every EVM chain, so
+  // saving an EVM wallet provisions it on all EVM chains that don't already
+  // have their own (existing entries are never overwritten — replacing a key
+  // the user saved deliberately could strand funds).
+  const walletPatch = { [chain]: { address, encryptedKey } }
+  if (EVM_CHAINS.includes(chain)) {
+    const existing = ((await db.doc(`users/${uid}`).get()).data()?.botSettings || {}).wallets || {}
+    for (const c of EVM_CHAINS) {
+      if (c !== chain && !existing[c]?.encryptedKey) walletPatch[c] = { address, encryptedKey }
+    }
+  }
   await db.doc(`users/${uid}`).set(
-    { botSettings: { wallets: { [chain]: { address, encryptedKey } } } },
+    { botSettings: { wallets: walletPatch } },
     { merge: true }
   )
   return { success: true }

@@ -100,7 +100,7 @@ async function refreshMarkets() {
 // ─── Live cross-chain token search (DexScreener) ───────────────────────────
 // Powers the Markets search box: finds ANY coin/token in the market by name,
 // symbol, or contract address across all chains — not just the top-100 list.
-const DS_CHAIN = { solana: 'sol', ethereum: 'eth', bsc: 'bsc', base: 'base', polygon: 'poly', arbitrum: 'arb' };
+const DS_CHAIN = { solana: 'sol', ethereum: 'eth', bsc: 'bsc', base: 'base', polygon: 'poly', arbitrum: 'arb', robinhood: 'rhood' };
 
 function seedFrom(str) {
   let h = 0; const s = String(str || '');
@@ -205,6 +205,7 @@ const NATIVE = {
   eth:  { sym: 'ETH', name: 'Ethereum', cg: 'ethereum',        logo: '#627EEA' },
   bsc:  { sym: 'BNB', name: 'BNB Chain', cg: 'binancecoin',    logo: '#F0B90B' },
   base: { sym: 'ETH', name: 'Base',     cg: 'ethereum',        logo: '#0052FF' },
+  rhood: { sym: 'ETH', name: 'Robinhood', cg: 'ethereum',      logo: '#C3F53C' },
   ton:  { sym: 'TON', name: 'TON',      cg: 'the-open-network', logo: '#0098EA' },
 };
 async function refreshWallet() {

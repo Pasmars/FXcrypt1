@@ -103,7 +103,7 @@ function Markets({ go }) {
 }
 
 // ─── Token research links (real URLs to DexScreener, explorers, DEXTools…) ───
-const DS_SLUG = { sol: 'solana', eth: 'ethereum', bsc: 'bsc', base: 'base', poly: 'polygon', arb: 'arbitrum' };
+const DS_SLUG = { sol: 'solana', eth: 'ethereum', bsc: 'bsc', base: 'base', poly: 'polygon', arb: 'arbitrum', rhood: 'robinhood' };
 const DT_SLUG = { sol: 'solana', eth: 'ether', bsc: 'bnb', base: 'base', poly: 'polygon', arb: 'arbitrum' };
 const EXPLORER = {
   sol: (a) => `https://solscan.io/token/${a}`,
@@ -112,6 +112,7 @@ const EXPLORER = {
   base: (a) => `https://basescan.org/token/${a}`,
   poly: (a) => `https://polygonscan.com/token/${a}`,
   arb: (a) => `https://arbiscan.io/token/${a}`,
+  rhood: (a) => `https://robinhoodchain.blockscout.com/token/${a}`,
 };
 function shortAddr(a) { return a && a.length > 16 ? a.slice(0, 6) + '…' + a.slice(-4) : (a || ''); }
 function openUrl(u) { try { window.open(u, '_blank', 'noopener,noreferrer'); } catch (e) {} }
@@ -121,7 +122,7 @@ function tokenLinks(t) {
   const out = [];
   if (a) {
     out.push({ ic: 'candles', title: 'DexScreener', sub: 'Live chart, trades & pools', url: t.dexUrl || `https://dexscreener.com/${DS_SLUG[t.chain] || t.chain}/${a}` });
-    out.push({ ic: 'trend', title: 'DEXTools', sub: 'Pair explorer & analytics', url: `https://www.dextools.io/app/en/${DT_SLUG[t.chain] || t.chain}/pair-explorer/${a}` });
+    if (DT_SLUG[t.chain]) out.push({ ic: 'trend', title: 'DEXTools', sub: 'Pair explorer & analytics', url: `https://www.dextools.io/app/en/${DT_SLUG[t.chain]}/pair-explorer/${a}` });
     if (EXPLORER[t.chain]) out.push({ ic: 'globe', title: t.chain === 'sol' ? 'Solscan' : 'Block explorer', sub: 'Holders, transfers & contract', url: EXPLORER[t.chain](a) });
     out.push({ ic: 'search', title: 'GeckoTerminal', sub: 'On-chain DEX charts', url: `https://www.geckoterminal.com/${DS_SLUG[t.chain] || t.chain}/pools/${a}` });
   }

@@ -13,6 +13,7 @@
     { id: 'eth', name: 'Ethereum', sym: 'ETH', color: '#627EEA', dex: 'Uniswap' },
     { id: 'bsc', name: 'BNB Chain', sym: 'BNB', color: '#F0B90B', dex: 'PancakeSwap' },
     { id: 'base', name: 'Base', sym: 'ETH', color: '#0052FF', dex: 'Aerodrome' },
+    { id: 'rhood', name: 'Robinhood', sym: 'ETH', color: '#C3F53C', dex: 'Uniswap V2' },
     { id: 'poly', name: 'Polygon', sym: 'POL', color: '#8247E5', dex: 'QuickSwap' },
     { id: 'arb', name: 'Arbitrum', sym: 'ETH', color: '#28A0F0', dex: 'Camelot' },
   ];

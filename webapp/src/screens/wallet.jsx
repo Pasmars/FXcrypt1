@@ -417,7 +417,6 @@ function ReceiveBody() {
   );
 }
 
-
 // ─── Bridge to Robinhood Chain (Relay) ───
 // Deposits only: pick a funded EVM wallet, quote via Relay (receive amount,
 // USD, ETA), then sign the origin-chain transaction locally. Withdrawals go
@@ -582,7 +581,7 @@ function WalletManage({ onClose, go }) {
   if (view === 'wallets') {
     return (
       <div style={{ paddingBottom: 10 }}>
-        <WMHeader title="Manage wallets" sub="One self-custody wallet per chain" onBack={() => setView('menu')}
+        <WMHeader title="Manage wallets" sub="One unified EVM address · SOL & TON separate" onBack={() => setView('menu')}
           action={<button onClick={() => setView('add')} style={{ width: 36, height: 36, borderRadius: 11, background: 'var(--glow)', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent)' }}><Icon name="plus" size={19} /></button>} />
         {!wallets.length && <div style={{ textAlign: 'center', color: 'var(--muted)', padding: 30, fontSize: 14 }}>No wallets yet.</div>}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -997,7 +996,9 @@ function CreateWalletFlow({ onBack, onDone }) {
   const [busy, setBusy] = wS(false);
   const [err, setErr] = wS('');
   const exists = W.wallets.some((w) => w.chain === chain);
-  const label = (FXW().chains.find((c) => c.key === chain) || {}).label;
+  const cMeta = FXW().chains.find((c) => c.key === chain) || {};
+  const label = cMeta.label;
+  const isEvm = !!cMeta.evm;
 
   const gen = async () => {
     setBusy(true); setErr('');
@@ -1005,7 +1006,7 @@ function CreateWalletFlow({ onBack, onDone }) {
     catch (e) { setErr(e.message || 'Failed'); } finally { setBusy(false); }
   };
 
-  if (phase === 'done') return <FlowSuccess icon="wallet" title="Wallet created" body={`Your ${label} wallet is encrypted on this device and ready to use.`} onDone={onDone} />;
+  if (phase === 'done') return <FlowSuccess icon="wallet" title="Wallet created" body={`Your ${label} wallet is encrypted on this device and ready to use.${isEvm ? ' The same address is live on every EVM network (Ethereum, Base, BNB Chain, Polygon & Robinhood).' : ''}`} onDone={onDone} />;
   if (phase === 'backup') return (
     <div style={{ paddingBottom: 10 }}>
       <WMHeader title="Back up your wallet" sub="Recovery phrase" onBack={() => setPhase('done')} />
@@ -1018,6 +1019,7 @@ function CreateWalletFlow({ onBack, onDone }) {
       <WMHeader title="Create new wallet" sub="Choose a network" onBack={onBack} />
       <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--muted)', margin: '0 2px 8px' }}>Network</div>
       <ChainChips value={chain} onChange={setChain} />
+      {isEvm && <div style={{ display: 'flex', gap: 9, background: 'var(--surface)', borderRadius: 12, padding: 12, marginBottom: 12, boxShadow: 'inset 0 0 0 1px var(--line)' }}><Icon name="layers" size={16} color="var(--accent)" style={{ marginTop: 1, flexShrink: 0 }} /><div style={{ fontSize: 12.5, color: 'var(--text2)', lineHeight: 1.5 }}>One unified EVM wallet — this creates the <b style={{ color: 'var(--text)' }}>same address</b> on Ethereum, Base, BNB Chain, Polygon &amp; Robinhood.</div></div>}
       {exists && <div style={{ display: 'flex', gap: 9, background: 'var(--down-bg)', borderRadius: 12, padding: 12, marginBottom: 12 }}><Icon name="alert" size={16} color="var(--down)" style={{ marginTop: 1 }} /><div style={{ fontSize: 12.5, color: 'var(--text2)', lineHeight: 1.5 }}>You already have a {label} wallet. Creating a new one replaces it — back up the old one first.</div></div>}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--faint)', marginBottom: 16, padding: '0 2px' }}><Icon name="shield" size={14} color="var(--up)" /> Encrypted with PBKDF2 600k · keys never leave your device</div>
       <GateThen>
@@ -1062,6 +1064,7 @@ function ImportSeedFlow({ onBack, onDone }) {
       <WMHeader title="Import seed phrase" sub="Restore a wallet" onBack={onBack} />
       <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--muted)', margin: '0 2px 8px' }}>Network</div>
       <ChainChips value={chain} onChange={setChain} only={['eth', 'bsc', 'base', 'matic', 'rhood', 'ton']} />
+      {chain !== 'ton' && <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: 'var(--faint)', marginBottom: 10, padding: '0 2px' }}><Icon name="layers" size={13} /> EVM networks share one wallet — importing here activates the same address on all of them.</div>}
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, background: 'var(--surface)', borderRadius: 13, padding: '13px 14px', boxShadow: 'inset 0 0 0 1px var(--line)', marginBottom: 10 }}>
         <Icon name="receive" size={18} color="var(--muted)" style={{ marginTop: 2 }} />
         <textarea value={phrase} onChange={(e) => setPhrase(e.target.value)} placeholder="Enter your 12 or 24-word recovery phrase, separated by spaces" rows={4} style={{ flex: 1, border: 'none', background: 'transparent', outline: 'none', color: 'var(--text)', fontSize: 14, fontFamily: 'inherit', resize: 'none', minWidth: 0 }} />
@@ -1087,9 +1090,10 @@ function ImportKeyFlow({ onBack, onDone }) {
   };
   return (
     <div style={{ paddingBottom: 10 }}>
-      <WMHeader title="Import private key" sub="Single-chain account" onBack={onBack} />
+      <WMHeader title="Import private key" sub="Import an account" onBack={onBack} />
       <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--muted)', margin: '0 2px 8px' }}>Network</div>
       <ChainChips value={chain} onChange={setChain} />
+      {!['sol', 'ton'].includes(chain) && <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: 'var(--faint)', marginBottom: 10, padding: '0 2px' }}><Icon name="layers" size={13} /> EVM networks share one wallet — importing here activates the same address on all of them.</div>}
       <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--muted)', margin: '0 2px 8px' }}>Private key</div>
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, background: 'var(--surface)', borderRadius: 13, padding: '13px 14px', boxShadow: 'inset 0 0 0 1px var(--line)', marginBottom: 14 }}>
         <Icon name="lock" size={18} color="var(--muted)" style={{ marginTop: 2 }} />

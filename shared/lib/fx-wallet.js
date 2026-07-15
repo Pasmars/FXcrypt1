@@ -38,6 +38,11 @@ try {
 
 // Chains where custom tokens are supported today (EVM read/send + Solana read).
 const TOKEN_CHAINS = ['eth', 'bsc', 'base', 'matic', 'rhood', 'sol'];
+// Unified EVM wallet: one key/address across every EVM network. Creating or
+// importing an EVM wallet provisions the SAME account on all of these chains
+// (order = primary preference when picking the source entry to unify from).
+const EVM_CHAINS = ['eth', 'base', 'bsc', 'matic', 'rhood'];
+const isEvmChain = (c) => EVM_CHAINS.includes(c);
 // EVM contract addresses are case-insensitive (store lowercased); Solana mints
 // are base58 and case-sensitive (store verbatim). Used for dedupe + lookups.
 const normTokenAddr = (chain, a) => (chain === 'sol' ? String(a || '').trim() : String(a || '').trim().toLowerCase());
@@ -100,8 +105,38 @@ async function load() {
   connectedApps = Array.isArray(userDoc.connectedApps) ? userDoc.connectedApps : [];
   loaded = true;
   emit();
-  // refresh portfolio in the background (balances are slow)
-  refreshPortfolio();
+  // One-time unification for accounts created before the unified EVM wallet,
+  // then refresh the portfolio in the background (balances are slow).
+  syncEvmWallets().catch(() => {}).then(() => refreshPortfolio());
+}
+
+// ── Unified EVM address migration ──
+// If the user has an EVM wallet on some chains but not others, copy its entry
+// to the missing EVM chains: the encrypted blobs are copied verbatim (the same
+// key/address is valid on every EVM network), so no password is needed and
+// chains that already hold their own key are never touched. Runs once per
+// account (walletSettings.evmSynced) so a chain the user later removes on
+// purpose stays removed.
+async function syncEvmWallets() {
+  const id = uid(); if (!id) return;
+  if (userDoc.walletSettings && userDoc.walletSettings.evmSynced) return;
+  const primary = EVM_CHAINS.find((c) => wallets[c] && wallets[c].address && wallets[c].encPrivateKey);
+  if (!primary) return; // no EVM wallet yet — persistWallet unifies on first create/import
+  const src = wallets[primary];
+  const missing = EVM_CHAINS.filter((c) => !wallets[c]);
+  const patch = {}; const next = { ...wallets };
+  for (const c of missing) {
+    const entry = { address: src.address, encPrivateKey: src.encPrivateKey, encMnemonic: src.encMnemonic || null, tokens: [] };
+    patch[c] = entry; next[c] = entry;
+  }
+  try {
+    await setDoc(doc(db, 'users', id), {
+      ...(missing.length ? { wallets: patch } : {}),
+      walletSettings: { evmSynced: true },
+    }, { merge: true });
+    userDoc.walletSettings = { ...(userDoc.walletSettings || {}), evmSynced: true };
+    if (missing.length) { wallets = next; emit(); }
+  } catch (e) { /* offline — retried on next load */ }
 }
 
 // ── Lock state ──
@@ -150,9 +185,20 @@ async function persistWallet(chain, wd, password) {
   const id = uid(); if (!id) throw new Error('Sign in required');
   const encPrivateKey = await encryptData(wd.privateKey, password);
   const encMnemonic = wd.mnemonic ? await encryptData(wd.mnemonic, password) : null;
-  const entry = { address: wd.address, encPrivateKey, encMnemonic, tokens: (wallets[chain] && wallets[chain].tokens) || [] };
-  await setDoc(doc(db, 'users', id), { wallets: { [chain]: entry } }, { merge: true });
-  wallets = { ...wallets, [chain]: entry };
+  // Unified EVM address: an EVM wallet is written to the requested chain AND
+  // every other EVM chain that has no wallet yet — the same key controls the
+  // same address on all of them. Chains that already hold a (possibly
+  // different) key are never overwritten, so no funds can be orphaned.
+  const targets = isEvmChain(chain)
+    ? [chain, ...EVM_CHAINS.filter((c) => c !== chain && !wallets[c])]
+    : [chain];
+  const patch = {}; const next = { ...wallets };
+  for (const c of targets) {
+    const entry = { address: wd.address, encPrivateKey, encMnemonic, tokens: (wallets[c] && wallets[c].tokens) || [] };
+    patch[c] = entry; next[c] = entry;
+  }
+  await setDoc(doc(db, 'users', id), { wallets: patch }, { merge: true });
+  wallets = next;
   if (!sessionPwd) sessionPwd = password;
   emit();
 }
@@ -457,6 +503,7 @@ window.FXWallet = {
     settings, contacts, connectedApps,
   }),
   chains: CHAINS,
+  evmChains: () => [...EVM_CHAINS],
   isLocked, isProtected,
   isValidAddress: (chain, addr) => isValidAddress(chain, addr),
   // session
