@@ -514,23 +514,37 @@ exports.bridgeQuote = fn.https.onCall(async (data, context) => {
 exports.rpcProxy = fn.https.onCall(async (data, context) => {
   if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
   const axios = require('axios')
-  const RPCS = { rhood: 'https://rpc.mainnet.chain.robinhood.com' }
-  const url = RPCS[data && data.chain]
-  if (!url) throw new functions.https.HttpsError('invalid-argument', 'Unsupported chain')
+  // Every EVM chain the wallet supports — not only Robinhood. Some ISPs block
+  // browser TLS to ALL public RPC hosts (drpc/cloudflare/publicnode alike), so
+  // the client falls back to this proxy for reads and raw-tx broadcast on any
+  // chain. Multiple endpoints per chain, tried in order server-side.
+  const RPCS = {
+    rhood: ['https://rpc.mainnet.chain.robinhood.com'],
+    eth:   ['https://ethereum-rpc.publicnode.com', 'https://cloudflare-eth.com', 'https://eth.drpc.org'],
+    bsc:   ['https://bsc-rpc.publicnode.com', 'https://bsc-dataseed.binance.org', 'https://bsc.drpc.org'],
+    base:  ['https://mainnet.base.org', 'https://base.publicnode.com', 'https://base.drpc.org'],
+    matic: ['https://polygon-bor-rpc.publicnode.com', 'https://polygon-rpc.com'],
+  }
+  const urls = RPCS[data && data.chain]
+  if (!urls) throw new functions.https.HttpsError('invalid-argument', 'Unsupported chain')
   const method = String((data && data.method) || '')
   const ALLOWED = new Set([
     'eth_blockNumber', 'eth_chainId', 'eth_getBalance', 'eth_call', 'eth_gasPrice',
     'eth_getTransactionCount', 'eth_estimateGas', 'eth_maxPriorityFeePerGas', 'eth_feeHistory',
-    'eth_sendRawTransaction', 'eth_getTransactionReceipt', 'eth_getTransactionByHash', 'eth_getCode',
+    'eth_getBlockByNumber', 'eth_sendRawTransaction', 'eth_getTransactionReceipt', 'eth_getTransactionByHash', 'eth_getCode',
   ])
   if (!ALLOWED.has(method)) throw new functions.https.HttpsError('invalid-argument', 'Method not allowed')
   const params = Array.isArray(data && data.params) ? data.params : []
-  try {
-    const { data: body } = await axios.post(url, { jsonrpc: '2.0', id: 1, method, params }, { timeout: 15000 })
-    return body // full JSON-RPC body ({ result } or { error }) — client interprets it
-  } catch (e) {
-    throw new functions.https.HttpsError('unavailable', 'RPC unreachable: ' + ((e.response && e.response.status) || e.message))
+  let lastErr = null
+  for (const url of urls) {
+    try {
+      const { data: body } = await axios.post(url, { jsonrpc: '2.0', id: 1, method, params }, { timeout: 15000 })
+      // A JSON-RPC `error` (e.g. a revert) is a VALID response — return it to the
+      // client rather than retrying; only transport failures move to the next URL.
+      if (body && (body.result !== undefined || body.error)) return body
+    } catch (e) { lastErr = e }
   }
+  throw new functions.https.HttpsError('unavailable', 'RPC unreachable: ' + ((lastErr && lastErr.response && lastErr.response.status) || (lastErr && lastErr.message) || 'no endpoint responded'))
 })
 
 // ── Deep IN/OUT transfer history between two wallets ────────────────────────

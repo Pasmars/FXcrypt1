@@ -91,19 +91,25 @@ let _rpcProxy: any = null;
 export function setRpcProxy(fn) { _rpcProxy = fn; } // async (chain, method, params) => full JSON-RPC body
 
 // One JSON-RPC read for a chain: proxied when the chain requires it and a proxy
-// is registered, otherwise raced across the chain's public RPCs. Returns the
-// `.result` (or undefined on failure), matching _raceRpc.
+// is registered, otherwise raced across the chain's public RPCs — and when ALL
+// direct RPCs fail (some ISPs block browser TLS to every public RPC host), the
+// proxy is tried as a last resort on any chain. Returns the `.result` (or
+// undefined on failure), matching _raceRpc.
 async function chainRpc(chain, method, params, opts: any = {}) {
-  if (PROXIED_CHAINS.has(chain) && _rpcProxy) {
+  const valid = opts.valid || ((r: any) => r !== undefined && r !== null);
+  const viaProxy = async () => {
+    if (!_rpcProxy) return undefined;
     try {
       const body = await _rpcProxy(chain, method, params);
-      const valid = opts.valid || ((r: any) => r !== undefined && r !== null);
       if (body && body.error == null && valid(body.result)) return body.result;
     } catch {}
     return undefined;
-  }
+  };
+  if (PROXIED_CHAINS.has(chain)) return viaProxy();
   const cfg = CHAIN_CFG[chain];
-  return _raceRpc(cfg ? cfg.rpcs : [], method, params, opts);
+  const direct = await _raceRpc(cfg ? cfg.rpcs : [], method, params, opts);
+  if (direct !== undefined) return direct;
+  return viaProxy(); // direct RPCs unreachable from this browser — heal via server
 }
 
 function _decodeABIStr(hex) {
@@ -214,19 +220,21 @@ function evmStaticProvider(rpc, chainId) {
   return new e.providers.StaticJsonRpcProvider({ url: rpc, timeout: 20000 }, { chainId, name: 'chain-' + chainId });
 }
 
-// Sign a tx locally and broadcast it through the RPC proxy (for chains the
-// browser can't reach directly, e.g. Robinhood). No provider is attached to the
-// signer — nonce/gas/broadcast all go through the proxy. Returns a tx-like
-// object with .hash and a best-effort .wait().
+// Sign a tx locally and broadcast it through the RPC proxy — used for chains
+// the browser can never reach (Robinhood) AND as the fallback when an ISP
+// blocks the browser's path to a chain's public RPCs entirely. No provider is
+// attached to the signer — nonce/gas/broadcast all go through the proxy.
+// Returns a tx-like object with .hash and a best-effort .wait().
 async function sendViaProxy(chain, txReq, privKey) {
   const e = getEthers(); const cfg = CHAIN_CFG[chain];
+  const label = (chainMeta(chain) || { label: String(chain).toUpperCase() }).label;
   const wallet = new e.Wallet(privKey);
   const from = wallet.address;
   const [nonceHex, gasHex] = await Promise.all([
     chainRpc(chain, 'eth_getTransactionCount', [from, 'pending']),
     chainRpc(chain, 'eth_gasPrice', []),
   ]);
-  if (nonceHex == null || gasHex == null) throw new Error('Could not reach Robinhood Chain — try again in a moment.');
+  if (nonceHex == null || gasHex == null) throw new Error('Could not reach the ' + label + ' network — try again in a moment.');
   let gasLimit = txReq.gasLimit ? e.BigNumber.from(txReq.gasLimit) : null;
   if (!gasLimit) {
     const est = await chainRpc(chain, 'eth_estimateGas', [{ from, to: txReq.to, value: txReq.value ? e.BigNumber.from(txReq.value).toHexString() : undefined, data: txReq.data || '0x' }]).catch(() => null);
@@ -235,7 +243,7 @@ async function sendViaProxy(chain, txReq, privKey) {
   const tx = { to: txReq.to, value: txReq.value || 0, data: txReq.data || '0x', nonce: parseInt(nonceHex, 16), gasPrice: e.BigNumber.from(gasHex), gasLimit, chainId: cfg.chainId };
   const raw = await wallet.signTransaction(tx);
   const body = await _rpcProxy(chain, 'eth_sendRawTransaction', [raw]);
-  if (!body || body.error || !body.result) throw new Error((body && body.error && body.error.message) || 'Broadcast failed on Robinhood Chain.');
+  if (!body || body.error || !body.result) throw new Error((body && body.error && body.error.message) || ('Broadcast failed on ' + label + '.'));
   const hash = body.result;
   return { hash, wait: async () => { for (let i = 0; i < 30; i++) { const r = await chainRpc(chain, 'eth_getTransactionReceipt', [hash]); if (r) return r; await new Promise((res) => setTimeout(res, 4000)); } return null; } };
 }
@@ -247,6 +255,9 @@ export async function sendEvmNative(chain, to, amountEther, privKey) {
   let lastErr;
   const rpcs = await _orderEvmRpcsByHealth(cfg.rpcs);
   for (const rpc of rpcs) { try { const provider = evmStaticProvider(rpc, cfg.chainId); const signer = new e.Wallet(privKey, provider); return await signer.sendTransaction({ to, value, gasLimit: 21000 }); } catch (err) { lastErr = err; } }
+  // Every direct RPC failed — some ISPs block browser TLS to public RPC hosts.
+  // Sign locally and broadcast through the server proxy instead.
+  if (_rpcProxy) { try { return await sendViaProxy(chain, { to, value }, privKey); } catch (err) { lastErr = err; } }
   throw lastErr || new Error('Transaction failed on all endpoints');
 }
 export async function sendEvmToken(chain, contractAddr, to, amount, decimals, privKey) {
@@ -257,6 +268,7 @@ export async function sendEvmToken(chain, contractAddr, to, amount, decimals, pr
   let lastErr;
   const rpcs = await _orderEvmRpcsByHealth(cfg.rpcs);
   for (const rpc of rpcs) { try { const provider = evmStaticProvider(rpc, cfg.chainId); const signer = new e.Wallet(privKey, provider); return await signer.sendTransaction({ to: contractAddr, data, gasLimit: 100000 }); } catch (err) { lastErr = err; } }
+  if (_rpcProxy) { try { return await sendViaProxy(chain, { to: contractAddr, data }, privKey); } catch (err) { lastErr = err; } }
   throw lastErr || new Error('Token transfer failed on all endpoints');
 }
 
@@ -324,12 +336,22 @@ export async function relayBridgeExecute({ fromChain, quote, privKey }) {
       for (const rpc of rpcs) {
         try {
           // Static network → no ethers auto-detect (the "could not detect
-          // network" source). Origin chains here are always browser-reachable.
+          // network" source).
           const provider = evmStaticProvider(rpc, cfg.chainId);
           const signer = new e.Wallet(privKey, provider);
           sent = await signer.sendTransaction({ to: t.to, data: t.data || '0x', value: t.value ? e.BigNumber.from(t.value) : 0 });
           await sent.wait(1);
           break;
+        } catch (err) { lastErr = err; }
+      }
+      if (!sent && _rpcProxy) {
+        // Every direct RPC failed from this browser (some ISPs block browser
+        // TLS to public RPC hosts wholesale). Sign locally, broadcast through
+        // the server proxy — keys never leave the device.
+        try {
+          const px = await sendViaProxy(fromChain, { to: t.to, data: t.data || '0x', value: t.value ? e.BigNumber.from(t.value) : 0 }, privKey);
+          await px.wait();
+          sent = px;
         } catch (err) { lastErr = err; }
       }
       if (!sent) throw lastErr || new Error('Bridge transaction failed on all endpoints');
