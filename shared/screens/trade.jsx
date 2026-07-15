@@ -118,53 +118,86 @@ function TradeFlow({ token, side = 'buy', go, onDone }) {
   const txRef = React.useRef(null);
   const chain = (tok && FX.chains.find(c => c.id === tok.chain)) || FX.chains[0];
 
-  // Tokens arriving from Markets (CoinGecko top-100) carry no contract address
-  // and only a cosmetic chain hint. Resolve them via CoinGecko's platform list —
-  // the CANONICAL contract per chain (a DexScreener symbol search is spoofable
-  // by copycat tokens; an id-keyed platform lookup is not) — so the trade
-  // executes on the chain the token actually lives on, with the real contract.
+  // Resolve an addressless token to a real on-chain contract.
+  //
+  // CRITICAL: when the token carries an explicit chain the engine can execute on
+  // (e.g. it was opened from a Robinhood-chain market), resolution is CONSTRAINED
+  // to that chain — we must NEVER silently re-route it onto another network. The
+  // old resolver used a preference list that put Robinhood last and Solana high,
+  // so a rhood token whose CoinGecko record only lists a Solana contract fell
+  // through to Solana and traded there — the "shows me sol for a rhood token" bug.
+  //
+  // CoinGecko's platform map is the canonical, spoof-proof source; a chain-FILTERED
+  // DexScreener symbol search is the fallback for chains CoinGecko doesn't index
+  // (most Robinhood-chain tokens) — filtered so it can only ever return a contract
+  // ON the intended chain.
   tE(() => {
-    if (!tok || tok.tokenAddress || !tok.cg) { setResolving(false); return; }
+    if (!tok || tok.tokenAddress) { setResolving(false); return; }
+    const hintChain = TRADE_CHAINS.includes(tok.chain) ? tok.chain : null;
+    if (!hintChain && !tok.cg) { setResolving(false); return; } // nothing to resolve from
     let alive = true;
     setResolving(true);
     (async () => {
       try {
-        let picked;
-        if (_cgResolveCache.has(tok.cg)) {
-          picked = _cgResolveCache.get(tok.cg);
-        } else {
-          const r = await fetch('https://api.coingecko.com/api/v3/coins/' + encodeURIComponent(tok.cg) + '?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false');
-          if (!r.ok) return; // rate-limited/unknown — user can still pick manually
-          const data = await r.json();
-          const plats = (data && data.platforms) || {};
-          const options = [];
-          for (const plat in plats) {
-            const ch = CG_PLATFORM_CHAIN[plat];
-            if (ch && plats[plat]) options.push({ ch, addr: plats[plat] });
+        let picked = null;
+        // 1) CoinGecko platforms (canonical contracts) when we have a cg id.
+        let options = null;
+        if (tok.cg) {
+          if (_cgResolveCache.has(tok.cg)) options = _cgResolveCache.get(tok.cg);
+          else {
+            const r = await fetch('https://api.coingecko.com/api/v3/coins/' + encodeURIComponent(tok.cg) + '?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false');
+            if (r.ok) {
+              const data = await r.json();
+              const plats = (data && data.platforms) || {};
+              options = [];
+              for (const plat in plats) { const ch = CG_PLATFORM_CHAIN[plat]; if (ch && plats[plat]) options.push({ ch, addr: plats[plat] }); }
+              _cgResolveCache.set(tok.cg, options);
+            }
           }
-          // Prefer the token's own native-chain hint, then a fixed depth order.
-          const pref = [tok.chain, 'eth', 'sol', 'bsc', 'base', 'rhood'];
-          options.sort((a, b) => { const ia = pref.indexOf(a.ch), ib = pref.indexOf(b.ch); return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib); });
-          picked = options[0] || null;
-          _cgResolveCache.set(tok.cg, picked);
+        }
+        if (options && options.length) {
+          if (hintChain) picked = options.find((o) => o.ch === hintChain) || null; // never cross-chain
+          else {
+            const pref = ['eth', 'sol', 'bsc', 'base', 'rhood'];
+            picked = [...options].sort((a, b) => { const ia = pref.indexOf(a.ch), ib = pref.indexOf(b.ch); return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib); })[0] || null;
+          }
+        }
+        // 2) Chain-filtered DexScreener symbol search — used when CoinGecko had no
+        //    contract on the intended chain (or the token has no cg at all). Only
+        //    considers pools ON hintChain with an exact symbol match, so it can
+        //    never resolve to a different network. Deepest liquidity wins.
+        let liqUsd = 0, dexUrl = null, px = 0;
+        if (!picked && hintChain) {
+          const sr = await fetch('https://api.dexscreener.com/latest/dex/search?q=' + encodeURIComponent(tok.sym));
+          const sd = await sr.json();
+          let bp = null;
+          for (const p of (sd && sd.pairs) || []) {
+            if (PICK_CHAIN_MAP[p.chainId] !== hintChain) continue;
+            if (((p.baseToken && p.baseToken.symbol) || '').toUpperCase() !== String(tok.sym || '').toUpperCase()) continue;
+            const liq = (p.liquidity && p.liquidity.usd) || 0;
+            if (liq < 1000) continue;
+            if (!bp || liq > ((bp.liquidity && bp.liquidity.usd) || 0)) bp = p;
+          }
+          if (bp) { picked = { ch: hintChain, addr: bp.baseToken.address }; liqUsd = (bp.liquidity && bp.liquidity.usd) || 0; dexUrl = bp.url || null; px = parseFloat(bp.priceUsd) || 0; }
         }
         if (!picked || !alive) return;
-        // Enrich with the contract's own live pools (address-keyed — imposters
-        // can't appear here) for liquidity, DEX link and executable price.
-        let liqUsd = 0, dexUrl = null, px = 0;
-        try {
-          const dr = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + picked.addr);
-          const dd = await dr.json();
-          let bp = null;
-          for (const p of (dd && dd.pairs) || []) {
-            if (PICK_CHAIN_MAP[p.chainId] !== picked.ch) continue;
-            const a = (p.baseToken && p.baseToken.address) || '';
-            const same = picked.ch === 'sol' ? a === picked.addr : a.toLowerCase() === picked.addr.toLowerCase();
-            if (!same) continue;
-            if (!bp || ((p.liquidity && p.liquidity.usd) || 0) > ((bp.liquidity && bp.liquidity.usd) || 0)) bp = p;
-          }
-          if (bp) { liqUsd = (bp.liquidity && bp.liquidity.usd) || 0; dexUrl = bp.url || null; px = parseFloat(bp.priceUsd) || 0; }
-        } catch (e) { /* pools unavailable — chain + contract are still correct */ }
+        // 3) Enrich from the contract's own pools (address-keyed — spoof-proof) if
+        //    we didn't already pull pool data from the symbol search above.
+        if (!liqUsd) {
+          try {
+            const dr = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + picked.addr);
+            const dd = await dr.json();
+            let bp = null;
+            for (const p of (dd && dd.pairs) || []) {
+              if (PICK_CHAIN_MAP[p.chainId] !== picked.ch) continue;
+              const a = (p.baseToken && p.baseToken.address) || '';
+              const same = picked.ch === 'sol' ? a === picked.addr : a.toLowerCase() === picked.addr.toLowerCase();
+              if (!same) continue;
+              if (!bp || ((p.liquidity && p.liquidity.usd) || 0) > ((bp.liquidity && bp.liquidity.usd) || 0)) bp = p;
+            }
+            if (bp) { liqUsd = (bp.liquidity && bp.liquidity.usd) || 0; dexUrl = bp.url || null; px = parseFloat(bp.priceUsd) || 0; }
+          } catch (e) { /* pools unavailable — chain + contract are still correct */ }
+        }
         if (!alive) return;
         setTok((cur) => (cur && cur.sym === tok.sym && !cur.tokenAddress) ? {
           ...cur, chain: picked.ch, tokenAddress: picked.addr, liqUsd,
@@ -174,7 +207,7 @@ function TradeFlow({ token, side = 'buy', go, onDone }) {
       finally { if (alive) setResolving(false); }
     })();
     return () => { alive = false; };
-  }, [tok && tok.sym, tok && tok.tokenAddress, tok && tok.cg]);
+  }, [tok && tok.sym, tok && tok.tokenAddress, tok && tok.cg, tok && tok.chain]);
 
   // Every trade is REAL (or paper-mode simulated server-side) — it must have a
   // contract address the DEX router can swap. No fake client-side fills.
