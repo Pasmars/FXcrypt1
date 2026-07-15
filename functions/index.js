@@ -505,6 +505,34 @@ exports.bridgeQuote = fn.https.onCall(async (data, context) => {
   }
 })
 
+// ── EVM JSON-RPC proxy (browser-unreachable chains) ──────────────────────────
+// Robinhood Chain's public RPC is not reachable from many browsers/ISPs
+// (network-path block despite CORS headers), so wallet reads and the broadcast
+// of already-signed transactions are forwarded server-side, where it's
+// reachable. Method is allowlisted; NO private keys are ever involved — the
+// client signs locally and only forwards the resulting raw transaction.
+exports.rpcProxy = fn.https.onCall(async (data, context) => {
+  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
+  const axios = require('axios')
+  const RPCS = { rhood: 'https://rpc.mainnet.chain.robinhood.com' }
+  const url = RPCS[data && data.chain]
+  if (!url) throw new functions.https.HttpsError('invalid-argument', 'Unsupported chain')
+  const method = String((data && data.method) || '')
+  const ALLOWED = new Set([
+    'eth_blockNumber', 'eth_chainId', 'eth_getBalance', 'eth_call', 'eth_gasPrice',
+    'eth_getTransactionCount', 'eth_estimateGas', 'eth_maxPriorityFeePerGas', 'eth_feeHistory',
+    'eth_sendRawTransaction', 'eth_getTransactionReceipt', 'eth_getTransactionByHash', 'eth_getCode',
+  ])
+  if (!ALLOWED.has(method)) throw new functions.https.HttpsError('invalid-argument', 'Method not allowed')
+  const params = Array.isArray(data && data.params) ? data.params : []
+  try {
+    const { data: body } = await axios.post(url, { jsonrpc: '2.0', id: 1, method, params }, { timeout: 15000 })
+    return body // full JSON-RPC body ({ result } or { error }) — client interprets it
+  } catch (e) {
+    throw new functions.https.HttpsError('unavailable', 'RPC unreachable: ' + ((e.response && e.response.status) || e.message))
+  }
+})
+
 // ── Deep IN/OUT transfer history between two wallets ────────────────────────
 exports.getPairTransfers = fn.https.onCall(async (data, context) => {
   if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')

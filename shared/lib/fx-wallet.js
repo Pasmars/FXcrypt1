@@ -25,7 +25,16 @@ import {
   createWallet, importWallet, getBalanceNum, getTokenBalanceNum,
   getTxs, fetchTokenPrices, chainMeta, isValidAddress, send as sendImpl,
   initTonWeb, CHAINS, getTokenMeta, relayBridgeQuote, relayBridgeExecute, normalizeRelayQuote,
+  setRpcProxy,
 } from './wallet-crypto';
+
+// Route JSON-RPC for browser-unreachable chains (Robinhood) through the
+// rpcProxy Cloud Function. Registered once at module load, before any balance
+// read fires. Keys stay local — only reads and already-signed raw txs go over.
+try {
+  setRpcProxy((chain, method, params) =>
+    httpsCallable(fns, 'rpcProxy')({ chain, method, params }).then((r) => r.data));
+} catch (e) { /* proxy stays disabled → direct RPC (fine for non-proxied chains) */ }
 
 // Chains where custom tokens are supported today (EVM read/send + Solana read).
 const TOKEN_CHAINS = ['eth', 'bsc', 'base', 'matic', 'rhood', 'sol'];

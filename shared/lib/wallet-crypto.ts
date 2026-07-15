@@ -8,7 +8,11 @@ declare global { interface Window { ethers: any; TonWeb: any; } }
 
 export const BASE_RPCS  = ['https://mainnet.base.org', 'https://base.publicnode.com', 'https://base-rpc.publicnode.com'];
 export const BSC_RPCS   = ['https://bsc-dataseed.binance.org', 'https://bsc.publicnode.com', 'https://bsc-rpc.publicnode.com'];
-export const ETH_RPCS   = ['https://cloudflare-eth.com', 'https://eth.llamarpc.com', 'https://ethereum-rpc.publicnode.com'];
+// Note: eth.llamarpc.com is intentionally excluded — its batched JSON-RPC
+// responses break ethers v5 network auto-detection ("could not detect network"),
+// which used to surface during bridge/send. Static-network providers (below)
+// avoid detection, but the endpoint is still flaky, so we keep it out.
+export const ETH_RPCS   = ['https://cloudflare-eth.com', 'https://ethereum-rpc.publicnode.com', 'https://eth.drpc.org'];
 export const MATIC_RPCS = ['https://polygon-bor-rpc.publicnode.com', 'https://polygon-rpc.com'];
 // Robinhood Chain (Arbitrum Orbit L2, mainnet 2026-07-01). Chain id 4663, ETH
 // gas. The public RPC is rate-limited but fine for wallet reads/sends.
@@ -76,6 +80,32 @@ async function _raceRpc(rpcs, method, params, opts: any = {}) {
   });
   try { return await Promise.any(attempts); } catch { return undefined; }
 }
+// ── RPC proxy for browser-unreachable chains ──
+// Robinhood Chain's public RPC sends CORS headers but is not reachable from many
+// browsers/ISPs (network-path/Cloudflare block → "Failed to fetch"), so its
+// JSON-RPC is proxied through a Cloud Function the app registers here. Only
+// already-signed raw transactions and read calls are ever forwarded — private
+// keys sign locally and never leave the device.
+const PROXIED_CHAINS = new Set(['rhood']);
+let _rpcProxy: any = null;
+export function setRpcProxy(fn) { _rpcProxy = fn; } // async (chain, method, params) => full JSON-RPC body
+
+// One JSON-RPC read for a chain: proxied when the chain requires it and a proxy
+// is registered, otherwise raced across the chain's public RPCs. Returns the
+// `.result` (or undefined on failure), matching _raceRpc.
+async function chainRpc(chain, method, params, opts: any = {}) {
+  if (PROXIED_CHAINS.has(chain) && _rpcProxy) {
+    try {
+      const body = await _rpcProxy(chain, method, params);
+      const valid = opts.valid || ((r: any) => r !== undefined && r !== null);
+      if (body && body.error == null && valid(body.result)) return body.result;
+    } catch {}
+    return undefined;
+  }
+  const cfg = CHAIN_CFG[chain];
+  return _raceRpc(cfg ? cfg.rpcs : [], method, params, opts);
+}
+
 function _decodeABIStr(hex) {
   const h = hex.startsWith('0x') ? hex.slice(2) : hex;
   if (h.length < 128) return null;
@@ -145,7 +175,7 @@ export function createEvmWallet() { const e = getEthers(); const w = e.Wallet.cr
 export function importEvmWallet(input) { const e = getEthers(); const t = input.trim(); let w; if (t.split(/\s+/).length > 1) w = e.Wallet.fromMnemonic(t); else { const key = t.startsWith('0x') ? t : '0x' + t; w = new e.Wallet(key); } return { address: w.address, privateKey: w.privateKey, mnemonic: w.mnemonic?.phrase || null }; }
 export async function getEvmBalance(address, chain) {
   const cfg = CHAIN_CFG[chain];
-  const result = await _raceRpc(cfg.rpcs, 'eth_getBalance', [address, 'latest']);
+  const result = await chainRpc(chain, 'eth_getBalance', [address, 'latest']);
   if (result == null) return '—';
   return `${(Number(BigInt(result)) / 1e18).toFixed(6)} ${cfg.symbol}`;
 }
@@ -175,19 +205,58 @@ async function _orderEvmRpcsByHealth(rpcs: string[]): Promise<string[]> {
   // Preserve discovery order (fastest responders pushed first); append any unprobed as fallback.
   return [...healthy, ...rpcs.filter((r) => !healthy.includes(r))];
 }
+// Build a provider with an EXPLICIT static network so ethers v5 never performs
+// its `eth_chainId` auto-detection — that probe is what threw "could not detect
+// network" on flaky endpoints (llamarpc) and on chains ethers doesn't know
+// (Robinhood, 4663). Mirrors the server-side makeProvider().
+function evmStaticProvider(rpc, chainId) {
+  const e = getEthers();
+  return new e.providers.StaticJsonRpcProvider({ url: rpc, timeout: 20000 }, { chainId, name: 'chain-' + chainId });
+}
+
+// Sign a tx locally and broadcast it through the RPC proxy (for chains the
+// browser can't reach directly, e.g. Robinhood). No provider is attached to the
+// signer — nonce/gas/broadcast all go through the proxy. Returns a tx-like
+// object with .hash and a best-effort .wait().
+async function sendViaProxy(chain, txReq, privKey) {
+  const e = getEthers(); const cfg = CHAIN_CFG[chain];
+  const wallet = new e.Wallet(privKey);
+  const from = wallet.address;
+  const [nonceHex, gasHex] = await Promise.all([
+    chainRpc(chain, 'eth_getTransactionCount', [from, 'pending']),
+    chainRpc(chain, 'eth_gasPrice', []),
+  ]);
+  if (nonceHex == null || gasHex == null) throw new Error('Could not reach Robinhood Chain — try again in a moment.');
+  let gasLimit = txReq.gasLimit ? e.BigNumber.from(txReq.gasLimit) : null;
+  if (!gasLimit) {
+    const est = await chainRpc(chain, 'eth_estimateGas', [{ from, to: txReq.to, value: txReq.value ? e.BigNumber.from(txReq.value).toHexString() : undefined, data: txReq.data || '0x' }]).catch(() => null);
+    gasLimit = est ? e.BigNumber.from(est).mul(12).div(10) : e.BigNumber.from(txReq.data && txReq.data !== '0x' ? 120000 : 21000);
+  }
+  const tx = { to: txReq.to, value: txReq.value || 0, data: txReq.data || '0x', nonce: parseInt(nonceHex, 16), gasPrice: e.BigNumber.from(gasHex), gasLimit, chainId: cfg.chainId };
+  const raw = await wallet.signTransaction(tx);
+  const body = await _rpcProxy(chain, 'eth_sendRawTransaction', [raw]);
+  if (!body || body.error || !body.result) throw new Error((body && body.error && body.error.message) || 'Broadcast failed on Robinhood Chain.');
+  const hash = body.result;
+  return { hash, wait: async () => { for (let i = 0; i < 30; i++) { const r = await chainRpc(chain, 'eth_getTransactionReceipt', [hash]); if (r) return r; await new Promise((res) => setTimeout(res, 4000)); } return null; } };
+}
+
 export async function sendEvmNative(chain, to, amountEther, privKey) {
-  const e = getEthers(); const cfg = CHAIN_CFG[chain]; let lastErr;
+  const e = getEthers(); const cfg = CHAIN_CFG[chain];
+  const value = e.utils.parseEther(String(amountEther));
+  if (PROXIED_CHAINS.has(chain) && _rpcProxy) return sendViaProxy(chain, { to, value }, privKey);
+  let lastErr;
   const rpcs = await _orderEvmRpcsByHealth(cfg.rpcs);
-  for (const rpc of rpcs) { try { const provider = new e.providers.JsonRpcProvider(rpc); const signer = new e.Wallet(privKey, provider); return await signer.sendTransaction({ to, value: e.utils.parseEther(String(amountEther)), gasLimit: 21000 }); } catch (err) { lastErr = err; } }
+  for (const rpc of rpcs) { try { const provider = evmStaticProvider(rpc, cfg.chainId); const signer = new e.Wallet(privKey, provider); return await signer.sendTransaction({ to, value, gasLimit: 21000 }); } catch (err) { lastErr = err; } }
   throw lastErr || new Error('Transaction failed on all endpoints');
 }
 export async function sendEvmToken(chain, contractAddr, to, amount, decimals, privKey) {
   const e = getEthers(); const cfg = CHAIN_CFG[chain];
   const iface = new e.utils.Interface(['function transfer(address to, uint256 amount) returns (bool)']);
   const data = iface.encodeFunctionData('transfer', [to, e.utils.parseUnits(String(amount), decimals)]);
+  if (PROXIED_CHAINS.has(chain) && _rpcProxy) return sendViaProxy(chain, { to: contractAddr, data }, privKey);
   let lastErr;
   const rpcs = await _orderEvmRpcsByHealth(cfg.rpcs);
-  for (const rpc of rpcs) { try { const provider = new e.providers.JsonRpcProvider(rpc); const signer = new e.Wallet(privKey, provider); return await signer.sendTransaction({ to: contractAddr, data, gasLimit: 100000 }); } catch (err) { lastErr = err; } }
+  for (const rpc of rpcs) { try { const provider = evmStaticProvider(rpc, cfg.chainId); const signer = new e.Wallet(privKey, provider); return await signer.sendTransaction({ to: contractAddr, data, gasLimit: 100000 }); } catch (err) { lastErr = err; } }
   throw lastErr || new Error('Token transfer failed on all endpoints');
 }
 
@@ -254,7 +323,9 @@ export async function relayBridgeExecute({ fromChain, quote, privKey }) {
       let sent = null;
       for (const rpc of rpcs) {
         try {
-          const provider = new e.providers.JsonRpcProvider(rpc);
+          // Static network → no ethers auto-detect (the "could not detect
+          // network" source). Origin chains here are always browser-reachable.
+          const provider = evmStaticProvider(rpc, cfg.chainId);
           const signer = new e.Wallet(privKey, provider);
           sent = await signer.sendTransaction({ to: t.to, data: t.data || '0x', value: t.value ? e.BigNumber.from(t.value) : 0 });
           await sent.wait(1);
@@ -439,8 +510,7 @@ export function getBalance(chain, address) {
 
 // ── Numeric native balances (for portfolio valuation) ──
 export async function getEvmBalanceNum(address: string, chain: string): Promise<number> {
-  const cfg = CHAIN_CFG[chain];
-  const result = await _raceRpc(cfg.rpcs, 'eth_getBalance', [address, 'latest']);
+  const result = await chainRpc(chain, 'eth_getBalance', [address, 'latest']);
   return result != null ? Number(BigInt(result)) / 1e18 : 0;
 }
 export async function getSolBalanceNum(address: string): Promise<number> {
@@ -459,8 +529,9 @@ export async function getTokenBalanceNum(chain: string, walletAddr: string, cont
   if (chain === 'sol') return getSplTokenBalanceNum(walletAddr, contract);
   const cfg = CHAIN_CFG[chain];
   if (!cfg) return 0; // non-EVM chains without custom-token support
-  const raw = await getEvmTokenBalance(walletAddr, contract, cfg.rpcs);
-  return raw !== null ? Number(raw) / Math.pow(10, decimals) : 0;
+  const padded = walletAddr.replace(/^0x/, '').padStart(64, '0');
+  const raw = await chainRpc(chain, 'eth_call', [{ to: contract, data: '0x70a08231' + padded }, 'latest'], { valid: (r: any) => r && r !== '0x' });
+  return raw != null ? Number(BigInt(raw)) / Math.pow(10, decimals) : 0;
 }
 
 // ── Solana SPL token support (metadata + balance) ──
