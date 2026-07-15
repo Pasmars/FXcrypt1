@@ -30,7 +30,22 @@ Sections 4/6/7/10 below are annotated with **[LIVE]** where a proposal has shipp
 
 ---
 
-## 0.2 Latest increment — signal-bot correctness audit + CEX exit monitor (2026-07-12)
+## 0.4 Latest increment — connectivity resilience, wallet unlock fix & Pointer chat UX (2026-07-15)
+
+**[LIVE] ISP-proof connectivity for the bridge & wallet** — real users hit three successive network failures that only reproduce in browsers on certain ISPs (server-side always worked): `api.relay.link` unreachable ("Failed to fetch"), ethers v5 "could not detect network" (its `eth_chainId` auto-probe failing on flaky endpoints/unknown chains), and finally browser TLS blocked to **every** public RPC host (cloudflare-eth/publicnode/drpc). Fixes, in layers:
+- **`bridgeQuote` callable** — Relay quotes fetched server-side (validated route/address/amount); direct browser fetch kept only as fallback.
+- **Static-network providers everywhere** (`StaticJsonRpcProvider` + explicit `{chainId,name}`) — ethers never auto-detects again; `eth.llamarpc.com` dropped (ethers-hostile).
+- **`rpcProxy` callable** — allowlisted JSON-RPC (reads + `eth_sendRawTransaction`) for **all wallet chains** (eth/bsc/base/matic/rhood) with per-chain server-side endpoint failover. Robinhood always routes through it (its public RPC is browser-unreachable); every other chain uses direct RPCs as the fast path and falls back to proxied reads + **local-sign / proxy-broadcast** when the ISP blocks everything. Keys never leave the device in any path.
+
+**[LIVE] Wallet cross-app unlock fix** — "Could not unlock this wallet with your session password" despite the correct password: the mobile/webapp engine writes key blobs at PBKDF2 **600k** iterations (stamped `it`), while the legacy web pages hardcoded 100k on decrypt. Legacy `wallet.js`/`bot.js` now honor each blob's own iteration count and write the same 600k format; the engine's dead-end error was replaced with actionable diagnostics (stale session → re-lock + "unlock with your current password"; different-password wallet → "re-import to fix"). Verified with a 13-case compatibility matrix built from the exact shipped code of all three implementations.
+
+**[LIVE] Pointer chat controls** — the chat now shows a permanent **"Pointer can make mistakes — verify important info before acting on it. Not financial advice."** note under the composer; a **Stop button** replaces Send while a reply is generating (mid-wait stop discards the late reply via a generation counter; mid-typewriter stop freezes the partial text and patches the backend history to match what the user saw); and every user message has an **Edit** affordance that rewinds the chat to that point and reloads the prompt into the composer. Also fixed a race where a reply from a previous chat session could land in a freshly opened one. Verified interactively against the real component in a stubbed harness.
+
+**[LIVE] Gem scanner results page** — manually scanned gems render on their **own "Scan results" page** (opened when the scan modal closes) showing only that scan's finds with the filters used and a Rescan shortcut, instead of being merged below the track-record cards and auto-scanned feed; a persistent "Your last scan · N gems" card on the main page reopens it.
+
+---
+
+## 0.2 Increment — signal-bot correctness audit + CEX exit monitor (2026-07-12)
 
 A correctness pass over the whole signal-bot loop plus the missing piece of trade accounting. All live in production:
 
@@ -50,7 +65,7 @@ A correctness pass over the whole signal-bot loop plus the missing piece of trad
 
 ---
 
-## 0.3 Latest increment — Robinhood Chain integration (2026-07-14)
+## 0.3 Increment — Robinhood Chain integration (2026-07-14)
 
 **[LIVE] Robinhood Chain (`rhood`, chain id 4663)** across every on-chain surface, two weeks after the chain's mainnet launch. All parameters verified on-chain before wiring (Uniswap V2 Router02 `0x89e5…9eba` → `WETH()`/`factory()` cross-checked against live pairs and Uniswap's deployment docs):
 - **Wallet**: create/import/send/receive + custom tokens on Robinhood (generic EVM engine + chain registry; Blockscout tx history & explorer links; CoinGecko platform `robinhood` for token prices).
@@ -322,7 +337,7 @@ If 2,000 active traders route **$3M/mo** swap volume at a blended **0.5%** -> **
 
 **Next 90 days (the remaining high-leverage work):**
 1. **WalletConnect / external signing + security audit** — the #1 trust and liability item; keys are still custodial. Do this before scaling spend.
-2. **Reliability**: RPC/endpoint redundancy + a public status/health page (paying users now expect uptime).
+2. **Reliability**: RPC/endpoint redundancy is now LIVE (per-chain multi-endpoint failover client-side + the `rpcProxy`/`bridgeQuote` server escape hatch for ISP-blocked browsers). Remaining: a public status/health page (paying users now expect uptime).
 3. **CEX exit management — COMPLETE**: exit monitor, trailing-runner mode, and brackets on **all three futures venues (Binance/Bybit/MEXC)** are live. Remaining: validate live with small size on each venue (the whole bracket pipeline is untested against funded accounts).
 4. **Growth**: exchange affiliate links, shareable trade/PnL cards, validate native APK push.
 5. **Depth**: backtesting, cross-session Pointer memory, chart-image/voice input; activate Glassnode MCP (public toggle) and lead marketing with the AI × on-chain-analytics differentiator.
