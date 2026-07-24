@@ -1,31 +1,68 @@
 # FXcrypt
 
-A simple web app for calculating Profit and Loss on forex and crypto trades.
+A crypto trading platform: multi-chain wallets, DEX and CEX trading, an autonomous
+gem-scanner/trading bot with Telegram alerts, verified signal generation, and an AI
+trading assistant (Pointer).
 
-## Features
+See [`docs/PRODUCT_STRATEGY.md`](docs/PRODUCT_STRATEGY.md) for the full product picture
+and current status.
 
-- Support for Crypto and Forex trades
-- Simple UI with form inputs
-- Responsive design for mobile use
+## What it does
 
-## How to Use
+- **Trading loop** — multi-chain gem scanner with auto-buy, server-bookkept positions
+  with live PnL, and automated exits (take-profit, stop-loss, trailing, max-hold).
+  Paper trading mode simulates the whole loop.
+- **Signals** — CEX signal generation across spot and futures, with every signal
+  resolved on-exchange into a public win-rate track record.
+- **Wallets** — custodial bot wallets plus non-custodial FXWallet self-custody, across
+  ETH, BSC, Base, Polygon, Solana, TON, and Robinhood Chain.
+- **Pointer** — a tool-calling AI agent with deep research, proactive watch-tasks,
+  metered usage, and an MCP connection to Glassnode on-chain analytics.
+- **Analysis** — bubble-map holder clustering, contract safety checks, arbitrage
+  scan/execute.
+- **Platform** — crypto-native checkout (Free/Pro/Elite), server-enforced entitlements,
+  referrals, web push, and an admin panel with per-user usage controls.
 
-1. Open `index.html` in your web browser.
-2. Select the trade type (Crypto or Forex).
-3. Enter the entry price, exit price, and quantity.
-4. For Forex, enter lot size, contract size, and exchange rate if applicable.
-5. Click "Calculate PnL" to see the result.
+## Repo layout
 
-## For Android Phones
+| Path | What it is |
+| --- | --- |
+| `/` | Legacy static PWA (original root app — still served, largely superseded) |
+| `mobile/` | Mobile PWA |
+| `webapp/` | Next.js port of the mobile PWA, deployed as a static export |
+| `shared/` | Screens and libs shared between `mobile/` and `webapp/` |
+| `functions/` | Firebase Cloud Functions — Telegram bot, trading loop, scanners, billing |
+| `admin/` | Admin panel |
+| `android/` | Android wrapper |
+| `docs/` | Product strategy, roadmap, and integration notes |
 
-FXcrypt is a web app that can be opened in any mobile browser. For a more app-like experience, you can:
+UI code is duplicated across the root app, `mobile/`, and `webapp/`. A change that lands
+in only one copy is the most common source of drift here — when touching shared UI
+behavior, check all three.
 
-- Save it as a bookmark on your home screen.
-- Use a web app wrapper tool like PWA or Cordova to create an APK.
+## Development
 
-## Calculation Formulas
+The root app is static — open `index.html` in a browser, or serve the directory.
 
-- **Crypto**: PnL = (Exit Price - Entry Price) \* Quantity
-- **Forex**: PnL = (Exit Price - Entry Price) _ Quantity _ Lot Size \* Contract Size / Exchange Rate
+```bash
+# Next.js webapp
+cd webapp && npm install && npm run dev
+```
 
-Note: This is a basic calculator. For real trading, consult professional advice.
+The webapp **must** be built with `STATIC_EXPORT=1`, or the deployed `out/` directory
+will be stale:
+
+```bash
+cd webapp && STATIC_EXPORT=1 npm run build
+```
+
+```bash
+# Cloud Functions
+cd functions && npm install && npm run serve
+```
+
+Deploys are Firebase-hosted (`firebase.json`); functions deploy to `europe-west1`.
+
+## Note
+
+Nothing here is financial advice. Automated trading carries real risk of loss.

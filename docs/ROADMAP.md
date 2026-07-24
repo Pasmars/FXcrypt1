@@ -1,5 +1,12 @@
 # FXcrypt 10x Roadmap
 
+> **⚠️ SUPERSEDED as of 2026-07-24 — read this as a historical planning doc, not current state.**
+> Phases 0–2 and parts of 3–4 below have since shipped: Position Manager, automated
+> exits (TP / SL / trailing / max-hold), verified signal track record, paper trading,
+> web push, and the referral program are all live in production. The four "closed loops"
+> described in the thesis below are closed. See `docs/PRODUCT_STRATEGY.md` §0 for current
+> status and the remaining honest gaps.
+
 *Drafted 2026-07-02 from a full codebase review of `mobile/`, `webapp/`, `shared/`, and `functions/`. Legacy root app excluded.*
 
 ## Where the product stands
