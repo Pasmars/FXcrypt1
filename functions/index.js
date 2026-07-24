@@ -1121,7 +1121,7 @@ exports.processGemScanner = gemScanFn.pubsub
       try {
         const axios = require('axios')
         const { data } = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=binancecoin,ethereum,solana&vs_currencies=usd', { timeout: 10000 })
-        nativePx = { bsc: data.binancecoin?.usd || 0, eth: data.ethereum?.usd || 0, base: data.ethereum?.usd || 0, sol: data.solana?.usd || 0 }
+        nativePx = { bsc: data.binancecoin?.usd || 0, eth: data.ethereum?.usd || 0, base: data.ethereum?.usd || 0, rhood: data.ethereum?.usd || 0, sol: data.solana?.usd || 0 }
       } catch (_) { /* clamp simply won't apply without prices */ }
     }
 
@@ -1138,7 +1138,7 @@ exports.processGemScanner = gemScanFn.pubsub
       if (!chatId || !tgToken) return
 
       // Always scan every supported chain unless the owner explicitly narrowed it.
-      const chains = (settings.gemChains || ['bsc', 'eth', 'sol', 'base']).filter(c => VALID_CHAINS.has(c))
+      const chains = (settings.gemChains || ['bsc', 'eth', 'sol', 'base', 'rhood']).filter(c => VALID_CHAINS.has(c))
       if (!chains.length) return
 
       const filters = {
@@ -1180,8 +1180,14 @@ exports.processGemScanner = gemScanFn.pubsub
           for (const gem of gems.slice(0, 3)) {
             if (dailyCap > 0 && autoToday >= dailyCap) break
             if (gem.gemScore < (settings.gemMinScore || 60)) continue
-            // Paper mode needs no wallet — that's the free-user unlock.
-            if (!paperMode && !wallets[gem.chain]?.encryptedKey) continue
+            // Paper mode needs no wallet — that's the free-user unlock. For real
+            // buys, any EVM wallet key works on every EVM chain (unified address).
+            let gemWallet = wallets[gem.chain]
+            if (!gemWallet?.encryptedKey && EVM_CHAINS.includes(gem.chain)) {
+              const alt = EVM_CHAINS.find((c) => wallets[c]?.encryptedKey)
+              if (alt) gemWallet = wallets[alt]
+            }
+            if (!paperMode && !gemWallet?.encryptedKey) continue
             // REAL auto-execution is a paid feature; Free users get the full
             // loop in paper mode only (plan repackaging, roadmap 4.3).
             if (!paperMode && userPlan === 'free') continue
@@ -1195,7 +1201,7 @@ exports.processGemScanner = gemScanFn.pubsub
             if (!alertSnap.empty) continue
 
             let buyAmount = gem.chain === 'bsc' ? (settings.gemBuyAmountBsc || 0.005)
-              : (gem.chain === 'eth' || gem.chain === 'base') ? (settings.gemBuyAmountEth || 0.01)
+              : (gem.chain === 'eth' || gem.chain === 'base' || gem.chain === 'rhood') ? (settings.gemBuyAmountEth || 0.01)
               : (settings.gemBuyAmountSol || 0.05)
             // Clamp to the max USD buy size when a native price is available.
             const px = nativePx[gem.chain] || 0
@@ -1223,14 +1229,14 @@ exports.processGemScanner = gemScanFn.pubsub
                 .where('tokenAddress', '==', gem.tokenAddress).where('chain', '==', gem.chain).limit(1).get()
               if (!alertDocs.empty) await alertDocs.docs[0].ref.set({ autoBought: true }, { merge: true }).catch(() => {})
               await bot.sendMessage(chatId,
-                `📝 PAPER · *Auto-bought ${gem.tokenSymbol}* (simulated)\n\nScore: ${gem.gemScore}/100\nSize: ${buyAmount} ${gem.chain === 'bsc' ? 'BNB' : (gem.chain === 'eth' || gem.chain === 'base') ? 'ETH' : 'SOL'} @ $${gem.priceUsd}\nTrack it in Portfolio.`,
+                `📝 PAPER · *Auto-bought ${gem.tokenSymbol}* (simulated)\n\nScore: ${gem.gemScore}/100\nSize: ${buyAmount} ${gem.chain === 'bsc' ? 'BNB' : (gem.chain === 'eth' || gem.chain === 'base' || gem.chain === 'rhood') ? 'ETH' : 'SOL'} @ $${gem.priceUsd}\nTrack it in Portfolio.`,
                 { parse_mode: 'Markdown' }).catch(() => {})
               await notify.send(db, admin, uid, { category: 'gems', title: `📝 PAPER · Auto-bought ${gem.tokenSymbol}`, body: `Simulated buy · score ${gem.gemScore}/100 · track it in Portfolio`, link: '/?goto=portfolio', tag: 'gembuy-' + gem.tokenAddress })
               continue
             }
 
             try {
-              const pk   = encryption.decrypt(wallets[gem.chain].encryptedKey, uid, MASTER_SECRET())
+              const pk   = encryption.decrypt(gemWallet.encryptedKey, uid, MASTER_SECRET())
               const slip = Math.min(settings.gemBuySlippage || settings.defaultSlippage || 10, 50)
               const gasX = settings.defaultGasMultiplier || 1.2
 

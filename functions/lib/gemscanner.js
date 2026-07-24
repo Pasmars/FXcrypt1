@@ -596,20 +596,22 @@ function dexLabel(dexId) {
 
 // ── Explorer URL helper ───────────────────────────────────────────────────
 function explorerTokenUrl(chain, tokenAddress) {
-  if (chain === 'bsc')  return `https://bscscan.com/token/${tokenAddress}`
-  if (chain === 'eth')  return `https://etherscan.io/token/${tokenAddress}`
-  if (chain === 'sol')  return `https://solscan.io/token/${tokenAddress}`
-  if (chain === 'base') return `https://basescan.org/token/${tokenAddress}`
-  if (chain === 'ton')  return `https://tonscan.org/address/${tokenAddress}`
+  if (chain === 'bsc')   return `https://bscscan.com/token/${tokenAddress}`
+  if (chain === 'eth')   return `https://etherscan.io/token/${tokenAddress}`
+  if (chain === 'sol')   return `https://solscan.io/token/${tokenAddress}`
+  if (chain === 'base')  return `https://basescan.org/token/${tokenAddress}`
+  if (chain === 'ton')   return `https://tonscan.org/address/${tokenAddress}`
+  if (chain === 'rhood') return `https://robinhoodchain.blockscout.com/token/${tokenAddress}`
   return '#'
 }
 
 function explorerTxUrl(chain, txHash) {
-  if (chain === 'bsc')  return `https://bscscan.com/tx/${txHash}`
-  if (chain === 'eth')  return `https://etherscan.io/tx/${txHash}`
-  if (chain === 'sol')  return `https://solscan.io/tx/${txHash}`
-  if (chain === 'base') return `https://basescan.org/tx/${txHash}`
-  if (chain === 'ton')  return `https://tonscan.org/tx/${txHash}`
+  if (chain === 'bsc')   return `https://bscscan.com/tx/${txHash}`
+  if (chain === 'eth')   return `https://etherscan.io/tx/${txHash}`
+  if (chain === 'sol')   return `https://solscan.io/tx/${txHash}`
+  if (chain === 'base')  return `https://basescan.org/tx/${txHash}`
+  if (chain === 'ton')   return `https://tonscan.org/tx/${txHash}`
+  if (chain === 'rhood') return `https://robinhoodchain.blockscout.com/tx/${txHash}`
   return '#'
 }
 
@@ -647,20 +649,22 @@ function buildTxnBar(buys, sells) {
 function formatGemCard(gem, settings) {
   const scoreEmoji = gem.gemScore >= 70 ? '🟢' : gem.gemScore >= 40 ? '🟡' : '🔴'
   const chainLabel = gem.chain === 'bsc'  ? '🟡 BNB Chain'
-    : gem.chain === 'eth'  ? '💠 Ethereum'
-    : gem.chain === 'sol'  ? '🟣 Solana'
-    : gem.chain === 'base' ? '🔵 Base'
-    : gem.chain === 'ton'  ? '🔷 TON'
+    : gem.chain === 'eth'   ? '💠 Ethereum'
+    : gem.chain === 'sol'   ? '🟣 Solana'
+    : gem.chain === 'base'  ? '🔵 Base'
+    : gem.chain === 'ton'   ? '🔷 TON'
+    : gem.chain === 'rhood' ? '🏹 Robinhood'
     : gem.chain
   const chainTicker = gem.chain === 'bsc'  ? 'BNB'
-    : gem.chain === 'eth'  ? 'ETH'
-    : gem.chain === 'sol'  ? 'SOL'
-    : gem.chain === 'base' ? 'ETH'
-    : gem.chain === 'ton'  ? 'TON'
+    : gem.chain === 'eth'   ? 'ETH'
+    : gem.chain === 'sol'   ? 'SOL'
+    : gem.chain === 'base'  ? 'ETH'
+    : gem.chain === 'ton'   ? 'TON'
+    : gem.chain === 'rhood' ? 'ETH' // Robinhood Chain gas token is ETH
     : gem.chain.toUpperCase()
   const buyAmount = gem.chain === 'sol'
     ? (settings?.gemBuyAmountSol ?? 0.05)
-    : gem.chain === 'eth'
+    : (gem.chain === 'eth' || gem.chain === 'base' || gem.chain === 'rhood')
     ? (settings?.gemBuyAmountEth ?? 0.01)
     : (settings?.gemBuyAmountBsc ?? 0.005)
 
@@ -784,22 +788,22 @@ async function sendGemAlerts(gems, settings, bot, chatId, db, uid) {
     // Build the rich alert message
     const scoreEmoji = gem.gemScore >= 70 ? '🟢' : gem.gemScore >= 40 ? '🟡' : '🔴'
     const chainLabel = gem.chain === 'bsc'  ? '🟡 BNB Chain'
-      : gem.chain === 'eth'  ? '💠 Ethereum'
-      : gem.chain === 'sol'  ? '🟣 Solana'
-      : gem.chain === 'base' ? '🔵 Base'
-      : gem.chain === 'ton'  ? '🔷 TON'
+      : gem.chain === 'eth'   ? '💠 Ethereum'
+      : gem.chain === 'sol'   ? '🟣 Solana'
+      : gem.chain === 'base'  ? '🔵 Base'
+      : gem.chain === 'ton'   ? '🔷 TON'
+      : gem.chain === 'rhood' ? '🏹 Robinhood'
       : gem.chain
     const chainTicker = gem.chain === 'bsc' ? 'BNB'
-      : gem.chain === 'eth'  ? 'ETH'
-      : gem.chain === 'sol'  ? 'SOL'
-      : gem.chain === 'base' ? 'ETH'
-      : gem.chain === 'ton'  ? 'TON'
+      : gem.chain === 'eth'   ? 'ETH'
+      : gem.chain === 'sol'   ? 'SOL'
+      : gem.chain === 'base'  ? 'ETH'
+      : gem.chain === 'ton'   ? 'TON'
+      : gem.chain === 'rhood' ? 'ETH' // Robinhood Chain gas token is ETH
       : gem.chain.toUpperCase()
     const buyAmount = gem.chain === 'bsc'
       ? (settings.gemBuyAmountBsc || 0.005)
-      : gem.chain === 'eth'
-      ? (settings.gemBuyAmountEth || 0.01)
-      : gem.chain === 'base'
+      : (gem.chain === 'eth' || gem.chain === 'base' || gem.chain === 'rhood')
       ? (settings.gemBuyAmountEth || 0.01)
       : (settings.gemBuyAmountSol || 0.05)
 
@@ -922,7 +926,7 @@ async function sendGemAlerts(gems, settings, bot, chatId, db, uid) {
           ],
           [
             { text: '📊 Price Check', callback_data: `gem_price_${gem.chain}_${gem.tokenAddress}` },
-            { text: `🔍 ${gem.chain === 'bsc' ? 'BscScan' : gem.chain === 'eth' ? 'Etherscan' : gem.chain === 'base' ? 'BaseScan' : gem.chain === 'ton' ? 'TONScan' : 'Solscan'}`, url: explorerUrl },
+            { text: `🔍 ${gem.chain === 'bsc' ? 'BscScan' : gem.chain === 'eth' ? 'Etherscan' : gem.chain === 'base' ? 'BaseScan' : gem.chain === 'ton' ? 'TONScan' : gem.chain === 'rhood' ? 'Blockscout' : 'Solscan'}`, url: explorerUrl },
           ],
           [
             { text: '📈 DexScreener', url: dexUrl },

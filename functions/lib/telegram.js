@@ -41,6 +41,18 @@ function nativeTicker(chain) {
   return chain === 'bsc' ? 'BNB' : chain === 'base' ? 'ETH' : chain === 'ton' ? 'TON' : chain === 'sol' ? 'SOL' : 'ETH'
 }
 
+// Unified EVM wallet: one key/address is valid on every EVM chain, so a buy on
+// a chain without its own saved wallet falls back to any other EVM key — the
+// trade still executes on the gem's own chain (rhood/base/…), just signed by
+// the user's shared EVM account.
+const TG_EVM_CHAINS = ['eth', 'bsc', 'base', 'rhood']
+function evmWalletEntry(wallets, chain) {
+  if (wallets?.[chain]?.encryptedKey) return wallets[chain]
+  if (!TG_EVM_CHAINS.includes(chain)) return null
+  const alt = TG_EVM_CHAINS.find((c) => wallets?.[c]?.encryptedKey)
+  return alt ? wallets[alt] : null
+}
+
 // Safe numeric parsers — return null if input is not a valid finite number
 function safeParseFloat(str) {
   const n = parseFloat(str)
@@ -591,7 +603,8 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
         return
       }
 
-      if (!cbWallets[cbChain]?.encryptedKey) {
+      const cbWalletEntry = evmWalletEntry(cbWallets, cbChain)
+      if (!cbWalletEntry) {
         await bot.answerCallbackQuery(cbq.id, `No ${cbChain.toUpperCase()} wallet set.`)
         return
       }
@@ -600,7 +613,7 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
       await bot.sendMessage(chatId, `⏳ Buying ${cbAmount} ${nativeTicker(cbChain)} worth...`, { parse_mode: 'Markdown' })
 
       try {
-        const pk   = encryption.decrypt(cbWallets[cbChain].encryptedKey, cbUid, masterSecret)
+        const pk   = encryption.decrypt(cbWalletEntry.encryptedKey, cbUid, masterSecret)
         const slip = Math.min(cbSettings.defaultSlippage || 10, 50)
         const gasX = cbSettings.defaultGasMultiplier || 1.2
 
@@ -1279,7 +1292,7 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
     // ── Action: Gem scan ──────────────────────────────────────────────────
     if (cbData === 'action_gemscan') {
       await bot.answerCallbackQuery(cbq.id, '💎 Scanning…')
-      const gcChains   = (cbSettings.gemChains || ['bsc', 'sol']).filter(c => ['bsc', 'sol', 'base', 'eth'].includes(c))
+      const gcChains   = (cbSettings.gemChains || ['bsc', 'sol']).filter(c => ['bsc', 'sol', 'base', 'eth', 'rhood'].includes(c))
       const scanChains = gcChains.length ? gcChains : ['bsc', 'sol']
       const chainLabel = scanChains.map(c => c.toUpperCase()).join(', ')
       await sendNew(bot, chatId, msgId,
@@ -1313,7 +1326,7 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
         )
 
         // Build summary message
-        const ICONS = { bsc:'🟡', sol:'🟣', base:'🔵', eth:'💠', ton:'🔷' }
+        const ICONS = { bsc:'🟡', sol:'🟣', base:'🔵', eth:'💠', ton:'🔷', rhood:'🏹' }
         const chainLines = Object.entries(byChain)
           .map(([c, idxs]) => `  ${ICONS[c] || '🔗'} *${c.toUpperCase()}:* ${idxs.length} gem${idxs.length > 1 ? 's' : ''}`)
           .join('\n')
@@ -1393,7 +1406,7 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
         return
       }
       const g           = scan.gems[idx]
-      const chainTicker = g.chain === 'sol' ? 'SOL' : (g.chain === 'eth' || g.chain === 'base') ? 'ETH' : 'BNB'
+      const chainTicker = nativeTicker(g.chain || 'bsc')
       await bot.answerCallbackQuery(cbq.id)
       const customPromptRes = await bot.sendMessage(chatId,
         `✏️ *Custom Buy — ${g.tokenName || g.tokenSymbol}*\n\n` +
@@ -1423,14 +1436,17 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
       const chain = g.chain || 'bsc'
       const addr  = g.tokenAddress || ''
       if (!addr) { await bot.answerCallbackQuery(cbq.id, 'Token address missing.'); return }
-      if (!cbWallets[chain]?.encryptedKey) {
+      const walletEntry = evmWalletEntry(cbWallets, chain)
+      if (!walletEntry) {
         await bot.answerCallbackQuery(cbq.id, `No ${chain.toUpperCase()} wallet configured.`)
         return
       }
       const amount      = chain === 'sol'
         ? (cbSettings.gemBuyAmountSol ?? 0.05)
+        : (chain === 'eth' || chain === 'base' || chain === 'rhood')
+        ? (cbSettings.gemBuyAmountEth ?? 0.01)
         : (cbSettings.gemBuyAmountBsc ?? 0.005)
-      const chainTicker = chain === 'sol' ? 'SOL' : (chain === 'eth' || chain === 'base') ? 'ETH' : 'BNB'
+      const chainTicker = nativeTicker(chain)
       const tokenLabel  = g.tokenName || g.tokenSymbol || addr.slice(0, 10)
       await bot.answerCallbackQuery(cbq.id, `⏳ Buying ${g.tokenSymbol || 'token'}…`)
       await bot.sendMessage(chatId,
@@ -1439,7 +1455,7 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
         { parse_mode: 'Markdown' }
       )
       try {
-        const pk     = encryption.decrypt(cbWallets[chain].encryptedKey, cbUid, masterSecret)
+        const pk     = encryption.decrypt(walletEntry.encryptedKey, cbUid, masterSecret)
         const slip   = Math.min(cbSettings.defaultSlippage || 5, 50)
         const gasX   = cbSettings.defaultGasMultiplier || 1.2
         const result = chain === 'sol'
@@ -2573,10 +2589,11 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
     }
     const g           = scan.gems[idx]
     const chain       = g.chain || 'bsc'
-    const chainTicker = chain === 'sol' ? 'SOL' : (chain === 'eth' || chain === 'base') ? 'ETH' : 'BNB'
+    const chainTicker = nativeTicker(chain)
     const tokenLabel  = g.tokenName || g.tokenSymbol || g.tokenAddress?.slice(0, 10) || 'token'
 
-    if (!wallets[chain]?.encryptedKey) {
+    const gemWalletEntry = evmWalletEntry(wallets, chain)
+    if (!gemWalletEntry) {
       await bot.sendMessage(chatId, `❌ No ${chain.toUpperCase()} wallet configured.`, { reply_markup: mainMenuKeyboard() })
       return
     }
@@ -2620,7 +2637,7 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
       { parse_mode: 'Markdown' }
     )
     try {
-      const pk     = encryption.decrypt(wallets[chain].encryptedKey, uid, masterSecret)
+      const pk     = encryption.decrypt(gemWalletEntry.encryptedKey, uid, masterSecret)
       const slip   = Math.min(settings.defaultSlippage || 5, 50)
       const gasX   = settings.defaultGasMultiplier || 1.2
       const result = chain === 'sol'

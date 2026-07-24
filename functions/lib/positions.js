@@ -303,7 +303,16 @@ async function runExitMonitor(deps) {
     }
     if (!ctx.autoOk) continue
     if (ctx.dailyCap > 0 && ctx.autoToday >= ctx.dailyCap) continue
-    const wallet = (ctx.settings.wallets || {})[p.chain]
+    // Unified EVM wallet: any saved EVM key signs on every EVM chain, so an
+    // exit on a chain without its own wallet entry uses the shared EVM account
+    // (matches how the position was opened by the auto-buy fallback).
+    const EVM_EXIT_CHAINS = ['eth', 'bsc', 'base', 'rhood']
+    const walletMap = ctx.settings.wallets || {}
+    let wallet = walletMap[p.chain]
+    if (!wallet?.encryptedKey && EVM_EXIT_CHAINS.includes(p.chain)) {
+      const alt = EVM_EXIT_CHAINS.find((c) => walletMap[c]?.encryptedKey)
+      if (alt) wallet = walletMap[alt]
+    }
     const fail = async (msg) => {
       const fails = (e.fails || 0) + 1
       const dead = fails >= 3
