@@ -13,7 +13,7 @@ function AIBar({ onFocus, value, onChange, onSend, compact, deep, onToggleDeep, 
       <Icon name="spark" size={18} color="var(--accent)" />
       <input value={value} onChange={e => onChange && onChange(e.target.value)} onFocus={onFocus}
         onKeyDown={e => e.key === 'Enter' && !busy && onSend && onSend()}
-        placeholder={compact ? 'Message Pointer…' : 'Ask Pointer anything…'}
+        placeholder={compact ? 'Message Pointer…' : 'Ask about crypto, trading & markets…'}
         style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', color: 'var(--text)', fontSize: 15, fontFamily: 'inherit' }} />
       {onToggleDeep && (
         <button onClick={onToggleDeep} aria-pressed={!!deep} aria-label="Deep research"
@@ -178,7 +178,7 @@ function PointerHome({ go, layout, openChat, user }) {
 }
 
 // ─── Full chat (with saved sessions) ───
-const POINTER_GREETING = { role: 'ai', text: 'Hey — I’m Pointer. I can scan gems, analyze tokens, build trade setups and execute with your approval. What do you want to do?' };
+const POINTER_GREETING = { role: 'ai', text: 'Hey — I’m Pointer, your crypto trading copilot. I live and breathe markets, tokens and on-chain data: I can scan gems, analyze any coin, build trade setups and execute with your approval. What do you want to look at?' };
 function chatAgo(ms) {
   if (!ms) return '';
   const s = Math.max(0, (Date.now() - ms) / 1000);
