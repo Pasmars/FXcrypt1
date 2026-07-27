@@ -97,6 +97,7 @@ async function renderDashboard(){
     <div class="wrap">
       <div class="stats" id="stats"><div class="stat"><div class="n">…</div><div class="l">Loading stats</div></div></div>
       <div id="revenue"></div>
+      <div id="feerev"></div>
       <div class="controls">
         <input id="search" placeholder="Search email or UID…" style="flex:1;min-width:200px"/>
         <button class="btn ghost sm" id="refresh">Refresh</button>
@@ -112,11 +113,12 @@ async function renderDashboard(){
   document.getElementById('signout').onclick = ()=>auth.signOut();
   document.getElementById('settings').onclick = showConfig;
   document.getElementById('mcpbtn').onclick = showMcp;
-  document.getElementById('refresh').onclick = ()=>{USERS=[];nextPageToken=null;loadUsers(true);loadStats()};
+  document.getElementById('refresh').onclick = ()=>{USERS=[];nextPageToken=null;loadUsers(true);loadStats();loadRevenue();loadFeeRevenue()};
   document.getElementById('search').oninput = renderRows;
   document.getElementById('more').onclick = ()=>loadUsers(false);
   loadStats();
   loadRevenue();
+  loadFeeRevenue();
   loadUsers(true);
 }
 
@@ -139,6 +141,56 @@ async function loadRevenue(){
   }catch(e){ el.innerHTML = `<div class="muted" style="margin:6px 2px 14px;font-size:12.5px">Revenue: ${esc(e.message)}</div>`; }
 }
 
+// Trading-fee revenue: the platform's per-trade cut, taken in each chain's
+// native gas token and swept to the configured fee wallet. Held in-kind, so USD
+// is a valuation at current spot, not a booked amount — labelled as such.
+async function loadFeeRevenue(){
+  const el = document.getElementById('feerev');
+  try{
+    const r = await call('adminFeeRevenue');
+    const money = n => '$'+Number(n||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+    const nat = n => Number(n||0).toLocaleString('en-US',{maximumFractionDigits:6});
+    const chains = (r.byChain||[]);
+    const chainRows = chains.map(c=>`<tr><td style="font-weight:600;text-transform:uppercase">${esc(c.chain)}</td><td class="mono">${nat(c.native)}</td><td style="font-weight:700">${r.priced?money(c.usd):'—'}</td><td class="muted">${c.count}</td></tr>`).join('');
+    const recent = (r.recent||[]).slice(0,10).map(f=>`<tr><td style="text-transform:uppercase">${esc(f.chain)}</td><td class="mono">${nat(f.native)}</td><td class="muted">${f.pct!=null?f.pct+'%':'—'}</td><td class="muted">${esc(f.type)}</td><td class="muted">${fmtDate(f.at)}</td><td class="mono">${esc((f.uid||'').slice(0,10))}</td></tr>`).join('');
+    const none = !r.feeTrades;
+    el.innerHTML = `
+      <div style="font-weight:800;font-size:15px;margin:6px 2px 4px">Gas-fee revenue</div>
+      <div class="muted" style="font-size:12px;margin:0 2px 10px">Platform trading fee, charged in each chain's native gas token${r.priced?' · USD valued at current spot':' · USD unavailable (price feed down)'}</div>
+      <div class="stats">
+        <div class="stat"><div class="n up" style="color:var(--up)">${r.priced?money(r.usd.all):'—'}</div><div class="l">Total fees earned</div></div>
+        <div class="stat"><div class="n">${r.priced?money(r.usd.d30):'—'}</div><div class="l">Last 30 days</div></div>
+        <div class="stat"><div class="n">${r.priced?money(r.usd.d7):'—'}</div><div class="l">Last 7 days</div></div>
+        <div class="stat"><div class="n">${r.priced?money(r.usd.h24):'—'}</div><div class="l">Last 24 hours</div></div>
+        <div class="stat"><div class="n" style="color:var(--accent)">${r.feeTrades}</div><div class="l">Fee-charging trades</div></div>
+      </div>
+      ${none?`<div class="card muted" style="margin-bottom:16px;font-size:12.5px">No fee-charging trades recorded yet. A trade is only charged when the plan's fee %&nbsp;&gt;&nbsp;0 <em>and</em> a receiving wallet is set for that chain (Billing settings) — and only manual trades charge it today; bot, Telegram, copy-trade and auto-exit trades do not.</div>`:`
+        <div class="card" style="padding:0;overflow:hidden;margin-bottom:10px"><table><thead><tr><th>Chain</th><th>Native collected</th><th>≈ USD</th><th>Trades</th></tr></thead><tbody>${chainRows}</tbody></table></div>
+        ${recent?`<div class="card" style="padding:0;overflow:hidden;margin-bottom:16px"><table><thead><tr><th>Chain</th><th>Fee</th><th>Rate</th><th>Type</th><th>When</th><th>User</th></tr></thead><tbody>${recent}</tbody></table></div>`:''}`}
+      ${r.truncated?`<div class="muted" style="margin:-6px 2px 14px;font-size:12px">Showing the first ${r.scanned.toLocaleString()} trades — totals are a floor, not a full sum.</div>`:''}`;
+  }catch(e){ el.innerHTML = `<div class="muted" style="margin:6px 2px 14px;font-size:12.5px">Gas-fee revenue: ${esc(e.message)}</div>`; }
+}
+
+// DAU / WAU / MAU. Rolling windows off lastSeenAt (user-initiated presence),
+// with stickiness — DAU/MAU is the standard read on how habitual usage is.
+function activeTiles(s){
+  const a = s.active || {};
+  const has = a.mau != null;
+  const n = v => v!=null ? Number(v).toLocaleString() : '—';
+  const pctOf = (x,y) => (y>0 && x!=null) ? Math.round(x/y*100)+'%' : '—';
+  // Server-stamped presence starts empty on first deploy; say so rather than
+  // showing a confident zero that reads as "nobody is using the product".
+  if(!has || (a.dau===0 && a.wau===0 && a.mau===0)) return `
+    <div class="stat"><div class="n muted">—</div><div class="l">DAU · awaiting activity</div></div>
+    <div class="stat"><div class="n muted">—</div><div class="l">WAU · awaiting activity</div></div>
+    <div class="stat"><div class="n muted">${s.activeUsers!=null?s.activeUsers:'—'}</div><div class="l">Active 30d (legacy signal)</div></div>`;
+  return `
+    <div class="stat"><div class="n" style="color:var(--up)">${n(a.dau)}</div><div class="l">DAU · active 24h</div></div>
+    <div class="stat"><div class="n" style="color:var(--accent)">${n(a.wau)}</div><div class="l">WAU · active 7d</div></div>
+    <div class="stat"><div class="n">${n(a.mau)}</div><div class="l">MAU · active 30d</div></div>
+    <div class="stat"><div class="n" style="font-size:18px">${pctOf(a.dau,a.mau)} · ${pctOf(a.mau,s.totalUsers)}</div><div class="l">Stickiness DAU/MAU · reach MAU/total</div></div>`;
+}
+
 async function loadStats(){
   try{
     const s = await call('adminStats');
@@ -149,7 +201,7 @@ async function loadStats(){
       <div class="stat"><div class="n gold">${s.byPlan.elite}</div><div class="l">Elite</div></div>
       <div class="stat"><div class="n muted">${s.byPlan.free}</div><div class="l">Free</div></div>
       <div class="stat"><div class="n" style="color:var(--accent)">${s.pointerReqsMTD!=null?s.pointerReqsMTD:'—'}</div><div class="l">Pointer reqs (${esc(s.period||'mo')})</div></div>
-      <div class="stat"><div class="n">${s.activeUsers!=null?s.activeUsers:'—'}</div><div class="l">Active (30d)</div></div>
+      ${activeTiles(s)}
       <div class="stat"><div class="n up" style="color:var(--up)">${s.creditsOutstanding!=null?s.creditsOutstanding:'—'}</div><div class="l">Credits outstanding</div></div>
       <div class="stat"><div class="n" style="font-size:16px">${s.funnel30d?`${s.funnel30d.paywallView} → ${s.funnel30d.checkoutStart} → ${s.funnel30d.checkoutComplete}`:'—'}</div><div class="l">Funnel 30d (view → start → paid)</div></div>`;
   }catch(e){ document.getElementById('stats').innerHTML = `<div class="stat"><div class="n err">!</div><div class="l">${esc(e.message)}</div></div>`; }

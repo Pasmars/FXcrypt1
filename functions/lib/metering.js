@@ -125,14 +125,30 @@ async function refund(db, uid, opts) {
 }
 
 // Best-effort analytics + last-active bump (outside the metering transaction).
-async function track(db, uid, fields) {
+//
+// `opts.userInitiated` separates "the user did something" from "the server did
+// something for the user". Both bump lastActiveAt (unchanged), but only the
+// former stamps lastSeenAt, which is what DAU/WAU/MAU count. Without that split
+// the scheduled daily digest would mark every subscribed user active every day
+// and DAU would sit near 100% of the base regardless of real engagement.
+async function track(db, uid, fields, opts = {}) {
   try {
     const day = new Date().toISOString().slice(0, 10)
     const inc = {}
     for (const [k, v] of Object.entries(fields || {})) inc[k] = FieldValue().increment(v)
     if (Object.keys(inc).length) await db.doc(`users/${uid}/usageDaily/${day}`).set(inc, { merge: true })
-    await db.doc(`users/${uid}`).set({ lastActiveAt: Date.now() }, { merge: true })
+    const now = Date.now()
+    const patch = { lastActiveAt: now }
+    if (opts.userInitiated) patch.lastSeenAt = now
+    await db.doc(`users/${uid}`).set(patch, { merge: true })
   } catch (_) { /* best-effort */ }
 }
 
-module.exports = { currentPeriod, nextPeriodStart, planQuota, readUsage, flagEnabled, consume, refund, track, FALLBACK_QUOTA }
+// Standalone presence stamp for user-initiated actions that are not metered
+// (a manual trade, for example). Same best-effort contract as track().
+async function seen(db, uid) {
+  try { await db.doc(`users/${uid}`).set({ lastSeenAt: Date.now() }, { merge: true }) }
+  catch (_) { /* best-effort */ }
+}
+
+module.exports = { currentPeriod, nextPeriodStart, planQuota, readUsage, flagEnabled, consume, refund, track, seen, FALLBACK_QUOTA }

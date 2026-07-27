@@ -186,8 +186,48 @@ async function verifyPayment(ctx, invoice) {
   return verifyEvmPayment({ moralisKey: ctx.moralisKey, chain, receiving: address, asset, tokenContract, amountToken, sinceMs: createdAt })
 }
 
+// ── Trading-fee revenue rollup ──
+// Pure: the caller supplies already-read trade rows and the clock, so the
+// reporting maths is testable on its own and the callable stays I/O only.
+// A row is { feeNative, chain, at, feePct, type, txHash, uid }; rows without a
+// positive fee leg (the vast majority — only fee-charging trades have one) are
+// skipped entirely.
+function aggregateTradeFees(rows, now) {
+  const t0 = now || Date.now()
+  const windows = { h24: t0 - 86400000, d7: t0 - 7 * 86400000, d30: t0 - 30 * 86400000 }
+  const byChain = {}
+  const totals = { all: {}, h24: {}, d7: {}, d30: {} }
+  const recent = []
+  let feeTrades = 0
+  for (const t of rows || []) {
+    const native = parseFloat(t.feeNative)
+    if (!(native > 0)) continue
+    const chain = t.chain || 'unknown'
+    const at = Number(t.at) || 0
+    feeTrades++
+    byChain[chain] = byChain[chain] || { native: 0, count: 0 }
+    byChain[chain].native += native
+    byChain[chain].count++
+    totals.all[chain] = (totals.all[chain] || 0) + native
+    for (const w of Object.keys(windows)) {
+      if (at >= windows[w]) totals[w][chain] = (totals[w][chain] || 0) + native
+    }
+    recent.push({ chain, native, at, pct: t.feePct != null ? t.feePct : null, type: t.type || '', txHash: t.txHash || '', uid: t.uid || null })
+  }
+  recent.sort((a, b) => b.at - a.at)
+  return { byChain, totals, feeTrades, recent }
+}
+
+// Value a { chain -> nativeAmount } map in USD. Unknown/unpriced chains
+// contribute 0 rather than NaN, so one missing price cannot void the total.
+function feeUsd(map, px) {
+  let sum = 0
+  for (const c of Object.keys(map || {})) sum += (map[c] || 0) * ((px || {})[c] || 0)
+  return +sum.toFixed(2)
+}
+
 module.exports = {
   billingConfig, isAdminEmail, grantPlan, computeCryptoAmount, verifyPayment,
-  processReferralReward, resolveTradeFee,
+  processReferralReward, resolveTradeFee, aggregateTradeFees, feeUsd,
   STABLECOINS, DEFAULT_PRICES, isStable,
 }

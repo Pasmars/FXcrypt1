@@ -32,6 +32,25 @@ async function ensureProfileDoc(user) {
   } catch (e) { /* non-fatal: profile fills in on next load */ }
 }
 
+// Presence stamp behind the admin dashboard's DAU/WAU/MAU. Server-side stamps
+// (metering.seen / track with userInitiated) only fire on metered actions and
+// trades, which would miss someone who opens the app to read their portfolio —
+// the ordinary meaning of "active". Throttled to once an hour per device so a
+// long session or a reload loop costs one write, not one per navigation.
+const SEEN_THROTTLE_MS = 3600000;
+const SEEN_KEY = 'fx:lastSeenPing';
+async function stampLastSeen(user) {
+  if (!user) return;
+  try {
+    const k = SEEN_KEY + ':' + user.uid;
+    const prev = Number(localStorage.getItem(k) || 0);
+    if (Date.now() - prev < SEEN_THROTTLE_MS) return;
+    localStorage.setItem(k, String(Date.now()));
+    await setDoc(doc(db, 'users', user.uid), { lastSeenAt: Date.now() }, { merge: true });
+  } catch (e) { /* analytics only — never block or surface */ }
+}
+onAuthStateChanged(auth, (u) => { if (u) stampLastSeen(u); });
+
 function mapError(code, fallback) {
   return ({
     'auth/invalid-credential': 'Incorrect email or password.',

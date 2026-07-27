@@ -714,8 +714,13 @@ exports.executeTrade = fn.https.onCall(async (data, context) => {
       feePct: feeCfg ? feeCfg.pct : 0,
       feeNative: result.feeNative || null,
       feeTxHash: result.feeTxHash || null,
+      // Plain epoch alongside the server timestamp: the fee rollup windows by
+      // time and a serverTimestamp is null until the write resolves.
+      feeAt: result.feeNative ? Date.now() : null,
       timestamp: admin.firestore.FieldValue.serverTimestamp()
     })
+    // A manual trade is the user acting, and nothing else marked it as such.
+    await metering.seen(db, uid)
 
     return { ...result, feePct: feeCfg ? feeCfg.pct : 0 }
   } catch (err) {
@@ -1085,7 +1090,7 @@ exports.scanGems = functions.region('europe-west1').runWith({ secrets: ALL_SECRE
       minLiquidity, maxAgeHours, minAgeHours, minScore, minVolume, maxVolume, minMarketCap, maxMarketCap, sort,
       dextoolsKey: process.env.DEXTOOLS_API_KEY || null,
     })
-    await metering.track(db, uid, { gemScans: 1 })
+    await metering.track(db, uid, { gemScans: 1 }, { userInitiated: true })
     // Record surfaced gems for hindsight stats (first-seen price; deduped).
     await gemTracker.recordSightings(db, gems).catch(() => {})
     return { gems, scannedAt: Date.now(), usage: { used: scanUsage.used, remaining: scanUsage.remaining, quota: scanUsage.quota } }
@@ -2708,13 +2713,13 @@ exports.chatPointer = functions
 
     try {
       const { text, proposal, history: newHistory, model, sources } = await agentLib.runAgent({ prompt, history, ctx, provider: prov, apiKey, surface: 'pointer', deep, deepModel, mcp })
-      await metering.track(db, uid, { pointerReqs: 1, ...(deep ? { deepReqs: 1 } : {}) })
+      await metering.track(db, uid, { pointerReqs: 1, ...(deep ? { deepReqs: 1 } : {}) }, { userInitiated: true })
       const usage = { used: spent.used, remaining: spent.remaining, credits: spent.credits, quota: spent.quota, resetsAt: spent.resetsAt }
       return { text, proposal: proposal || null, history: newHistory, provider: prov, deep, model, usage, sources: sources || [] }
     } catch (e) {
       // Infra failure — refund the metered unit so a failed call isn't charged.
       await metering.refund(db, uid, { kind: 'pointer', ...spent })
-      await metering.track(db, uid, { pointerErrors: 1 })
+      await metering.track(db, uid, { pointerErrors: 1 }, { userInitiated: true })
       throw new functions.https.HttpsError('internal', e.message || 'Pointer failed')
     }
   })
@@ -3029,6 +3034,19 @@ exports.adminStats = adminFn.https.onCall(async (data, context) => {
       creditsOutstanding += (x.pointerCredits || 0)
     })
   } catch (e) { /* aggregate is best-effort */ }
+  // ── Active users: rolling DAU / WAU / MAU ──
+  // Counted off lastSeenAt (user-initiated presence only — see metering.track),
+  // so scheduled server work like the daily digest cannot inflate them.
+  // count() aggregations read no documents, so unlike the scan above these stay
+  // correct past the 3000-user ceiling.
+  let active = { dau: null, wau: null, mau: null }
+  try {
+    const since = (days) => Date.now() - days * 86400000
+    const activeSince = (days) => col.where('lastSeenAt', '>=', since(days)).count().get().then((s) => s.data().count)
+    const [dau, wau, mau] = await Promise.all([activeSince(1), activeSince(7), activeSince(30)])
+    active = { dau, wau, mau }
+  } catch (e) { /* aggregate is best-effort */ }
+
   // 30-day paywall conversion funnel (global daily docs, webhook-stamped completes).
   let funnel30d = { paywallView: 0, checkoutStart: 0, checkoutComplete: 0 }
   try {
@@ -3041,7 +3059,7 @@ exports.adminStats = adminFn.https.onCall(async (data, context) => {
       funnel30d.checkoutComplete += x.checkoutComplete || 0
     })
   } catch (e) { /* best-effort */ }
-  return { totalUsers: total, byPlan: counts, premium: counts.pro + counts.elite, pointerReqsMTD, activeUsers, creditsOutstanding, funnel30d, period: metering.currentPeriod(), generatedAt: Date.now() }
+  return { totalUsers: total, byPlan: counts, premium: counts.pro + counts.elite, pointerReqsMTD, activeUsers, active, creditsOutstanding, funnel30d, period: metering.currentPeriod(), generatedAt: Date.now() }
 })
 
 exports.adminListUsers = adminFn.https.onCall(async (data, context) => {
@@ -3191,6 +3209,67 @@ exports.adminRevenue = adminFn.https.onCall(async (data, context) => {
     totalUsd: +totalUsd.toFixed(2), last30Usd: +last30Usd.toFixed(2), paidCount, activeSubs,
     byProvider: { stripe: +byProvider.stripe.toFixed(2), crypto: +byProvider.crypto.toFixed(2) },
     recent: recent.slice(0, 30), generatedAt: Date.now(),
+  }
+})
+
+// ── Trading-fee revenue (the platform's cut, collected in each chain's native
+// gas token and swept to the configured fee wallet) ──
+//
+// Source of truth is the fee leg already recorded on every trade doc
+// (feeNative / feeTxHash / feePct), so all history counts with no backfill.
+// Native amounts are summed per chain and valued at CURRENT spot — the fee is
+// taken in-kind, so a USD figure is always a valuation, never a booked amount.
+//
+// Scale note: bounded collection-group scan, same approach as adminRevenue and
+// adminStats above. Past ~8k trades this needs a rollup counter instead.
+const FEE_SCAN_LIMIT = 8000
+exports.adminFeeRevenue = adminFn.https.onCall(async (data, context) => {
+  await requireAdmin(context)
+  const snap = await db.collectionGroup('trades').limit(FEE_SCAN_LIMIT).get()
+
+  const now = Date.now()
+  const truncated = snap.size >= FEE_SCAN_LIMIT
+  const scanned = snap.size
+  const rows = []
+  snap.forEach((doc) => {
+    const t = doc.data()
+    rows.push({
+      feeNative: t.feeNative,
+      chain: t.chain,
+      // feeAt is stamped at write time; older docs only carry the server
+      // timestamp, so fall back to it rather than dropping them from windows.
+      at: t.feeAt || (t.timestamp && typeof t.timestamp.toMillis === 'function' ? t.timestamp.toMillis() : 0),
+      feePct: t.feePct,
+      type: t.type,
+      txHash: t.feeTxHash || t.txHash || '',
+      uid: doc.ref.parent.parent ? doc.ref.parent.parent.id : null,
+    })
+  })
+  const { byChain, totals, feeTrades, recent } = payments.aggregateTradeFees(rows, now)
+
+  // Native → USD at current spot. Base and Robinhood are ETH-denominated.
+  let px = {}
+  try {
+    const { data: p } = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=binancecoin,ethereum,solana,matic-network,the-open-network&vs_currencies=usd', { timeout: 10000 })
+    px = {
+      eth: p.ethereum?.usd || 0, base: p.ethereum?.usd || 0, rhood: p.ethereum?.usd || 0,
+      bsc: p.binancecoin?.usd || 0, sol: p.solana?.usd || 0,
+      matic: p['matic-network']?.usd || 0, ton: p['the-open-network']?.usd || 0,
+    }
+  } catch (e) { /* priced at 0 → USD shown as unavailable rather than wrong */ }
+  const usdOf = (map) => payments.feeUsd(map, px)
+
+  return {
+    usd: { all: usdOf(totals.all), h24: usdOf(totals.h24), d7: usdOf(totals.d7), d30: usdOf(totals.d30) },
+    byChain: Object.entries(byChain).map(([chain, v]) => ({
+      chain, native: +v.native.toFixed(8), count: v.count, usd: +(v.native * (px[chain] || 0)).toFixed(2),
+    })).sort((a, b) => b.usd - a.usd),
+    feeTrades,
+    scanned,
+    truncated,
+    priced: Object.values(px).some((v) => v > 0),
+    recent: recent.slice(0, 20),
+    generatedAt: now,
   }
 })
 
