@@ -40,7 +40,7 @@ async function billingConfig(db) {
     // trade only gets charged when both the plan's % > 0 AND the chain wallet
     // is set (so fees stay off until the admin configures a receiving wallet).
     tradingFee: { free: 1.0, pro: 0.5, elite: 0.2, ...(c.tradingFee || {}) },
-    feeWallets: { bsc: '', eth: '', base: '', sol: '', ...(c.feeWallets || {}) },
+    feeWallets: { bsc: '', eth: '', base: '', sol: '', rhood: '', ...(c.feeWallets || {}) },
     raw: c,
   }
 }

@@ -4,17 +4,54 @@ const { useState: uS, useEffect: uE, useRef: uR } = React;
 // ─── Shared: AI composer bar ───
 // While `busy` (a reply is being generated or typed out) the send button turns
 // into a Stop control that calls onStop — mirrors the ChatGPT/Claude pattern.
+// Composer input is a textarea, not a single-line input: a prompt can be
+// written line by line and paragraph by paragraph. Enter inserts a newline
+// (and `enterKeyHint="enter"` makes phone keyboards show a return key rather
+// than a Send/Go key that would submit), so sending is the button — or
+// Ctrl/Cmd+Enter on a hardware keyboard.
+const COMPOSER_MAX_H = 168;   // ~6 lines, then it scrolls instead of growing
+
 function AIBar({ onFocus, value, onChange, onSend, compact, deep, onToggleDeep, busy, onStop }) {
+  const taRef = uR(null);
+  // Height follows content on every change, including programmatic ones (the
+  // Edit affordance reloads a past prompt into the composer) and the reset to
+  // empty after a send — hence keying off `value` rather than onInput.
+  uE(() => {
+    const el = taRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, COMPOSER_MAX_H) + 'px';
+  }, [value]);
+
+  const onKeyDown = (e) => {
+    if (e.key !== 'Enter') return;
+    // Let IME composition finish before treating Enter as anything.
+    if (e.nativeEvent && e.nativeEvent.isComposing) return;
+    if (e.metaKey || e.ctrlKey) { e.preventDefault(); if (!busy && onSend) onSend(); }
+    // Plain Enter falls through to the textarea's own newline.
+  };
+
   return (
     <div style={{
-      display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surface)',
+      display: 'flex', alignItems: 'flex-end', gap: 8, background: 'var(--surface)',
       borderRadius: 16, padding: '8px 8px 8px 14px', boxShadow: 'inset 0 0 0 1px var(--line)',
     }}>
-      <Icon name="spark" size={18} color="var(--accent)" />
-      <input value={value} onChange={e => onChange && onChange(e.target.value)} onFocus={onFocus}
-        onKeyDown={e => e.key === 'Enter' && !busy && onSend && onSend()}
+      <Icon name="spark" size={18} color="var(--accent)" style={{ flexShrink: 0, marginBottom: 9 }} />
+      <textarea ref={taRef} value={value} rows={1}
+        onChange={e => onChange && onChange(e.target.value)} onFocus={onFocus}
+        onKeyDown={onKeyDown}
+        enterKeyHint="enter"
+        aria-label="Message Pointer"
         placeholder={compact ? 'Message Pointer…' : 'Ask about crypto, trading & markets…'}
-        style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', color: 'var(--text)', fontSize: 15, fontFamily: 'inherit' }} />
+        style={{
+          flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent',
+          color: 'var(--text)', fontSize: 15, fontFamily: 'inherit', resize: 'none',
+          lineHeight: 1.45, padding: '7px 0', margin: 0, maxHeight: COMPOSER_MAX_H,
+          overflowY: 'auto', display: 'block',
+          // Explicit so the max-height cap means the same thing whether or not
+          // the host page ships a border-box reset.
+          boxSizing: 'border-box',
+        }} />
       {onToggleDeep && (
         <button onClick={onToggleDeep} aria-pressed={!!deep} aria-label="Deep research"
           title={deep ? 'Deep research: on — uses the most capable model' : 'Deep research: off'}
@@ -28,7 +65,7 @@ function AIBar({ onFocus, value, onChange, onSend, compact, deep, onToggleDeep, 
           <span style={{ width: 12, height: 12, borderRadius: 3, background: 'currentColor', display: 'block' }} />
         </button>
       ) : (
-        <button onClick={onSend} aria-label="Send" style={{ width: 38, height: 38, borderRadius: 11, border: 'none', cursor: 'pointer', background: value ? 'var(--accent)' : 'var(--chip)', color: value ? 'var(--on-accent)' : 'var(--muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'all .15s' }}>
+        <button onClick={onSend} aria-label="Send" title="Send (Ctrl+Enter) — Enter starts a new line" style={{ width: 38, height: 38, borderRadius: 11, border: 'none', cursor: 'pointer', background: value ? 'var(--accent)' : 'var(--chip)', color: value ? 'var(--on-accent)' : 'var(--muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'all .15s' }}>
           <Icon name={compact ? 'send' : 'arrowUR'} size={18} />
         </button>
       )}

@@ -3338,7 +3338,10 @@ exports.adminSetConfig = adminFn.https.onCall(async (data, context) => {
   const evmAddr = (v) => { const s = String(v || '').trim(); return /^0x[0-9a-fA-F]{40}$/.test(s) ? s : '' }
   const solAddr = (v) => { const s = String(v || '').trim(); return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(s) ? s : '' }
   if (c.tradingFee) clean.tradingFee = { free: feePct(c.tradingFee.free, 1.0), pro: feePct(c.tradingFee.pro, 0.5), elite: feePct(c.tradingFee.elite, 0.2) }
-  if (c.feeWallets) clean.feeWallets = { bsc: evmAddr(c.feeWallets.bsc), eth: evmAddr(c.feeWallets.eth), base: evmAddr(c.feeWallets.base), sol: solAddr(c.feeWallets.sol) }
+  // rhood is an EVM chain (id 4663) that trader.js already routes through its
+  // own router — without it here the sanitizer silently dropped any Robinhood
+  // fee wallet, so a fee could never be charged on that chain.
+  if (c.feeWallets) clean.feeWallets = { bsc: evmAddr(c.feeWallets.bsc), eth: evmAddr(c.feeWallets.eth), base: evmAddr(c.feeWallets.base), sol: solAddr(c.feeWallets.sol), rhood: evmAddr(c.feeWallets.rhood) }
   await db.doc('config/billing').set(clean, { merge: true })
   return { ok: true, config: clean }
 })

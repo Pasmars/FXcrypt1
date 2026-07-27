@@ -363,6 +363,7 @@ async function showConfig(){
     ${fld('fw_bsc','BSC fee wallet',fw.bsc||'','0x…')}
     ${fld('fw_eth','Ethereum fee wallet',fw.eth||'','0x…')}
     ${fld('fw_base','Base fee wallet',fw.base||'','0x…')}
+    ${fld('fw_rhood','Robinhood Chain fee wallet',fw.rhood||'','0x…')}
     ${fld('fw_sol','Solana fee wallet',fw.sol||'','Sol address')}
 
     <div class="muted" style="font-size:12px;margin:10px 0">Note: Stripe API keys & webhook secret are set via <span class="mono">firebase functions:secrets:set</span>, not here.</div>
@@ -383,7 +384,7 @@ async function showConfig(){
         creditPack:{usd:parseInt(v('cp_usd'))||10,credits:parseInt(v('cp_cr'))||50},
         autoTrade:{globalEnabled:document.getElementById('at_on').checked,defaultMaxBuyUsd:parseFloat(v('at_mb'))||100,defaultDailyTradeCap:parseInt(v('at_dc'))||10},
         tradingFee:{free:parseFloat(v('tf_free'))||0,pro:parseFloat(v('tf_pro'))||0,elite:parseFloat(v('tf_elite'))||0},
-        feeWallets:{bsc:v('fw_bsc'),eth:v('fw_eth'),base:v('fw_base'),sol:v('fw_sol')},
+        feeWallets:{bsc:v('fw_bsc'),eth:v('fw_eth'),base:v('fw_base'),rhood:v('fw_rhood'),sol:v('fw_sol')},
       }});
       bg.remove(); toast('Settings saved');
     }catch(e){ toast(e.message,true); }
