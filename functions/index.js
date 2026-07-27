@@ -3273,7 +3273,28 @@ exports.adminFeeRevenue = adminFn.https.onCall(async (data, context) => {
   } catch (e) { /* priced at 0 → USD shown as unavailable rather than wrong */ }
   const usdOf = (map) => payments.feeUsd(map, px)
 
+  // Which chains are actually armed. A fee needs BOTH a non-zero plan rate and
+  // a receiving wallet, so "$0 collected" is ambiguous on its own — it can mean
+  // no trades happened, or that the fee was never switched on.
+  let feeConfig = []
+  try {
+    const bcfg = await payments.billingConfig(db)
+    const rates = bcfg.tradingFee || {}
+    const anyRate = ['free', 'pro', 'elite'].some((p) => (parseFloat(rates[p]) || 0) > 0)
+    feeConfig = Object.keys(bcfg.feeWallets || {}).map((chain) => {
+      const w = String((bcfg.feeWallets || {})[chain] || '').trim()
+      return {
+        chain,
+        // Truncated: the dashboard only needs to confirm one is set.
+        wallet: w ? w.slice(0, 6) + '…' + w.slice(-4) : null,
+        rates: { free: parseFloat(rates.free) || 0, pro: parseFloat(rates.pro) || 0, elite: parseFloat(rates.elite) || 0 },
+        armed: !!w && anyRate,
+      }
+    }).sort((a, b) => (b.armed ? 1 : 0) - (a.armed ? 1 : 0) || a.chain.localeCompare(b.chain))
+  } catch (e) { /* best-effort — the revenue figures stand on their own */ }
+
   return {
+    feeConfig,
     usd: { all: usdOf(totals.all), h24: usdOf(totals.h24), d7: usdOf(totals.d7), d30: usdOf(totals.d30) },
     byChain: Object.entries(byChain).map(([chain, v]) => ({
       chain, native: +v.native.toFixed(8), count: v.count, usd: +(v.native * (px[chain] || 0)).toFixed(2),

@@ -144,6 +144,28 @@ async function loadRevenue(){
 // Trading-fee revenue: the platform's per-trade cut, taken in each chain's
 // native gas token and swept to the configured fee wallet. Held in-kind, so USD
 // is a valuation at current spot, not a booked amount — labelled as such.
+// Per-chain arming status. Without this a $0 total is ambiguous — it could mean
+// no trades, or a fee nobody ever switched on.
+function feeStatus(r){
+  const rows = r.feeConfig || [];
+  if(!rows.length) return '';
+  const anyArmed = rows.some(c=>c.armed);
+  const chip = c => {
+    const bg = c.armed ? 'rgba(34,197,94,.16)' : 'var(--surface2)';
+    const fg = c.armed ? 'var(--up)' : 'var(--muted)';
+    const detail = c.armed
+      ? `${c.rates.free}/${c.rates.pro}/${c.rates.elite}% → ${esc(c.wallet)}`
+      : (c.wallet ? 'rate 0%' : 'no wallet');
+    return `<span class="badge" style="background:${bg};color:${fg};margin:0 6px 6px 0;display:inline-block">
+      ${esc(String(c.chain).toUpperCase())} · ${c.armed?'charging':'off'} <span style="opacity:.75;font-weight:600">${detail}</span></span>`;
+  };
+  return `<div class="card" style="margin-bottom:12px">
+    <div style="font-size:12.5px;font-weight:700;margin-bottom:8px">Fee status by chain ${anyArmed?'':'<span class="muted" style="font-weight:600">— nothing is charging yet</span>'}</div>
+    <div>${rows.map(chip).join('')}</div>
+    <div class="muted" style="font-size:11.5px;margin-top:6px">Rates shown free/pro/elite. A chain charges only with a non-zero rate <em>and</em> a wallet — set both in Billing settings.</div>
+  </div>`;
+}
+
 async function loadFeeRevenue(){
   const el = document.getElementById('feerev');
   try{
@@ -164,7 +186,8 @@ async function loadFeeRevenue(){
         <div class="stat"><div class="n">${r.priced?money(r.usd.h24):'—'}</div><div class="l">Last 24 hours</div></div>
         <div class="stat"><div class="n" style="color:var(--accent)">${r.feeTrades}</div><div class="l">Fee-charging trades</div></div>
       </div>
-      ${none?`<div class="card muted" style="margin-bottom:16px;font-size:12.5px">No fee-charging trades recorded yet. A trade is only charged when the plan's fee %&nbsp;&gt;&nbsp;0 <em>and</em> a receiving wallet is set for that chain (Billing settings) — and only manual trades charge it today; bot, Telegram, copy-trade and auto-exit trades do not.</div>`:`
+      ${feeStatus(r)}
+      ${none?`<div class="card muted" style="margin-bottom:16px;font-size:12.5px">No fee-charging trades recorded yet — check the per-chain status above. A trade is charged only when the plan's fee %&nbsp;&gt;&nbsp;0 <em>and</em> a receiving wallet is set for that chain (Billing settings). All trade paths charge it: manual, gem auto-buy, sniper, agent, copy-trade, auto-exits and Telegram.</div>`:`
         <div class="card" style="padding:0;overflow:hidden;margin-bottom:10px"><table><thead><tr><th>Chain</th><th>Native collected</th><th>≈ USD</th><th>Trades</th></tr></thead><tbody>${chainRows}</tbody></table></div>
         ${recent?`<div class="card" style="padding:0;overflow:hidden;margin-bottom:16px"><table><thead><tr><th>Chain</th><th>Fee</th><th>Rate</th><th>Type</th><th>When</th><th>User</th></tr></thead><tbody>${recent}</tbody></table></div>`:''}`}
       ${r.truncated?`<div class="muted" style="margin:-6px 2px 14px;font-size:12px">Showing the first ${r.scanned.toLocaleString()} trades — totals are a floor, not a full sum.</div>`:''}`;
