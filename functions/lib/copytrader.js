@@ -203,7 +203,8 @@ async function runCopyMonitor(deps) {
               timestamp: admin.firestore.FieldValue.serverTimestamp(),
             })
             ctx.autoToday = (ctx.autoToday == null ? 0 : ctx.autoToday) + 1
-            await notify(uid, { category: 'copy', title: `🤖 Copied ${label}: bought ${info.symbol}`, body: `${amt} native @ $${info.priceUsd} · exits armed`, link: '/?goto=portfolio', tag: 'copybuy-' + buy.tx.slice(0, 20) })
+            const feeStr = payments.feeLine(feeCfg, result, w.chain)
+            await notify(uid, { category: 'copy', title: `🤖 Copied ${label}: bought ${info.symbol}`, body: `${amt} native @ $${info.priceUsd} · exits armed${feeStr ? ' · ' + feeStr : ''}`, link: '/?goto=portfolio', tag: 'copybuy-' + buy.tx.slice(0, 20) })
           }
         } catch (e) {
           await notify(uid, { category: 'copy', title: `⚠️ Copy-buy failed — ${info.symbol}`, body: String(e.message).slice(0, 120), link: '/?goto=copytrade', tag: 'copyfail-' + buy.tx.slice(0, 20) })

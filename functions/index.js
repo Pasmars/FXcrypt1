@@ -1301,15 +1301,17 @@ exports.processGemScanner = gemScanFn.pubsub
               }
 
               const txUrl = gemscanner.explorerTxUrl(gem.chain, result.txHash)
+              const feeStr = payments.feeLine(feeCfg, result, gem.chain)
               await bot.sendMessage(chatId,
                 `🤖 *Auto-Bought ${gem.tokenSymbol}!*\n\n` +
                 `Score: ${gem.gemScore}/100\n` +
                 `Amount: ${buyAmount} ${gem.chain === 'bsc' ? 'BNB' : (gem.chain === 'eth' || gem.chain === 'base') ? 'ETH' : 'SOL'}\n` +
                 `Status: ${result.status}\n` +
+                (feeStr ? `${feeStr}\n` : '') +
                 `[View TX](${txUrl})`,
                 { parse_mode: 'Markdown', disable_web_page_preview: true }
               ).catch(() => {})
-              await notify.send(db, admin, uid, { category: 'gems', title: `🤖 Auto-bought ${gem.tokenSymbol}`, body: `Score ${gem.gemScore}/100 · ${buyAmount} ${gem.chain === 'bsc' ? 'BNB' : (gem.chain === 'eth' || gem.chain === 'base') ? 'ETH' : 'SOL'} · exits armed`, link: '/?goto=portfolio', tag: 'gembuy-' + gem.tokenAddress })
+              await notify.send(db, admin, uid, { category: 'gems', title: `🤖 Auto-bought ${gem.tokenSymbol}`, body: `Score ${gem.gemScore}/100 · ${buyAmount} ${gem.chain === 'bsc' ? 'BNB' : (gem.chain === 'eth' || gem.chain === 'base') ? 'ETH' : 'SOL'} · exits armed${feeStr ? ' · ' + feeStr : ''}`, link: '/?goto=portfolio', tag: 'gembuy-' + gem.tokenAddress })
 
             } catch (buyErr) {
               console.error(`Gem auto-buy failed for ${gem.tokenSymbol}:`, buyErr.message)
@@ -1887,6 +1889,7 @@ exports.processSnipeQueue = fn.pubsub
             `Chain: ${snipe.chain.toUpperCase()}\n` +
             `Amount: ${snipe.buyAmount}\n` +
             `Price: $${parseFloat(info.price).toFixed(8)}\n` +
+            (payments.feeLine(feeCfg, result, snipe.chain) ? `${payments.feeLine(feeCfg, result, snipe.chain)}\n` : '') +
             `[View TX](${explorer}${result.txHash})`,
             { parse_mode: 'Markdown', disable_web_page_preview: true }
           ).catch(() => {})
@@ -2607,7 +2610,8 @@ exports.processDiscordAgent = discordFn
         try {
           const result = await agentLib.executeProposedTrade(ctx, p)
           await pRef.update({ status: 'executed', txHash: result.txHash || null })
-          await edit({ content: `✅ **Executed** — ${p.action.toUpperCase()} ${p.tokenSymbol || p.tokenAddress} on ${p.chain.toUpperCase()}\nStatus: ${result.status}` + (result.txHash ? `\nTx: \`${result.txHash}\`` : ''), components: [] })
+          const feeStr = payments.feeLine({ pct: result.feePct }, result, p.chain)
+          await edit({ content: `✅ **Executed** — ${p.action.toUpperCase()} ${p.tokenSymbol || p.tokenAddress} on ${p.chain.toUpperCase()}\nStatus: ${result.status}` + (feeStr ? `\n${feeStr}` : '') + (result.txHash ? `\nTx: \`${result.txHash}\`` : ''), components: [] })
         } catch (e) {
           await pRef.update({ status: 'failed', error: e.message })
           await edit({ content: `⚠️ **Trade failed** — ${e.message}`, components: [] })

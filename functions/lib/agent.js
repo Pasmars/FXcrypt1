@@ -1009,7 +1009,9 @@ async function executeProposedTrade(ctx, p) {
       feeAt: result.feeNative ? Date.now() : null,
       timestamp: admin.firestore.FieldValue.serverTimestamp(),
     })
-    return result
+    // feePct rides along so the caller's confirmation can disclose the fee
+    // (same shape the manual trade callable returns).
+    return { ...result, feePct: feeCfg ? feeCfg.pct : 0 }
   } catch (err) {
     await db.collection(`users/${uid}/trades`).add({
       chain: p.chain, tokenAddress: p.tokenAddress, type: p.action,

@@ -5,6 +5,13 @@ const signalGen  = require('./signal-generator')
 const marketAnalyzer = require('./market-analyzer')
 const payments   = require('./payments')
 
+// Fee disclosure for trade confirmations: the line plus its newline, or '' when
+// nothing was charged, so it drops out of the message cleanly.
+const feeNote = (feeCfg, result, chain) => {
+  const s = payments.feeLine(feeCfg, result, chain)
+  return s ? s + '\n' : ''
+}
+
 
 const VALID_CHAINS  = new Set(['bsc', 'eth', 'sol', 'base', 'ton', 'rhood'])
 const TG_API_TIMEOUT = 10000
@@ -642,6 +649,7 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
           `✅ *Gem Buy Executed!*\n\n` +
           `Chain: ${cbChain.toUpperCase()}\n` +
           `Amount: ${cbAmount} ${nativeTicker(cbChain)}\n` +
+          feeNote(feeCfg, result, cbChain) +
           `[View TX](${explorerUrl(cbChain, result.txHash)})`,
           { parse_mode: 'Markdown', disable_web_page_preview: true }
         )
@@ -1085,6 +1093,7 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
           `Token: *${token.name} (${token.symbol})*\n` +
           `Chain: ${chain.toUpperCase()} | Sold: ${pct}%\n` +
           `Status: \`${result.status}\`\n` +
+          feeNote(feeCfg, result, chain) +
           `[View TX](${explorerUrl(chain, result.txHash)})`,
           { parse_mode: 'Markdown', disable_web_page_preview: true, reply_markup: mainMenuKeyboard() }
         )
@@ -1489,6 +1498,7 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
           `Token: *${tokenLabel}*\n` +
           `Chain: ${chain.toUpperCase()} | Amount: ${amount} ${chainTicker}\n` +
           `Status: \`${result.status}\`\n` +
+          feeNote(feeCfg, result, chain) +
           `[View TX](${explorerUrl(chain, result.txHash)})`,
           { parse_mode: 'Markdown', disable_web_page_preview: true, reply_markup: mainMenuKeyboard() }
         )
@@ -2235,7 +2245,9 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
           timestamp: admin.firestore.FieldValue.serverTimestamp(),
         })
         await bot.sendMessage(chatId,
-          `✅ *Buy Executed!*\n\nChain: ${pt.chain.toUpperCase()}\nAmount: ${amount} ${nativeTicker(pt.chain)}\nStatus: \`${result.status}\`\n[View TX](${explorerUrl(pt.chain, result.txHash)})`,
+          `✅ *Buy Executed!*\n\nChain: ${pt.chain.toUpperCase()}\nAmount: ${amount} ${nativeTicker(pt.chain)}\nStatus: \`${result.status}\`\n` +
+          feeNote(feeCfg, result, pt.chain) +
+          `[View TX](${explorerUrl(pt.chain, result.txHash)})`,
           { parse_mode: 'Markdown', disable_web_page_preview: true, reply_markup: mainMenuKeyboard() }
         )
       } catch (err) {
@@ -2272,7 +2284,9 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
           timestamp: admin.firestore.FieldValue.serverTimestamp(),
         })
         await bot.sendMessage(chatId,
-          `✅ *Sell Executed!*\n\nChain: ${pt.chain.toUpperCase()}\nSold: ${pct}%\nStatus: \`${result.status}\`\n[View TX](${explorerUrl(pt.chain, result.txHash)})`,
+          `✅ *Sell Executed!*\n\nChain: ${pt.chain.toUpperCase()}\nSold: ${pct}%\nStatus: \`${result.status}\`\n` +
+          feeNote(feeCfg, result, pt.chain) +
+          `[View TX](${explorerUrl(pt.chain, result.txHash)})`,
           { parse_mode: 'Markdown', disable_web_page_preview: true, reply_markup: mainMenuKeyboard() }
         )
       } catch (err) {
@@ -2536,6 +2550,7 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
         `Token: *${token.name} (${token.symbol})*\n` +
         `Chain: ${chain.toUpperCase()} | Amount: ${amount} ${chainTicker}\n` +
         `Status: \`${result.status}\`\n` +
+        feeNote(feeCfg, result, chain) +
         `[View TX](${explorerUrl(chain, result.txHash)})`,
         { parse_mode: 'Markdown', disable_web_page_preview: true, reply_markup: mainMenuKeyboard() }
       )
@@ -2602,6 +2617,7 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
         `Token: *${token.name} (${token.symbol})*\n` +
         `Chain: ${chain.toUpperCase()} | Sold: ${pct}%\n` +
         `Status: \`${result.status}\`\n` +
+        feeNote(feeCfg, result, chain) +
         `[View TX](${explorerUrl(chain, result.txHash)})`,
         { parse_mode: 'Markdown', disable_web_page_preview: true, reply_markup: mainMenuKeyboard() }
       )
@@ -2696,6 +2712,7 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
         `Token: *${tokenLabel}*\n` +
         `Chain: ${chain.toUpperCase()} | Amount: ${amount} ${chainTicker}\n` +
         `Status: \`${result.status}\`\n` +
+        feeNote(feeCfg, result, chain) +
         `[View TX](${explorerUrl(chain, result.txHash)})`,
         { parse_mode: 'Markdown', disable_web_page_preview: true, reply_markup: mainMenuKeyboard() }
       )
@@ -2923,7 +2940,8 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
 
         await reply(
           `✅ *Buy Executed!*\n\nChain: ${chain.toUpperCase()}\nAmount: ${amount} ${nativeTicker(chain)}\n` +
-          `Status: \`${result.status}\`\n[View TX](${explorerUrl(chain, result.txHash)})`,
+          `Status: \`${result.status}\`\n` + feeNote(feeCfg, result, chain) +
+          `[View TX](${explorerUrl(chain, result.txHash)})`,
           { disable_web_page_preview: true }
         )
         break
@@ -2961,7 +2979,8 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
 
         await reply(
           `✅ *Sell Executed!*\n\nChain: ${chain.toUpperCase()}\nSold: ${pct}%\n` +
-          `Status: \`${result.status}\`\n[View TX](${explorerUrl(chain, result.txHash)})`,
+          `Status: \`${result.status}\`\n` + feeNote(feeCfg, result, chain) +
+          `[View TX](${explorerUrl(chain, result.txHash)})`,
           { disable_web_page_preview: true }
         )
         break

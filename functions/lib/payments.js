@@ -207,6 +207,26 @@ async function tradeFeeFor(db, uid, chain, userData) {
   } catch (e) { return null }
 }
 
+// ── Fee disclosure ──
+// One line naming what was actually taken, for trade confirmations (Telegram
+// messages and push notifications). Reads the fee off the trade RESULT, not the
+// config, so it reports the amount genuinely charged: a fee leg that was
+// skipped or failed reports nothing rather than claiming a charge that never
+// happened. Returns '' when no fee was taken, so callers can concatenate it
+// unconditionally.
+const FEE_SYM = { bsc: 'BNB', eth: 'ETH', base: 'ETH', rhood: 'ETH', matic: 'MATIC', sol: 'SOL', ton: 'TON' }
+function feeLine(feeCfg, result, chain) {
+  const n = parseFloat(result && result.feeNative)
+  if (!(n > 0)) return ''
+  // Trim trailing zeros but keep small fees legible (wei-scale strings).
+  const amount = n < 1e-6 ? n.toExponential(2) : String(+n.toFixed(8))
+  const sym = FEE_SYM[chain] || ''
+  // Joined rather than interpolated so an unknown chain (no ticker) does not
+  // leave a double space in the middle of the line.
+  const head = ['Platform fee:', amount, sym].filter(Boolean).join(' ')
+  return feeCfg && feeCfg.pct != null ? `${head} (${feeCfg.pct}%)` : head
+}
+
 // ── Trading-fee revenue rollup ──
 // Pure: the caller supplies already-read trade rows and the clock, so the
 // reporting maths is testable on its own and the callable stays I/O only.
@@ -249,6 +269,6 @@ function feeUsd(map, px) {
 
 module.exports = {
   billingConfig, isAdminEmail, grantPlan, computeCryptoAmount, verifyPayment,
-  processReferralReward, resolveTradeFee, tradeFeeFor, aggregateTradeFees, feeUsd,
+  processReferralReward, resolveTradeFee, tradeFeeFor, feeLine, aggregateTradeFees, feeUsd,
   STABLECOINS, DEFAULT_PRICES, isStable,
 }

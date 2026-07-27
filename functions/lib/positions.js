@@ -359,16 +359,20 @@ async function runExitMonitor(deps) {
 
       const label = { 'exit-tp': '🎯 Take-profit hit', 'exit-sl': '🛑 Stop-loss hit', 'exit-trail': '📉 Trailing stop hit', 'exit-time': '⏰ Max hold reached' }[reason]
       const pnlPct = p.avgEntryUsd && priceUsd ? ((priceUsd / p.avgEntryUsd - 1) * 100).toFixed(1) : null
+      // An exit fires unattended, so the confirmation is the only place the user
+      // learns a fee was taken on it.
+      const feeStr = payments.feeLine(feeCfg, result, p.chain)
       if (bot && ctx.settings.telegramChatId) {
         const est = priceUsd && p.qty ? (p.qty * (priceUsd - p.avgEntryUsd)).toFixed(2) : null
         await bot.sendMessage(ctx.settings.telegramChatId,
           `${label} — *${p.tokenSymbol || p.tokenAddress}* sold\n\n` +
           (pnlPct != null ? `PnL: ${pnlPct >= 0 ? '+' : ''}${pnlPct}%${est != null ? ` (≈$${est})` : ''}\n` : '') +
           `Entry: $${(p.avgEntryUsd || 0).toPrecision(4)} → Exit: $${(priceUsd || 0).toPrecision(4)}\n` +
+          (feeStr ? `${feeStr}\n` : '') +
           `[View TX](${EXPLORER[p.chain] ? EXPLORER[p.chain](result.txHash) : result.txHash})`,
           { parse_mode: 'Markdown', disable_web_page_preview: true }).catch(() => {})
       }
-      await push(uid, { category: 'trades', title: `${label} — ${p.tokenSymbol || 'position'} sold`, body: pnlPct != null ? `PnL ${pnlPct >= 0 ? '+' : ''}${pnlPct}% · entry $${(p.avgEntryUsd || 0).toPrecision(4)} → exit $${(priceUsd || 0).toPrecision(4)}` : 'Automated exit executed', link: '/?goto=portfolio', tag: 'exit-' + doc.id })
+      await push(uid, { category: 'trades', title: `${label} — ${p.tokenSymbol || 'position'} sold`, body: (pnlPct != null ? `PnL ${pnlPct >= 0 ? '+' : ''}${pnlPct}% · entry $${(p.avgEntryUsd || 0).toPrecision(4)} → exit $${(priceUsd || 0).toPrecision(4)}` : 'Automated exit executed') + (feeStr ? ` · ${feeStr}` : ''), link: '/?goto=portfolio', tag: 'exit-' + doc.id })
     } catch (err) {
       await fail(err.message || 'Sell failed')
     }
