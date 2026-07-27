@@ -15,6 +15,7 @@ const signalGen      = require('./signal-generator')
 const signalTracker  = require('./signal-tracker')
 const gemTracker     = require('./gem-tracker')
 const cexTrader      = require('./cex-trader')
+const payments       = require('./payments')
 const holdergraph    = require('./holdergraph')
 
 // Union-find over transfer edges → count of connected wallet clusters among the
@@ -981,25 +982,31 @@ async function executeProposedTrade(ctx, p) {
   const slip = p.slippage != null ? p.slippage : (settings.defaultSlippage != null ? settings.defaultSlippage : 10)
   const gasX = settings.defaultGasMultiplier || 1.2
 
+  const feeCfg = await payments.tradeFeeFor(db, uid, p.chain, userSnap.data())
+
   let result
   try {
     if (p.action === 'buy') {
       const amt = parseFloat(p.amount)
       if (!(amt > 0)) throw new Error('Invalid buy amount')
       result = p.chain === 'sol'
-        ? await trader.buyTokenSOL(pk, p.tokenAddress, amt, slip, settings.solRpc, heliusKey)
-        : await trader.buyTokenEVM(p.chain, pk, p.tokenAddress, amt, slip, settings[p.chain + 'Rpc'], gasX)
+        ? await trader.buyTokenSOL(pk, p.tokenAddress, amt, slip, settings.solRpc, heliusKey, feeCfg)
+        : await trader.buyTokenEVM(p.chain, pk, p.tokenAddress, amt, slip, settings[p.chain + 'Rpc'], gasX, feeCfg)
     } else {
       const pct = parseInt(p.percent)
       if (!(pct >= 1 && pct <= 100)) throw new Error('Invalid sell percent')
       result = p.chain === 'sol'
-        ? await trader.sellTokenSOL(pk, p.tokenAddress, pct, slip, settings.solRpc, heliusKey)
-        : await trader.sellTokenEVM(p.chain, pk, p.tokenAddress, pct, slip, settings[p.chain + 'Rpc'], gasX)
+        ? await trader.sellTokenSOL(pk, p.tokenAddress, pct, slip, settings.solRpc, heliusKey, feeCfg)
+        : await trader.sellTokenEVM(p.chain, pk, p.tokenAddress, pct, slip, settings[p.chain + 'Rpc'], gasX, feeCfg)
     }
     await db.collection(`users/${uid}/trades`).add({
       chain: p.chain, tokenAddress: p.tokenAddress, type: p.action,
       amountIn: p.amount || null, percentSold: p.percent || null,
       txHash: result.txHash, status: result.status, source: 'discord-agent',
+      feePct: feeCfg ? feeCfg.pct : 0,
+      feeNative: result.feeNative || null,
+      feeTxHash: result.feeTxHash || null,
+      feeAt: result.feeNative ? Date.now() : null,
       timestamp: admin.firestore.FieldValue.serverTimestamp(),
     })
     return result

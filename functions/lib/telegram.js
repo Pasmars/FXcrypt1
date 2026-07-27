@@ -3,6 +3,7 @@ const safety     = require('./safety')
 const cexTrader  = require('./cex-trader')
 const signalGen  = require('./signal-generator')
 const marketAnalyzer = require('./market-analyzer')
+const payments   = require('./payments')
 
 
 const VALID_CHAINS  = new Set(['bsc', 'eth', 'sol', 'base', 'ton', 'rhood'])
@@ -617,17 +618,23 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
         const slip = Math.min(cbSettings.defaultSlippage || 10, 50)
         const gasX = cbSettings.defaultGasMultiplier || 1.2
 
+        const feeCfg = await payments.tradeFeeFor(db, cbUid, cbChain, null)
+
         let result
         if (cbChain === 'sol') {
-          result = await trader.buyTokenSOL(pk, cbToken, cbAmount, slip, cbSettings.solRpc)
+          result = await trader.buyTokenSOL(pk, cbToken, cbAmount, slip, cbSettings.solRpc, null, feeCfg)
         } else {
-          result = await trader.buyTokenEVM(cbChain, pk, cbToken, cbAmount, slip, cbSettings[cbChain + 'Rpc'], gasX)
+          result = await trader.buyTokenEVM(cbChain, pk, cbToken, cbAmount, slip, cbSettings[cbChain + 'Rpc'], gasX, feeCfg)
         }
 
         await db.collection(`users/${cbUid}/trades`).add({
           chain: cbChain, tokenAddress: cbToken, type: 'buy',
           amountIn: String(cbAmount), txHash: result.txHash,
           status: result.status, source: 'telegram-gem',
+          feePct: feeCfg ? feeCfg.pct : 0,
+          feeNative: result.feeNative || null,
+          feeTxHash: result.feeTxHash || null,
+          feeAt: result.feeNative ? Date.now() : null,
           timestamp: admin.firestore.FieldValue.serverTimestamp(),
         })
 
@@ -1054,13 +1061,18 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
         const pk     = encryption.decrypt(cbWallets[chain].encryptedKey, cbUid, masterSecret)
         const slip   = Math.min(cbSettings.defaultSlippage || 5, 50)
         const gasX   = cbSettings.defaultGasMultiplier || 1.2
+        const feeCfg = await payments.tradeFeeFor(db, cbUid, chain, cbUser.data())
         const result = chain === 'sol'
-          ? await trader.sellTokenSOL(pk, token.address, pct, slip, cbSettings.solRpc, heliusKey)
-          : await trader.sellTokenEVM(chain, pk, token.address, pct, slip, cbSettings[chain + 'Rpc'], gasX)
+          ? await trader.sellTokenSOL(pk, token.address, pct, slip, cbSettings.solRpc, heliusKey, feeCfg)
+          : await trader.sellTokenEVM(chain, pk, token.address, pct, slip, cbSettings[chain + 'Rpc'], gasX, feeCfg)
         await db.collection(`users/${cbUid}/trades`).add({
           chain, tokenAddress: token.address, type: 'sell', source: 'wallet-holdings',
           tokenName: token.name, tokenSymbol: token.symbol,
           percentSold: pct, txHash: result.txHash, status: result.status,
+          feePct: feeCfg ? feeCfg.pct : 0,
+          feeNative: result.feeNative || null,
+          feeTxHash: result.feeTxHash || null,
+          feeAt: result.feeNative ? Date.now() : null,
           timestamp: admin.firestore.FieldValue.serverTimestamp(),
         })
         // Invalidate cache so next refresh shows updated balances
@@ -1458,13 +1470,18 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
         const pk     = encryption.decrypt(walletEntry.encryptedKey, cbUid, masterSecret)
         const slip   = Math.min(cbSettings.defaultSlippage || 5, 50)
         const gasX   = cbSettings.defaultGasMultiplier || 1.2
+        const feeCfg = await payments.tradeFeeFor(db, cbUid, chain, null)
         const result = chain === 'sol'
-          ? await trader.buyTokenSOL(pk, addr, amount, slip, cbSettings.solRpc)
-          : await trader.buyTokenEVM(chain, pk, addr, amount, slip, cbSettings[chain + 'Rpc'], gasX)
+          ? await trader.buyTokenSOL(pk, addr, amount, slip, cbSettings.solRpc, null, feeCfg)
+          : await trader.buyTokenEVM(chain, pk, addr, amount, slip, cbSettings[chain + 'Rpc'], gasX, feeCfg)
         await db.collection(`users/${cbUid}/trades`).add({
           chain, tokenAddress: addr, type: 'buy', source: 'gem-scan',
           tokenName: g.tokenName, tokenSymbol: g.tokenSymbol,
           amountIn: String(amount), txHash: result.txHash, status: result.status,
+          feePct: feeCfg ? feeCfg.pct : 0,
+          feeNative: result.feeNative || null,
+          feeTxHash: result.feeTxHash || null,
+          feeAt: result.feeNative ? Date.now() : null,
           timestamp: admin.firestore.FieldValue.serverTimestamp(),
         })
         await bot.sendMessage(chatId,
@@ -2204,12 +2221,17 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
         const pk     = encryption.decrypt(wallets[pt.chain].encryptedKey, uid, masterSecret)
         const slip   = Math.min(settings.defaultSlippage || 5, 50)
         const gasX   = settings.defaultGasMultiplier || 1.2
+        const feeCfg = await payments.tradeFeeFor(db, uid, pt.chain, null)
         const result = pt.chain === 'sol'
-          ? await trader.buyTokenSOL(pk, pt.tokenAddress, amount, slip, settings.solRpc)
-          : await trader.buyTokenEVM(pt.chain, pk, pt.tokenAddress, amount, slip, settings[pt.chain + 'Rpc'], gasX)
+          ? await trader.buyTokenSOL(pk, pt.tokenAddress, amount, slip, settings.solRpc, null, feeCfg)
+          : await trader.buyTokenEVM(pt.chain, pk, pt.tokenAddress, amount, slip, settings[pt.chain + 'Rpc'], gasX, feeCfg)
         await db.collection(`users/${uid}/trades`).add({
           chain: pt.chain, tokenAddress: pt.tokenAddress, type: 'buy',
           amountIn: String(amount), txHash: result.txHash, status: result.status, source: 'telegram-menu',
+          feePct: feeCfg ? feeCfg.pct : 0,
+          feeNative: result.feeNative || null,
+          feeTxHash: result.feeTxHash || null,
+          feeAt: result.feeNative ? Date.now() : null,
           timestamp: admin.firestore.FieldValue.serverTimestamp(),
         })
         await bot.sendMessage(chatId,
@@ -2236,12 +2258,17 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
         const pk     = encryption.decrypt(wallets[pt.chain].encryptedKey, uid, masterSecret)
         const slip   = Math.min(settings.defaultSlippage || 5, 50)
         const gasX   = settings.defaultGasMultiplier || 1.2
+        const feeCfg = await payments.tradeFeeFor(db, uid, pt.chain, null)
         const result = pt.chain === 'sol'
-          ? await trader.sellTokenSOL(pk, pt.tokenAddress, pct, slip, settings.solRpc)
-          : await trader.sellTokenEVM(pt.chain, pk, pt.tokenAddress, pct, slip, settings[pt.chain + 'Rpc'], gasX)
+          ? await trader.sellTokenSOL(pk, pt.tokenAddress, pct, slip, settings.solRpc, null, feeCfg)
+          : await trader.sellTokenEVM(pt.chain, pk, pt.tokenAddress, pct, slip, settings[pt.chain + 'Rpc'], gasX, feeCfg)
         await db.collection(`users/${uid}/trades`).add({
           chain: pt.chain, tokenAddress: pt.tokenAddress, type: 'sell',
           percentSold: pct, txHash: result.txHash, status: result.status, source: 'telegram-menu',
+          feePct: feeCfg ? feeCfg.pct : 0,
+          feeNative: result.feeNative || null,
+          feeTxHash: result.feeTxHash || null,
+          feeAt: result.feeNative ? Date.now() : null,
           timestamp: admin.firestore.FieldValue.serverTimestamp(),
         })
         await bot.sendMessage(chatId,
@@ -2486,13 +2513,18 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
       const pk     = encryption.decrypt(wallets[chain].encryptedKey, uid, masterSecret)
       const slip   = Math.min(settings.defaultSlippage || 5, 50)
       const gasX   = settings.defaultGasMultiplier || 1.2
+      const feeCfg = await payments.tradeFeeFor(db, uid, chain, userDoc.data())
       const result = chain === 'sol'
-        ? await trader.buyTokenSOL(pk, token.address, amount, slip, settings.solRpc, heliusKey)
-        : await trader.buyTokenEVM(chain, pk, token.address, amount, slip, settings[chain + 'Rpc'], gasX)
+        ? await trader.buyTokenSOL(pk, token.address, amount, slip, settings.solRpc, heliusKey, feeCfg)
+        : await trader.buyTokenEVM(chain, pk, token.address, amount, slip, settings[chain + 'Rpc'], gasX, feeCfg)
       await db.collection(`users/${uid}/trades`).add({
         chain, tokenAddress: token.address, type: 'buy', source: 'wallet-holdings',
         tokenName: token.name, tokenSymbol: token.symbol,
         amountIn: String(amount), txHash: result.txHash, status: result.status,
+        feePct: feeCfg ? feeCfg.pct : 0,
+        feeNative: result.feeNative || null,
+        feeTxHash: result.feeTxHash || null,
+        feeAt: result.feeNative ? Date.now() : null,
         timestamp: admin.firestore.FieldValue.serverTimestamp(),
       })
       await userDoc.ref.set(
@@ -2547,13 +2579,18 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
       const pk     = encryption.decrypt(wallets[chain].encryptedKey, uid, masterSecret)
       const slip   = Math.min(settings.defaultSlippage || 5, 50)
       const gasX   = settings.defaultGasMultiplier || 1.2
+      const feeCfg = await payments.tradeFeeFor(db, uid, chain, userDoc.data())
       const result = chain === 'sol'
-        ? await trader.sellTokenSOL(pk, token.address, pct, slip, settings.solRpc, heliusKey)
-        : await trader.sellTokenEVM(chain, pk, token.address, pct, slip, settings[chain + 'Rpc'], gasX)
+        ? await trader.sellTokenSOL(pk, token.address, pct, slip, settings.solRpc, heliusKey, feeCfg)
+        : await trader.sellTokenEVM(chain, pk, token.address, pct, slip, settings[chain + 'Rpc'], gasX, feeCfg)
       await db.collection(`users/${uid}/trades`).add({
         chain, tokenAddress: token.address, type: 'sell', source: 'wallet-holdings',
         tokenName: token.name, tokenSymbol: token.symbol,
         percentSold: pct, txHash: result.txHash, status: result.status,
+        feePct: feeCfg ? feeCfg.pct : 0,
+        feeNative: result.feeNative || null,
+        feeTxHash: result.feeTxHash || null,
+        feeAt: result.feeNative ? Date.now() : null,
         timestamp: admin.firestore.FieldValue.serverTimestamp(),
       })
       await userDoc.ref.set(
@@ -2640,13 +2677,18 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
       const pk     = encryption.decrypt(gemWalletEntry.encryptedKey, uid, masterSecret)
       const slip   = Math.min(settings.defaultSlippage || 5, 50)
       const gasX   = settings.defaultGasMultiplier || 1.2
+      const feeCfg = await payments.tradeFeeFor(db, uid, chain, null)
       const result = chain === 'sol'
-        ? await trader.buyTokenSOL(pk, g.tokenAddress, amount, slip, settings.solRpc)
-        : await trader.buyTokenEVM(chain, pk, g.tokenAddress, amount, slip, settings[chain + 'Rpc'], gasX)
+        ? await trader.buyTokenSOL(pk, g.tokenAddress, amount, slip, settings.solRpc, null, feeCfg)
+        : await trader.buyTokenEVM(chain, pk, g.tokenAddress, amount, slip, settings[chain + 'Rpc'], gasX, feeCfg)
       await db.collection(`users/${uid}/trades`).add({
         chain, tokenAddress: g.tokenAddress, type: 'buy', source: 'gem-custom',
         tokenName: g.tokenName, tokenSymbol: g.tokenSymbol,
         amountIn: String(amount), txHash: result.txHash, status: result.status,
+        feePct: feeCfg ? feeCfg.pct : 0,
+        feeNative: result.feeNative || null,
+        feeTxHash: result.feeTxHash || null,
+        feeAt: result.feeNative ? Date.now() : null,
         timestamp: admin.firestore.FieldValue.serverTimestamp(),
       })
       await bot.sendMessage(chatId,
@@ -2864,13 +2906,18 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
         const pk     = encryption.decrypt(wallets[chain].encryptedKey, uid, masterSecret)
         const slip   = Math.min(settings.defaultSlippage || 5, 50)
         const gasX   = settings.defaultGasMultiplier || 1.2
+        const feeCfg = await payments.tradeFeeFor(db, uid, chain, null)
         const result = chain === 'sol'
-          ? await trader.buyTokenSOL(pk, addr, amount, slip, settings.solRpc)
-          : await trader.buyTokenEVM(chain, pk, addr, amount, slip, settings[chain + 'Rpc'], gasX)
+          ? await trader.buyTokenSOL(pk, addr, amount, slip, settings.solRpc, null, feeCfg)
+          : await trader.buyTokenEVM(chain, pk, addr, amount, slip, settings[chain + 'Rpc'], gasX, feeCfg)
 
         await db.collection(`users/${uid}/trades`).add({
           chain, tokenAddress: addr, type: 'buy', amountIn: String(amount),
           txHash: result.txHash, status: result.status, source: 'telegram',
+          feePct: feeCfg ? feeCfg.pct : 0,
+          feeNative: result.feeNative || null,
+          feeTxHash: result.feeTxHash || null,
+          feeAt: result.feeNative ? Date.now() : null,
           timestamp: admin.firestore.FieldValue.serverTimestamp()
         })
 
@@ -2897,13 +2944,18 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
         const pk     = encryption.decrypt(wallets[chain].encryptedKey, uid, masterSecret)
         const slip   = Math.min(settings.defaultSlippage || 5, 50)
         const gasX   = settings.defaultGasMultiplier || 1.2
+        const feeCfg = await payments.tradeFeeFor(db, uid, chain, null)
         const result = chain === 'sol'
-          ? await trader.sellTokenSOL(pk, addr, pct, slip, settings.solRpc)
-          : await trader.sellTokenEVM(chain, pk, addr, pct, slip, settings[chain + 'Rpc'], gasX)
+          ? await trader.sellTokenSOL(pk, addr, pct, slip, settings.solRpc, null, feeCfg)
+          : await trader.sellTokenEVM(chain, pk, addr, pct, slip, settings[chain + 'Rpc'], gasX, feeCfg)
 
         await db.collection(`users/${uid}/trades`).add({
           chain, tokenAddress: addr, type: 'sell', percentSold: pct,
           txHash: result.txHash, status: result.status, source: 'telegram',
+          feePct: feeCfg ? feeCfg.pct : 0,
+          feeNative: result.feeNative || null,
+          feeTxHash: result.feeTxHash || null,
+          feeAt: result.feeNative ? Date.now() : null,
           timestamp: admin.firestore.FieldValue.serverTimestamp()
         })
 

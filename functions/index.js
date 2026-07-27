@@ -1256,7 +1256,8 @@ exports.processGemScanner = gemScanFn.pubsub
                 continue
               }
 
-              const result = await trader.buyTokenEVM(gem.chain, pk, gem.tokenAddress, buyAmount, slip, settings[gem.chain + 'Rpc'], gasX)
+              const feeCfg = payments.resolveTradeFee(cfg, userPlan, gem.chain)
+              const result = await trader.buyTokenEVM(gem.chain, pk, gem.tokenAddress, buyAmount, slip, settings[gem.chain + 'Rpc'], gasX, feeCfg)
               autoToday++
               await metering.track(db, uid, { autoBuys: 1 })
 
@@ -1279,6 +1280,10 @@ exports.processGemScanner = gemScanFn.pubsub
                 source:       'gem-auto',
                 gemScore:     gem.gemScore,
                 exit:         exitDefaults,
+                feePct:       feeCfg ? feeCfg.pct : 0,
+                feeNative:    result.feeNative || null,
+                feeTxHash:    result.feeTxHash || null,
+                feeAt:        result.feeNative ? Date.now() : null,
                 timestamp:    admin.firestore.FieldValue.serverTimestamp(),
               })
 
@@ -1843,9 +1848,10 @@ exports.processSnipeQueue = fn.pubsub
         const pk     = encryption.decrypt(wallets[snipe.chain].encryptedKey, uid, MASTER_SECRET())
         const slip   = Math.min(snipe.slippage || settings.defaultSlippage || 5, 50)
         const gasX   = settings.defaultGasMultiplier || 1.2
+        const feeCfg = await payments.tradeFeeFor(db, uid, snipe.chain, userSnap.data())
         const result = snipe.chain === 'sol'
-          ? await trader.buyTokenSOL(pk, snipe.tokenAddress, parseFloat(snipe.buyAmount), slip, settings.solRpc)
-          : await trader.buyTokenEVM(snipe.chain, pk, snipe.tokenAddress, parseFloat(snipe.buyAmount), slip, settings[snipe.chain + 'Rpc'], gasX)
+          ? await trader.buyTokenSOL(pk, snipe.tokenAddress, parseFloat(snipe.buyAmount), slip, settings.solRpc, null, feeCfg)
+          : await trader.buyTokenEVM(snipe.chain, pk, snipe.tokenAddress, parseFloat(snipe.buyAmount), slip, settings[snipe.chain + 'Rpc'], gasX, feeCfg)
 
         await snipeDoc.ref.update({
           status: 'sniped', txHash: result.txHash,
@@ -1857,6 +1863,10 @@ exports.processSnipeQueue = fn.pubsub
           tokenName: info.name, tokenSymbol: info.symbol,
           type: 'buy', amountIn: snipe.buyAmount,
           txHash: result.txHash, status: result.status, source: 'sniper',
+          feePct: feeCfg ? feeCfg.pct : 0,
+          feeNative: result.feeNative || null,
+          feeTxHash: result.feeTxHash || null,
+          feeAt: result.feeNative ? Date.now() : null,
           timestamp: admin.firestore.FieldValue.serverTimestamp()
         })
 

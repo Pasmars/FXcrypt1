@@ -186,6 +186,27 @@ async function verifyPayment(ctx, invoice) {
   return verifyEvmPayment({ moralisKey: ctx.moralisKey, chain, receiving: address, asset, tokenContract, amountToken, sinceMs: createdAt })
 }
 
+// Resolve the trading fee for a user on a chain, loading the billing config and
+// (if not already to hand) their plan. For the automated paths — gem auto-buy,
+// sniper, agent, copy-trade, auto-exit, Telegram — which have no billing config
+// in scope the way the manual callable does.
+//
+// Returns null on any failure. A fee is a side-effect of the trade, never a
+// precondition: a Firestore hiccup reading config must not stop someone's
+// stop-loss from firing. Null is the same "no fee leg" the traders already
+// handle when the fee is unconfigured.
+async function tradeFeeFor(db, uid, chain, userData) {
+  try {
+    const cfg = await billingConfig(db)
+    let plan = userData && userData.plan
+    if (!plan) {
+      const snap = await db.doc(`users/${uid}`).get()
+      plan = snap.exists ? (snap.data() || {}).plan : 'free'
+    }
+    return resolveTradeFee(cfg, plan, chain)
+  } catch (e) { return null }
+}
+
 // ── Trading-fee revenue rollup ──
 // Pure: the caller supplies already-read trade rows and the clock, so the
 // reporting maths is testable on its own and the callable stays I/O only.
@@ -228,6 +249,6 @@ function feeUsd(map, px) {
 
 module.exports = {
   billingConfig, isAdminEmail, grantPlan, computeCryptoAmount, verifyPayment,
-  processReferralReward, resolveTradeFee, aggregateTradeFees, feeUsd,
+  processReferralReward, resolveTradeFee, tradeFeeFor, aggregateTradeFees, feeUsd,
   STABLECOINS, DEFAULT_PRICES, isStable,
 }

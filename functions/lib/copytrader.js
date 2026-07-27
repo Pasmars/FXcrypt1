@@ -11,6 +11,7 @@
 const axios = require('axios')
 const { filterSafeTokens } = require('./safety')
 const positions = require('./positions')
+const payments = require('./payments')
 
 const EVM_CHAINS = { bsc: '0x38', eth: '0x1', base: '0x2105' }
 const walletKey = (chain, addr) => `${chain}_${String(addr).toLowerCase()}`
@@ -188,12 +189,17 @@ async function runCopyMonitor(deps) {
             if (!wal?.encryptedKey) continue
             const pk = encryption.decrypt(wal.encryptedKey, uid, masterSecret)
             const slip = Math.min(s.gemBuySlippage || s.defaultSlippage || 10, 50)
-            const result = await trader.buyTokenEVM(w.chain, pk, buy.tokenAddress, amt, slip, s[w.chain + 'Rpc'], s.defaultGasMultiplier || 1.2)
+            const feeCfg = await payments.tradeFeeFor(db, uid, w.chain, { plan: ctx.plan })
+            const result = await trader.buyTokenEVM(w.chain, pk, buy.tokenAddress, amt, slip, s[w.chain + 'Rpc'], s.defaultGasMultiplier || 1.2, feeCfg)
             if (result.status === 'failed') continue
             await db.collection(`users/${uid}/trades`).add({
               chain: w.chain, tokenAddress: buy.tokenAddress, tokenSymbol: info.symbol || null, tokenName: info.name || null,
               type: 'buy', amountIn: String(amt), txHash: result.txHash, status: result.status,
               source, entryPriceUsd: info.priceUsd, exit: exitDefaults,
+              feePct: feeCfg ? feeCfg.pct : 0,
+              feeNative: result.feeNative || null,
+              feeTxHash: result.feeTxHash || null,
+              feeAt: result.feeNative ? Date.now() : null,
               timestamp: admin.firestore.FieldValue.serverTimestamp(),
             })
             ctx.autoToday = (ctx.autoToday == null ? 0 : ctx.autoToday) + 1

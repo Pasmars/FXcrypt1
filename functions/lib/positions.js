@@ -13,6 +13,7 @@
 // Positions are written ONLY here (via the onTradeCreated trigger and the exit
 // monitor). Clients read them and may edit exit/exitArmed — enforced by rules.
 const axios = require('axios')
+const payments = require('./payments')
 
 const DS_CID = { bsc: 'bsc', eth: 'ethereum', sol: 'solana', base: 'base', rhood: 'robinhood' }
 const CG_NATIVE = { bsc: 'binancecoin', eth: 'ethereum', base: 'ethereum', sol: 'solana', rhood: 'ethereum' }
@@ -330,9 +331,13 @@ async function runExitMonitor(deps) {
       const pk = encryption.decrypt(wallet.encryptedKey, uid, masterSecret)
       const slip = Math.min(ctx.settings.gemBuySlippage || ctx.settings.defaultSlippage || 10, 50)
       const gasX = ctx.settings.defaultGasMultiplier || 1.2
+      // Platform fee on the exit, same terms as a manual sell: charged on the
+      // proceeds, and null (no fee leg) unless the admin has configured both a
+      // rate for the plan and a receiving wallet for the chain.
+      const feeCfg = await payments.tradeFeeFor(db, uid, p.chain, { plan: ctx.plan })
       const result = p.chain === 'sol'
-        ? await trader.sellTokenSOL(pk, p.tokenAddress, 100, slip, ctx.settings.solRpc, deps.heliusKey || null)
-        : await trader.sellTokenEVM(p.chain, pk, p.tokenAddress, 100, slip, ctx.settings[p.chain + 'Rpc'], gasX)
+        ? await trader.sellTokenSOL(pk, p.tokenAddress, 100, slip, ctx.settings.solRpc, deps.heliusKey || null, feeCfg)
+        : await trader.sellTokenEVM(p.chain, pk, p.tokenAddress, 100, slip, ctx.settings[p.chain + 'Rpc'], gasX, feeCfg)
       if (result.status === 'failed') { await fail('Swap transaction reverted'); continue }
 
       ctx.autoToday++
@@ -344,6 +349,10 @@ async function runExitMonitor(deps) {
         type: 'sell', percentSold: 100, amountIn: null,
         txHash: result.txHash, status: result.status, source: reason,
         exitPriceUsd: priceUsd || null, entryPriceUsd: p.avgEntryUsd || null,
+        feePct: feeCfg ? feeCfg.pct : 0,
+        feeNative: result.feeNative || null,
+        feeTxHash: result.feeTxHash || null,
+        feeAt: result.feeNative ? Date.now() : null,
         timestamp: admin.firestore.FieldValue.serverTimestamp(),
       })
       await doc.ref.set({ exit: { ...e, status: 'done', firedAt: now, firedReason: reason, firedPriceUsd: priceUsd }, exitArmed: false }, { merge: true })
