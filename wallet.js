@@ -322,7 +322,9 @@ async function getEvmTxs(chain, address) {
   const cfg = CHAINS[chain];
   if (!cfg.blockscout) return null; // signal "unsupported"
   try {
-    const res = await fetch(`${cfg.blockscout}/api/v2/addresses/${address}/transactions?filter=`, { headers: { accept: 'application/json' } });
+    // No `filter` param: Blockscout validates it as an enum (`to` | `from`) and
+    // answers 422 for an empty value, which emptied this feed on every chain.
+    const res = await fetch(`${cfg.blockscout}/api/v2/addresses/${address}/transactions`, { headers: { accept: 'application/json' } });
     if (!res.ok) return [];
     const data = await res.json();
     const lower = address.toLowerCase();

@@ -239,26 +239,77 @@ function SendForm({ onClose }) {
   const [stage, setStage] = wS('form'); // form | review | sending | done | error
   const [result, setResult] = wS(null);
   const [err, setErr] = wS('');
+  // Network fee for the selected asset: what it costs to move, and how much of
+  // the balance can actually leave once that cost is reserved.
+  const [feeInfo, setFeeInfo] = wS(null);
+  const [maxing, setMaxing] = wS(false);
+  // True only while the amount is the fee-adjusted maximum, so the exact gas
+  // price that was reserved is pinned on the transaction. Cleared on any edit.
+  const [maxed, setMaxed] = wS(false);
 
   const sel = tok || holdings[0] || null;
   const fmtTok = (n) => (n >= 1 ? n.toLocaleString('en-US', { maximumFractionDigits: 6 }) : n.toFixed(8));
+
+  wE(() => {
+    let alive = true;
+    setFeeInfo(null); setMaxed(false);
+    if (!sel || !window.FXWallet) return;
+    window.FXWallet.maxSendable({ chain: sel.chain, token: sel.address ? { address: sel.address, decimals: sel.decimals } : null })
+      .then((q) => { if (alive) setFeeInfo(q); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [sel ? sel.chain + ':' + (sel.address || sel.sym) : '']);
 
   // Locked wallet → unlock first.
   if (W.locked) return <div style={{ paddingTop: 4 }}><PwGate title="Unlock to send" sub="Enter your wallet password to authorise transfers." cta="Unlock" onSubmit={(pw) => FXW().unlock(pw)} /></div>;
   if (!holdings.length) return <div style={{ textAlign: 'center', color: 'var(--muted)', padding: 30, fontSize: 14 }}>No funds available to send.</div>;
   if (!sel) return null;
 
-  const bal = parseFloat(String(sel.amount).replace(/[^0-9.]/g, '')) || 0;
+  // `amount` is rounded for display and can round up past the real balance;
+  // `exact` is the unrounded figure the fee reserve has to work from.
+  const bal = sel.exact != null ? sel.exact : (parseFloat(String(sel.amount).replace(/[^0-9.]/g, '')) || 0);
   const num = parseFloat(amt) || 0;
   const tokenAmt = mode === 'token' ? num : (sel.price ? num / sel.price : 0);
   const usdAmt = mode === 'token' ? num * (sel.price || 0) : num;
-  const setMax = () => { setMode('token'); setAmt(String(bal)); };
+  const isToken = !!sel.address;
+  // Never round *up* when filling in an amount, and never write more decimals
+  // than the asset has — ethers rejects a value finer than the token's decimals.
+  const dp = isToken ? Math.min(8, sel.decimals ?? 18) : 8;
+  const floorTo = (n) => { const f = Math.pow(10, dp); return String(Math.floor(n * f) / f); };
+  // A native send pays its fee out of the balance being sent, so Max is the
+  // balance minus that fee; a token send pays gas in the native coin, so the
+  // whole token balance goes.
+  const setMax = async () => {
+    setMaxing(true);
+    try {
+      const q = await FXW().maxSendable({ chain: sel.chain, token: isToken ? { address: sel.address, decimals: sel.decimals } : null });
+      setFeeInfo(q); setMode('token');
+      setAmt(q.max > 0 ? floorTo(q.max) : '0');
+      setMaxed(true);
+    } catch (e) {
+      // Fee lookup failed (RPC unreachable) — fall back to the old behaviour and
+      // let the engine's own reserve trim the amount at send time.
+      setMode('token'); setAmt(floorTo(bal)); setMaxed(false);
+    } finally { setMaxing(false); }
+  };
+  const editAmt = (v) => { setAmt(v); setMaxed(false); };
   const recipientOk = to.trim() && window.FXWallet && window.FXWallet.isValidAddress(sel.chain, to.trim());
+  const feeShort = (n) => (n >= 0.0001 ? n.toFixed(6) : n.toExponential(1));
+  const gasShort = feeInfo ? feeShort(feeInfo.fee) + ' ' + feeInfo.feeSymbol : '';
+  // Token send with no native coin to pay gas: the transfer cannot be broadcast.
+  const gasBlocked = !!(feeInfo && feeInfo.isToken && !feeInfo.gasOk);
+  const dustBlocked = !!(feeInfo && !feeInfo.isToken && !feeInfo.gasOk);
 
   const doSend = async () => {
     setStage('sending'); setErr('');
     try {
-      const sig = await FXW().send({ chain: sel.chain, to: to.trim(), amount: tokenAmt, token: sel.address ? { address: sel.address, decimals: sel.decimals } : null });
+      const sig = await FXW().send({
+        chain: sel.chain, to: to.trim(), amount: tokenAmt,
+        token: sel.address ? { address: sel.address, decimals: sel.decimals } : null,
+        // Pin the exact gas that was reserved, so a max send spends precisely
+        // what was subtracted and cannot revert on insufficient gas.
+        fee: maxed && feeInfo && !feeInfo.isToken ? feeInfo.gas : null,
+      });
       const hash = typeof sig === 'string' ? sig : (sig && sig.hash) || '';
       const ex = (FXW().chains.find((c) => c.key === sel.chain) || {}).txExplorer;
       setResult({ hash, url: ex ? ex + hash : null });
@@ -288,7 +339,16 @@ function SendForm({ onClose }) {
   if (stage === 'review') return (
     <div style={{ paddingBottom: 10 }}>
       <div style={{ background: 'var(--surface)', borderRadius: 14, padding: 16, boxShadow: 'inset 0 0 0 1px var(--line)', marginBottom: 14 }}>
-        {[['Asset', sel.sym + ' · ' + (FXW().chains.find((c) => c.key === sel.chain) || {}).label], ['Amount', fmtTok(tokenAmt) + ' ' + sel.sym], ['≈ Value', fmtUsd(usdAmt)], ['To', truncAddr(to.trim())]].map(([k, v]) => (
+        {[
+          ['Asset', sel.sym + ' · ' + (FXW().chains.find((c) => c.key === sel.chain) || {}).label],
+          ['Amount', fmtTok(tokenAmt) + ' ' + sel.sym],
+          ['≈ Value', fmtUsd(usdAmt)],
+          ...(feeInfo ? [['Network fee', (feeInfo.estimated ? '≈ ' : '') + gasShort]] : []),
+          // Only meaningful for a native max send, where the fee came out of the
+          // amount — spell out the total so nothing looks unaccounted for.
+          ...(maxed && feeInfo && !feeInfo.isToken ? [['Total debited', fmtTok(tokenAmt + feeInfo.fee) + ' ' + sel.sym]] : []),
+          ['To', truncAddr(to.trim())],
+        ].map(([k, v]) => (
           <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '9px 0', borderBottom: '1px solid var(--line)', fontSize: 14 }}>
             <span style={{ color: 'var(--muted)' }}>{k}</span><span style={{ fontWeight: 700, fontFamily: k === 'To' ? 'ui-monospace, monospace' : 'inherit' }}>{v}</span>
           </div>
@@ -348,14 +408,14 @@ function SendForm({ onClose }) {
           <span style={{ fontSize: 12, color: 'var(--muted)', fontWeight: 600 }}>Amount</span>
           <div style={{ display: 'flex', background: 'var(--surface2)', borderRadius: 8, padding: 3, gap: 2 }}>
             {[['token', sel.sym], ['usd', 'USD']].map(([m, l]) => (
-              <button key={m} onClick={() => { setMode(m); setAmt(''); }} style={{ border: 'none', cursor: 'pointer', borderRadius: 6, padding: '4px 10px', fontSize: 11.5, fontWeight: 700, fontFamily: 'inherit', background: mode === m ? 'var(--accent)' : 'transparent', color: mode === m ? 'var(--on-accent)' : 'var(--muted)' }}>{l}</button>
+              <button key={m} onClick={() => { setMode(m); setAmt(''); setMaxed(false); }} style={{ border: 'none', cursor: 'pointer', borderRadius: 6, padding: '4px 10px', fontSize: 11.5, fontWeight: 700, fontFamily: 'inherit', background: mode === m ? 'var(--accent)' : 'transparent', color: mode === m ? 'var(--on-accent)' : 'var(--muted)' }}>{l}</button>
             ))}
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {mode === 'usd' && <span style={{ fontSize: 26, fontWeight: 800, color: num ? 'var(--text)' : 'var(--faint)' }}>$</span>}
-          <input value={amt} onChange={(e) => setAmt(e.target.value.replace(/[^0-9.]/g, ''))} placeholder="0" inputMode="decimal" style={{ flex: 1, border: 'none', background: 'transparent', outline: 'none', color: 'var(--text)', fontSize: 26, fontWeight: 800, fontFamily: 'inherit', minWidth: 0 }} />
-          <button onClick={setMax} style={{ background: 'var(--chip)', border: 'none', borderRadius: 8, padding: '6px 11px', fontSize: 12.5, fontWeight: 700, color: 'var(--accent)', cursor: 'pointer', fontFamily: 'inherit' }}>Max</button>
+          <input value={amt} onChange={(e) => editAmt(e.target.value.replace(/[^0-9.]/g, ''))} placeholder="0" inputMode="decimal" style={{ flex: 1, border: 'none', background: 'transparent', outline: 'none', color: 'var(--text)', fontSize: 26, fontWeight: 800, fontFamily: 'inherit', minWidth: 0 }} />
+          <button onClick={setMax} disabled={maxing} style={{ background: 'var(--chip)', border: 'none', borderRadius: 8, padding: '6px 11px', fontSize: 12.5, fontWeight: 700, color: 'var(--accent)', cursor: maxing ? 'default' : 'pointer', opacity: maxing ? 0.6 : 1, fontFamily: 'inherit' }}>{maxing ? '…' : 'Max'}</button>
           <span style={{ fontWeight: 700, color: 'var(--text)' }}>{mode === 'token' ? sel.sym : 'USD'}</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, fontSize: 13, color: 'var(--muted)' }}>
@@ -363,9 +423,29 @@ function SendForm({ onClose }) {
           <span>{mode === 'token' ? '≈ ' + fmtUsd(usdAmt) : '≈ ' + fmtTok(tokenAmt) + ' ' + sel.sym}</span>
         </div>
       </div>
+      {/* Fee context: a native send has the fee taken out of the amount, a token
+          send pays it in the chain's own coin. */}
+      {feeInfo && !gasBlocked && !dustBlocked && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'center', marginTop: -6, marginBottom: 12, fontSize: 12, color: 'var(--muted)' }}>
+          <Icon name="alert" size={13} color="var(--muted)" />
+          {feeInfo.isToken
+            ? <span>Network fee ≈ {gasShort}, paid from your {feeInfo.feeSymbol} balance</span>
+            : <span>Network fee ≈ {gasShort}{maxed ? ' — reserved from your balance' : ''} · Max sends {fmtTok(feeInfo.max)} {sel.sym}</span>}
+        </div>
+      )}
+      {gasBlocked && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'center', marginTop: -6, marginBottom: 12, fontSize: 12.5, color: 'var(--down)', fontWeight: 600 }}>
+          <Icon name="alert" size={14} /> Not enough {feeInfo.feeSymbol} to pay the network fee (≈ {gasShort})
+        </div>
+      )}
+      {dustBlocked && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'center', marginTop: -6, marginBottom: 12, fontSize: 12.5, color: 'var(--down)', fontWeight: 600 }}>
+          <Icon name="alert" size={14} /> Balance is below the network fee (≈ {gasShort})
+        </div>
+      )}
       {tokenAmt > bal && <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'center', marginTop: -6, marginBottom: 12, fontSize: 12.5, color: 'var(--down)', fontWeight: 600 }}><Icon name="alert" size={14} /> Amount exceeds balance</div>}
-      <Btn size="lg" full icon="send" onClick={() => setStage('review')} disabled={!num || tokenAmt > bal || !recipientOk}>
-        {!recipientOk && to ? 'Invalid address' : num ? 'Review · ' + fmtTok(tokenAmt) + ' ' + sel.sym : 'Enter an amount'}
+      <Btn size="lg" full icon="send" onClick={() => setStage('review')} disabled={!num || tokenAmt > bal || !recipientOk || gasBlocked || dustBlocked}>
+        {!recipientOk && to ? 'Invalid address' : gasBlocked || dustBlocked ? 'Insufficient ' + (feeInfo ? feeInfo.feeSymbol : '') + ' for fee' : num ? 'Review · ' + fmtTok(tokenAmt) + ' ' + sel.sym : 'Enter an amount'}
       </Btn>
     </div>
   );

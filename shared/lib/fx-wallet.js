@@ -23,7 +23,7 @@ import { doc, getDoc, setDoc, updateDoc, deleteField } from 'firebase/firestore'
 import {
   encryptData, decryptData, buildAuthCheck, verifyAuthCheck,
   createWallet, importWallet, getBalanceNum, getTokenBalanceNum,
-  getTxs, fetchTokenPrices, chainMeta, isValidAddress, send as sendImpl,
+  getTxs, fetchTokenPrices, chainMeta, isValidAddress, send as sendImpl, estimateNetworkFee,
   initTonWeb, CHAINS, getTokenMeta, relayBridgeQuote, relayBridgeExecute, normalizeRelayQuote,
   setRpcProxy,
 } from './wallet-crypto';
@@ -60,6 +60,7 @@ let connectedApps = [];
 let holdings = [];                 // computed portfolio rows
 let portfolioTotal = 0;
 let loaded = false;
+let sentTxs = [];                  // our own record of sends (see recordTx)
 
 function emit() { try { window.dispatchEvent(new CustomEvent('fx:update')); } catch (e) {} }
 function uid() { return auth.currentUser && auth.currentUser.uid; }
@@ -103,6 +104,7 @@ async function load() {
   settings = { hiddenChains: s.hiddenChains || [], hiddenTokens: s.hiddenTokens || [], hideSmall: !!s.hideSmall };
   contacts = Array.isArray(userDoc.contacts) ? userDoc.contacts : [];
   connectedApps = Array.isArray(userDoc.connectedApps) ? userDoc.connectedApps : [];
+  sentTxs = Array.isArray(userDoc.walletTxs) ? userDoc.walletTxs : [];
   loaded = true;
   emit();
   // One-time unification for accounts created before the unified EVM wallet,
@@ -290,7 +292,31 @@ async function reveal(chain, type, password) {
 }
 
 // ── Send (irreversible — validate, unlock, decrypt, broadcast) ──
-async function sendAsset({ chain, to, amount, token }) {
+// How much of an asset can actually leave the wallet, and what the network will
+// charge to move it. For a native asset the fee comes out of the same balance,
+// so the spendable maximum is balance − fee; for a token the fee is paid in the
+// chain's native coin instead, so the whole token balance is sendable as long as
+// there is native coin to cover gas (`gasOk`).
+async function maxSendable({ chain, token }) {
+  const w = wallets[chain];
+  if (!w) throw new Error('No wallet on ' + String(chain).toUpperCase());
+  const isToken = !!(token && token.address);
+  const [nativeBal, fee] = await Promise.all([
+    getBalanceNum(chain, w.address).catch(() => 0),
+    estimateNetworkFee(chain, { token: isToken }).catch(() => ({ fee: 0, symbol: '', estimated: true, unknown: true })),
+  ]);
+  const feeSymbol = fee.symbol || (chainMeta(chain) || {}).symbol || '';
+  if (isToken) {
+    const bal = await getTokenBalanceNum(chain, w.address, token.address, token.decimals ?? 18).catch(() => 0);
+    return { max: bal, balance: bal, fee: fee.fee, feeSymbol, gasOk: nativeBal >= fee.fee, nativeBalance: nativeBal, estimated: !!fee.estimated, gas: fee, isToken: true };
+  }
+  const max = Math.max(0, nativeBal - fee.fee);
+  return { max, balance: nativeBal, fee: fee.fee, feeSymbol, gasOk: max > 0, nativeBalance: nativeBal, estimated: !!fee.estimated, gas: fee, isToken: false };
+}
+
+// `fee` (from maxSendable().gas) pins the exact gasPrice/gasLimit that was
+// reserved out of a max send. Omitted for ordinary sends.
+async function sendAsset({ chain, to, amount, token, fee = null }) {
   await ensureLibs();
   if (!sessionPwd) throw new Error('Unlock your wallet to send');
   const w = wallets[chain];
@@ -310,13 +336,54 @@ async function sendAsset({ chain, to, amount, token }) {
     throw new Error('This ' + chain.toUpperCase() + ' wallet was encrypted with a different password than your current one. Re-import it (Manage wallets → Add or import) using its recovery phrase or private key, then try again.');
   });
 
+  const meta = chainMeta(chain) || {};
+  const hashOf = (r) => (typeof r === 'string' ? r : (r && r.hash) || '');
+
   if (token && token.address) {
     if (chain === 'sol' || chain === 'ton') throw new Error('Token sends are supported on EVM chains only for now');
-    return await sendImpl.evmToken(chain, token.address, to, amount, token.decimals ?? 18, pk);
+    const res = await sendImpl.evmToken(chain, token.address, to, amount, token.decimals ?? 18, pk);
+    await recordTx({ hash: hashOf(res), chain, value: amount, symbol: token.symbol || '', to, fee: fee ? fee.fee : null });
+    return res;
   }
-  if (chain === 'sol') return await sendImpl.sol(to, amount, pk);
-  if (chain === 'ton') return await sendImpl.ton(to, amount, pk);
-  return await sendImpl.evmNative(chain, to, amount, pk);
+
+  // Native send. The fee is paid from the balance being sent, so sending the
+  // whole balance reverts on insufficient gas. The UI reserves the fee up front
+  // (maxSendable) — this is the backstop for an amount that still leaves no room
+  // for gas, e.g. the full balance typed by hand: trim it to what can actually
+  // go out rather than letting the network reject the transfer.
+  let amt = Number(amount);
+  let gas = fee;
+  // Pinned gas is what makes the reserve exact. It is used when the caller
+  // already reserved a fee, and whenever this backstop trims an amount — a trim
+  // computed against one gas price only holds if that same price is charged.
+  let pinned = fee && fee.gasPrice ? fee : null;
+  const bal = await getBalanceNum(chain, w.address).catch(() => null);
+  if (bal != null) {
+    if (!gas) gas = await estimateNetworkFee(chain, {}).catch(() => null);
+    const feeAmt = gas && gas.fee ? gas.fee : 0;
+    if (feeAmt > 0 && amt + feeAmt > bal) {
+      const trimmed = bal - feeAmt;
+      if (trimmed <= 0) throw new Error(`Not enough ${meta.symbol || 'funds'} to cover the ${chain.toUpperCase()} network fee (≈ ${feeAmt.toFixed(6)} ${meta.symbol || ''}).`);
+      amt = trimmed;
+      if (!pinned && gas.gasPrice) pinned = gas;
+    }
+  }
+
+  if (chain === 'sol') {
+    const res = await sendImpl.sol(to, amt, pk);
+    await recordTx({ hash: hashOf(res), chain, value: amt, symbol: meta.symbol, to, fee: gas ? gas.fee : null });
+    return res;
+  }
+  if (chain === 'ton') {
+    const res = await sendImpl.ton(to, amt, pk);
+    await recordTx({ hash: hashOf(res), chain, value: amt, symbol: meta.symbol, to, fee: gas ? gas.fee : null });
+    return res;
+  }
+  // Only a pinned fee is passed through — an unpinned estimate must not override
+  // ethers' own fee selection on an ordinary send.
+  const res = await sendImpl.evmNative(chain, to, amt, pk, pinned);
+  await recordTx({ hash: hashOf(res), chain, value: amt, symbol: meta.symbol, to, fee: gas ? gas.fee : null });
+  return res;
 }
 
 // ── Bridge to Robinhood Chain (Relay) ──
@@ -447,6 +514,9 @@ async function refreshPortfolio() {
       if (bal > 0) rows.push({
         sym: meta.symbol, name: meta.label, chain, logo: meta.color, img: meta.logo,
         amount: bal < 1 ? bal.toFixed(5) : bal.toFixed(4),
+        // `amount` is rounded for display and can round UP past the real
+        // balance — anything doing arithmetic (Max, fee reserve) needs this.
+        exact: bal,
         price, value: bal * price, ch24: q.usd_24h_change != null ? +q.usd_24h_change.toFixed(2) : 0,
         native: true,
       });
@@ -459,7 +529,7 @@ async function refreshPortfolio() {
           if (tb <= 0) continue;
           const prices = tokPlatform ? await fetchTokenPrices(tokPlatform, [tk.address]) : {};
           const p = prices[String(tk.address).toLowerCase()] || {};
-          rows.push({ sym: tk.symbol, name: tk.symbol, chain, logo: meta.color, address: tk.address, decimals: tk.decimals ?? 18, amount: tb < 1 ? tb.toFixed(5) : tb.toFixed(4), price: p.usd || 0, value: tb * (p.usd || 0), ch24: p.change != null ? +p.change.toFixed(2) : 0 });
+          rows.push({ sym: tk.symbol, name: tk.symbol, chain, logo: meta.color, address: tk.address, decimals: tk.decimals ?? 18, amount: tb < 1 ? tb.toFixed(5) : tb.toFixed(4), exact: tb, price: p.usd || 0, value: tb * (p.usd || 0), ch24: p.change != null ? +p.change.toFixed(2) : 0 });
         } catch (e) {}
       }
     }));
@@ -469,11 +539,54 @@ async function refreshPortfolio() {
   } catch (e) { /* keep last */ }
 }
 
-// Tx history for the active address on a chain
+// ── Our own record of outgoing transactions ──
+// Explorer history alone is not enough to "keep track" of what the user did
+// here: a fresh send takes a while to be indexed, and a chain whose explorer is
+// unreachable from the browser (Robinhood) shows nothing at all. So every send
+// this app broadcasts is written to users/{uid}.walletTxs and merged into the
+// feed, which also means the row appears the instant the send returns.
+const SENT_TX_CAP = 60;
+async function recordTx(entry) {
+  const id = uid();
+  if (!entry || !entry.hash) return;
+  const row = {
+    hash: entry.hash,
+    chain: entry.chain,
+    incoming: false,               // we only ever record our own sends
+    value: entry.value != null ? Number(entry.value) : null,
+    symbol: entry.symbol || '',
+    counterparty: entry.to || '',
+    ts: Date.now(),
+    fee: entry.fee != null ? Number(entry.fee) : null,
+    err: false,
+    local: true,
+  };
+  sentTxs = [row, ...sentTxs.filter((t) => t.hash !== row.hash)].slice(0, SENT_TX_CAP);
+  emit();
+  if (!id) return;
+  // Best-effort: a failed write must never make a successful send look failed.
+  try { await setDoc(doc(db, 'users', id), { walletTxs: sentTxs }, { merge: true }); } catch (e) {}
+}
+
+// Tx history for the active address on a chain: explorer feed merged with our
+// own send records, de-duped by hash. Explorer rows win on conflict — once a tx
+// is indexed the chain is the better source of truth for status/value — but our
+// record supplies the fee we actually paid.
 function txHistory(chain) {
   const w = wallets[chain];
   if (!w) return Promise.resolve([]);
-  return getTxs(chain, w.address).catch(() => []);
+  const mine = sentTxs.filter((t) => t.chain === chain);
+  return getTxs(chain, w.address).catch(() => []).then((remote) => {
+    const rows = Array.isArray(remote) ? remote.slice() : [];
+    const seen = new Map(rows.map((r) => [String(r.hash).toLowerCase(), r]));
+    for (const t of mine) {
+      const key = String(t.hash).toLowerCase();
+      const hit = seen.get(key);
+      if (hit) { if (hit.fee == null && t.fee != null) hit.fee = t.fee; continue; }
+      rows.push(t);
+    }
+    return rows.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  });
 }
 
 // ── Public snapshot for the UI ──
@@ -513,7 +626,7 @@ window.FXWallet = {
   // custom tokens
   detectToken, addToken, removeToken, tokenChains: () => [...TOKEN_CHAINS],
   // money
-  send: sendAsset, refreshPortfolio, txHistory,
+  send: sendAsset, refreshPortfolio, txHistory, maxSendable, estimateNetworkFee,
   // bridge (→ Robinhood Chain via Relay)
   bridgeQuote, bridgeExecute, bridgeSupportedFrom,
   // settings
@@ -526,7 +639,7 @@ window.FXWallet = {
 // next account never inherits a previous user's decrypted password/wallets.
 onAuthStateChanged(auth, (u) => {
   if (u) { load(); }
-  else { sessionPwd = null; userDoc = {}; wallets = {}; contacts = []; connectedApps = []; holdings = []; portfolioTotal = 0; loaded = false; emit(); }
+  else { sessionPwd = null; userDoc = {}; wallets = {}; contacts = []; connectedApps = []; holdings = []; portfolioTotal = 0; sentTxs = []; loaded = false; emit(); }
 });
 
 export {};

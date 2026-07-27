@@ -240,7 +240,10 @@ async function sendViaProxy(chain, txReq, privKey) {
     const est = await chainRpc(chain, 'eth_estimateGas', [{ from, to: txReq.to, value: txReq.value ? e.BigNumber.from(txReq.value).toHexString() : undefined, data: txReq.data || '0x' }]).catch(() => null);
     gasLimit = est ? e.BigNumber.from(est).mul(12).div(10) : e.BigNumber.from(txReq.data && txReq.data !== '0x' ? 120000 : 21000);
   }
-  const tx = { to: txReq.to, value: txReq.value || 0, data: txReq.data || '0x', nonce: parseInt(nonceHex, 16), gasPrice: e.BigNumber.from(gasHex), gasLimit, chainId: cfg.chainId };
+  // A fee-adjusted max send pins the exact gasPrice it reserved, so the fee
+  // charged here cannot drift above what was subtracted from the amount.
+  const gasPrice = txReq.gasPrice ? e.BigNumber.from(txReq.gasPrice) : e.BigNumber.from(gasHex);
+  const tx = { to: txReq.to, value: txReq.value || 0, data: txReq.data || '0x', nonce: parseInt(nonceHex, 16), gasPrice, gasLimit, chainId: cfg.chainId };
   const raw = await wallet.signTransaction(tx);
   const body = await _rpcProxy(chain, 'eth_sendRawTransaction', [raw]);
   if (!body || body.error || !body.result) throw new Error((body && body.error && body.error.message) || ('Broadcast failed on ' + label + '.'));
@@ -248,16 +251,22 @@ async function sendViaProxy(chain, txReq, privKey) {
   return { hash, wait: async () => { for (let i = 0; i < 30; i++) { const r = await chainRpc(chain, 'eth_getTransactionReceipt', [hash]); if (r) return r; await new Promise((res) => setTimeout(res, 4000)); } return null; } };
 }
 
-export async function sendEvmNative(chain, to, amountEther, privKey) {
+// `fee` is optional and only supplied by a fee-adjusted max send: pinning the
+// same { gasPrice, gasLimit } that was reserved out of the amount makes the
+// spend exact, so "send everything" cannot fail on insufficient gas. Normal
+// sends omit it and keep ethers' own fee selection.
+export async function sendEvmNative(chain, to, amountEther, privKey, fee: any = null) {
   const e = getEthers(); const cfg = CHAIN_CFG[chain];
   const value = e.utils.parseEther(String(amountEther));
-  if (PROXIED_CHAINS.has(chain) && _rpcProxy) return sendViaProxy(chain, { to, value }, privKey);
+  const gasLimit = fee?.gasLimit || 21000;
+  const gasPrice = fee?.gasPrice ? e.BigNumber.from(String(fee.gasPrice)) : null;
+  if (PROXIED_CHAINS.has(chain) && _rpcProxy) return sendViaProxy(chain, { to, value, gasLimit, gasPrice }, privKey);
   let lastErr;
   const rpcs = await _orderEvmRpcsByHealth(cfg.rpcs);
-  for (const rpc of rpcs) { try { const provider = evmStaticProvider(rpc, cfg.chainId); const signer = new e.Wallet(privKey, provider); return await signer.sendTransaction({ to, value, gasLimit: 21000 }); } catch (err) { lastErr = err; } }
+  for (const rpc of rpcs) { try { const provider = evmStaticProvider(rpc, cfg.chainId); const signer = new e.Wallet(privKey, provider); return await signer.sendTransaction(gasPrice ? { to, value, gasLimit, gasPrice } : { to, value, gasLimit }); } catch (err) { lastErr = err; } }
   // Every direct RPC failed — some ISPs block browser TLS to public RPC hosts.
   // Sign locally and broadcast through the server proxy instead.
-  if (_rpcProxy) { try { return await sendViaProxy(chain, { to, value }, privKey); } catch (err) { lastErr = err; } }
+  if (_rpcProxy) { try { return await sendViaProxy(chain, { to, value, gasLimit, gasPrice }, privKey); } catch (err) { lastErr = err; } }
   throw lastErr || new Error('Transaction failed on all endpoints');
 }
 export async function sendEvmToken(chain, contractAddr, to, amount, decimals, privKey) {
@@ -270,6 +279,43 @@ export async function sendEvmToken(chain, contractAddr, to, amount, decimals, pr
   for (const rpc of rpcs) { try { const provider = evmStaticProvider(rpc, cfg.chainId); const signer = new e.Wallet(privKey, provider); return await signer.sendTransaction({ to: contractAddr, data, gasLimit: 100000 }); } catch (err) { lastErr = err; } }
   if (_rpcProxy) { try { return await sendViaProxy(chain, { to: contractAddr, data }, privKey); } catch (err) { lastErr = err; } }
   throw lastErr || new Error('Token transfer failed on all endpoints');
+}
+
+// ── Network fee estimation ──
+// Used to make "send max" survivable: the fee of a native send is paid out of
+// the same balance being sent, so sending the whole balance always reverts on
+// insufficient gas unless the fee is reserved first.
+//
+// EVM: gasPrice is read live and returned alongside the gas limit so the caller
+// can pin both on the transaction — a pinned fee is exact, so no safety buffer
+// (and no leftover dust) is needed. Solana and TON have flat-ish fees for a
+// simple transfer and no equivalent pinning, so they use a conservative
+// constant and are marked `estimated`.
+const GAS_LIMIT_NATIVE = 21000;
+const GAS_LIMIT_TOKEN = 100000;   // matches the cap sendEvmToken already uses
+const SOL_SEND_FEE = 0.000005;    // 5,000 lamports — one signature
+const TON_SEND_FEE = 0.01;        // simple transfer, rounded up
+
+export async function estimateNetworkFee(chain: string, opts: any = {}) {
+  const meta: any = chainMeta(chain) || {};
+  const symbol = meta.symbol || String(chain).toUpperCase();
+  if (chain === 'sol') return { fee: SOL_SEND_FEE, symbol, estimated: true };
+  if (chain === 'ton') return { fee: TON_SEND_FEE, symbol, estimated: true };
+  const cfg = CHAIN_CFG[chain];
+  if (!cfg) return { fee: 0, symbol, estimated: true, unknown: true };
+  const gasHex = await chainRpc(chain, 'eth_gasPrice', []);
+  if (gasHex == null) return { fee: 0, symbol, estimated: true, unknown: true };
+  const gasPrice = BigInt(gasHex);
+  const gasLimit = BigInt(opts.token ? GAS_LIMIT_TOKEN : GAS_LIMIT_NATIVE);
+  return {
+    fee: Number(gasPrice * gasLimit) / 1e18,
+    symbol,
+    // Strings so the caller can hand them straight back to ethers without
+    // BigInt/BigNumber interop trouble.
+    gasPrice: gasPrice.toString(),
+    gasLimit: gasLimit.toString(),
+    estimated: false,
+  };
 }
 
 // ── Bridge (Relay) — move native funds from an EVM chain onto Robinhood Chain ──
@@ -456,20 +502,86 @@ export function tokenLogoUrl(chain: string, contract: string): string | null {
 }
 
 // ── Transaction history ──
+// Direction relative to the wallet: false = sent, true = received, null =
+// neither side is us (contract interaction we only touched internally). A
+// self-send has us on both sides and reads as outgoing, which is what the user
+// did.
+function _txDirection(from: string, to: string, lower: string) {
+  if (from === lower) return false;
+  if (to === lower) return true;
+  return null;
+}
+// Blockscout reports success as status 'ok' / result 'success'. The old mapper
+// hardcoded err:false, so reverted transactions rendered as if they had landed.
+function _txFailed(it: any) {
+  if (it.status) return String(it.status).toLowerCase() !== 'ok';
+  if (it.result) return !/^success$/i.test(String(it.result));
+  return false;
+}
+function _mapNativeTx(it: any, lower: string, cfg: any) {
+  const from = (it.from?.hash || '').toLowerCase();
+  const to = (it.to?.hash || '').toLowerCase();
+  const incoming = _txDirection(from, to, lower);
+  return {
+    hash: it.hash,
+    incoming,
+    value: Number(it.value || 0) / 1e18,
+    symbol: cfg.symbol,
+    ts: it.timestamp ? Date.parse(it.timestamp) : 0,
+    counterparty: incoming ? it.from?.hash : it.to?.hash,
+    err: _txFailed(it),
+    tokenLeg: false,
+  };
+}
+// A token transfer's *native* transaction carries value 0 and the token
+// contract as `to`, so on its own it renders as "0.0000 ETH" to a stranger.
+// The token leg carries the real symbol and amount.
+function _mapTokenTransfer(it: any, lower: string) {
+  const from = (it.from?.hash || '').toLowerCase();
+  const to = (it.to?.hash || '').toLowerCase();
+  const incoming = _txDirection(from, to, lower);
+  const dec = Number(it.total?.decimals ?? it.token?.decimals ?? 18) || 0;
+  const raw = it.total?.value;
+  return {
+    hash: it.transaction_hash,
+    incoming,
+    value: raw != null ? Number(raw) / Math.pow(10, dec) : null,
+    symbol: it.token?.symbol || 'Token',
+    ts: it.timestamp ? Date.parse(it.timestamp) : 0,
+    counterparty: incoming ? it.from?.hash : it.to?.hash,
+    err: false,
+    tokenLeg: true,
+  };
+}
 export async function getEvmTxs(chain: string, address: string) {
   const cfg = chainMeta(chain);
   if (!cfg?.blockscout) return null;
-  try {
-    const res = await fetch(`${cfg.blockscout}/api/v2/addresses/${address}/transactions?filter=`, { headers: { accept: 'application/json' } });
-    if (!res.ok) return [];
-    const data = await res.json();
-    const lower = address.toLowerCase();
-    return (data.items || []).slice(0, 12).map((it: any) => {
-      const from = (it.from?.hash || '').toLowerCase();
-      const incoming = from !== lower;
-      return { hash: it.hash, incoming, value: Number(it.value || 0) / 1e18, symbol: cfg.symbol, ts: it.timestamp ? Date.parse(it.timestamp) : 0, counterparty: incoming ? it.from?.hash : it.to?.hash, err: false };
-    });
-  } catch { return []; }
+  const lower = address.toLowerCase();
+  // `filter` is validated as an enum (`to` | `from`) — sending it empty makes
+  // Blockscout answer 422, which this function turned into an empty list. That
+  // silently emptied the Activity feed on every EVM chain, so the param is
+  // omitted entirely (omitted = both directions, which is what we want).
+  const page = async (path: string) => {
+    try {
+      const res = await fetch(`${cfg.blockscout}/api/v2/addresses/${address}/${path}`, { headers: { accept: 'application/json' } });
+      if (!res.ok) return [];
+      return (await res.json()).items || [];
+    } catch { return []; }
+  };
+  const [native, tokens] = await Promise.all([page('transactions'), page('token-transfers?type=ERC-20')]);
+  const rows = [
+    ...native.slice(0, 25).map((it: any) => _mapNativeTx(it, lower, cfg)),
+    ...tokens.slice(0, 25).map((it: any) => _mapTokenTransfer(it, lower)),
+  ];
+  // One hash can appear on both feeds (a token send is also a native tx).
+  // Prefer the token leg — it names the asset the user actually moved.
+  const byHash = new Map<string, any>();
+  for (const r of rows) {
+    if (!r.hash) continue;
+    const prev = byHash.get(r.hash);
+    if (!prev || (!prev.tokenLeg && r.tokenLeg)) byHash.set(r.hash, r);
+  }
+  return [...byHash.values()].sort((a, b) => b.ts - a.ts).slice(0, 25);
 }
 export async function getSolTxs(address: string) {
   const result = await _raceRpc(SOL_RPCS, 'getSignaturesForAddress', [address, { limit: 12 }], { valid: (r: any) => Array.isArray(r) });
