@@ -17,6 +17,18 @@ web/out/
 web/.next/
 **/*.tsbuildinfo
 
+# Credentials — never commit these. A service account key bypasses every
+# Firestore rule and works from anywhere, so it is the one file that turns a
+# repo leak into full project takeover. The discord-gateway bot reads one at
+# runtime; keep it local (and out of the functions deploy — see firebase.json).
+*-firebase-adminsdk-*.json
+serviceAccount.json
+*.pem
+*.key
+.env
+.env.*
+!.env.example
+
 # OS
 .DS_Store
 Thumbs.db
