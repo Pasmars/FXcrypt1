@@ -613,11 +613,35 @@ exports.getPairTransfers = fn.https.onCall(async (data, context) => {
 })
 
 // ── Telegram Webhook (HTTPS) ───────────────────────────────────────────────
+// PUBLIC URL — so it MUST authenticate. Telegram echoes the `secret_token`
+// registered with setWebhook back in this header on every delivery; nobody else
+// knows it. Without this check anyone could POST a forged update naming any
+// linked user's chat id and drive their custodial wallet (the gem_buy callback
+// decrypts their key and buys an arbitrary token for an arbitrary amount).
+//
+// The expected value is DERIVED from BOT_SECRET, so no new secret has to be
+// provisioned — but the webhook must be (re-)registered with it:
+//   node functions/scripts/set-telegram-webhook.js
+const webhookSecret = () =>
+  crypto.createHmac('sha256', MASTER_SECRET()).update('telegram-webhook-v1').digest('hex')
+
 exports.telegramWebhook = fn.https.onRequest(async (req, res) => {
   if (req.method !== 'POST') { res.status(405).send('Method Not Allowed'); return }
 
   let token
   try { token = TG_TOKEN() } catch (e) { res.status(500).send(e.message); return }
+
+  // Constant-time compare — a length mismatch is rejected outright because
+  // timingSafeEqual throws on unequal buffer lengths.
+  let expected
+  try { expected = webhookSecret() } catch (e) { res.status(500).send(e.message); return }
+  const got = String(req.get('x-telegram-bot-api-secret-token') || '')
+  const a = Buffer.from(got), b = Buffer.from(expected)
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    console.warn('telegramWebhook: rejected update with bad/absent secret token')
+    res.status(401).send('unauthorized')
+    return
+  }
 
   const bot = tg.createBot(token)
   try {
@@ -2990,7 +3014,10 @@ exports.createCryptoInvoice = plainFn.https.onCall(async (data, context) => {
   catch (e) { throw new functions.https.HttpsError('invalid-argument', e.message) }
   const invoiceId = 'inv_' + crypto2.randomBytes(8).toString('hex')
   const createdAt = Date.now()
-  const invoice = { invoiceId, provider: 'crypto', plan, chain, asset, address, amountUsd: calc.amountUsd, amountToken: calc.amountToken, tokenContract: calc.tokenContract || null, symbol: calc.symbol, decimals: calc.decimals, status: 'pending', createdAt, expiresAt: createdAt + 30 * 60000 }
+  // amountStep is persisted with the invoice: it defines the window the payment
+  // matcher accepts, so it must stay pinned to what this invoice was quoted at
+  // even if the step constants are retuned later.
+  const invoice = { invoiceId, provider: 'crypto', plan, chain, asset, address, amountUsd: calc.amountUsd, amountToken: calc.amountToken, amountStep: calc.amountStep, tokenContract: calc.tokenContract || null, symbol: calc.symbol, decimals: calc.decimals, status: 'pending', createdAt, expiresAt: createdAt + 30 * 60000 }
   await db.doc(`users/${uid}/payments/${invoiceId}`).set(invoice)
   return invoice
 })
@@ -3006,11 +3033,25 @@ exports.verifyCryptoPayment = cryptoPayFn.https.onCall(async (data, context) => 
   if (!snap.exists) throw new functions.https.HttpsError('not-found', 'Invoice not found')
   const inv = snap.data()
   if (inv.status === 'paid') return { status: 'paid', plan: inv.plan }
-  const ctx = { moralisKey: SECRET_MORALIS.value() || null, heliusKey: SECRET_HELIUS.value() || null }
+  // A settled transfer is recorded in the global `cryptoPaymentTxs` ledger so no
+  // second invoice — least of all one belonging to another account — can ever be
+  // credited with the same on-chain payment.
+  const txDoc = (hash) => db.doc(`cryptoPaymentTxs/${inv.chain}_${String(hash).toLowerCase()}`)
+  const isSpent = async (hash) => { try { return (await txDoc(hash).get()).exists } catch (_) { return true } }
+
+  const ctx = { moralisKey: SECRET_MORALIS.value() || null, heliusKey: SECRET_HELIUS.value() || null, isSpent }
   let result
   try { result = await payments.verifyPayment(ctx, inv) }
   catch (e) { throw new functions.https.HttpsError('internal', e.message || 'Verification failed') }
   if (result.paid) {
+    // Claim the hash first, and atomically — two concurrent verifies of the same
+    // transfer must not both reach grantPlan. `create` fails if it already exists.
+    try {
+      await txDoc(result.txHash).create({ uid, invoiceId, plan: inv.plan, chain: inv.chain, amountToken: inv.amountToken, claimedAt: Date.now() })
+    } catch (_) {
+      // Lost the race, or someone else already banked this transfer.
+      return { status: 'pending' }
+    }
     await payments.grantPlan(db, uid, inv.plan, { durationDays: 30, subscription: { provider: 'crypto', status: 'active', type: 'onetime' } })
     await ref.set({ status: 'paid', txHash: result.txHash || null, paidAt: Date.now() }, { merge: true })
     await payments.processReferralReward(db, uid, await payments.billingConfig(db))

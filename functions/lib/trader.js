@@ -409,6 +409,39 @@ async function sellTokenSOL(privateKeyBase58, tokenMint, percentToSell, slippage
 // ── Solana: sign a pre-built Jupiter transaction and submit ───────────────
 // The browser fetches the Jupiter quote + swap transaction; this function
 // only deserializes, signs with the user's keypair, and submits to Solana RPC.
+// Programs a Jupiter swap legitimately touches. Anything else in the
+// transaction means it is not the swap the caller claims it is.
+const JUPITER_PROGRAMS = new Set([
+  'JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4', // Jupiter aggregator v6
+  'JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB', // v4 (older quotes)
+])
+const SWAP_ALLOWED_PROGRAMS = new Set([
+  ...JUPITER_PROGRAMS,
+  '11111111111111111111111111111111',             // System (wSOL wrap, rent)
+  'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',  // SPL Token
+  'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb',  // Token-2022
+  'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL', // Associated Token Account
+  'ComputeBudget111111111111111111111111111111',  // priority fee / CU limit
+])
+
+function assertJupiterSwap(tx) {
+  const keys = tx.message.staticAccountKeys || []
+  const instructions = tx.message.compiledInstructions
+    || (tx.message.instructions || []).map((i) => ({ programIdIndex: i.programIdIndex }))
+  if (!instructions.length) throw new Error('Refusing to sign: transaction has no instructions')
+
+  let sawJupiter = false
+  for (const ix of instructions) {
+    const programId = keys[ix.programIdIndex]
+    const id = programId ? programId.toBase58() : ''
+    if (!SWAP_ALLOWED_PROGRAMS.has(id))
+      throw new Error(`Refusing to sign: transaction invokes an unexpected program (${id || 'unknown'})`)
+    if (JUPITER_PROGRAMS.has(id)) sawJupiter = true
+  }
+  if (!sawJupiter)
+    throw new Error('Refusing to sign: transaction is not a Jupiter swap')
+}
+
 async function signAndSubmitSolTx(privateKeyBase58, serializedTxBase64, rpcUrl, heliusApiKey) {
   validateSolKey(privateKeyBase58)
 
@@ -432,6 +465,16 @@ async function signAndSubmitSolTx(privateKeyBase58, serializedTxBase64, rpcUrl, 
   } catch (e) {
     throw new Error('Invalid transaction — could not deserialize: ' + e.message)
   }
+
+  // This function is a signing oracle over a custodial key: whatever the client
+  // sends gets signed with the user's private key. Signing it blindly means any
+  // hijacked session (or XSS) could hand over a plain "drain everything to me"
+  // transfer. So only a real Jupiter swap is accepted — every program the
+  // transaction invokes must be on the allowlist, and Jupiter must be one of
+  // them. Program ids always live in the static account keys (they can never be
+  // supplied through an address lookup table), so this cannot be bypassed by
+  // hiding the program behind an ALT.
+  assertJupiterSwap(tx)
 
   tx.sign([keypair])
 

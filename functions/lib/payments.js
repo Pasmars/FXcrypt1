@@ -3,6 +3,7 @@
 // Stripe itself is handled in index.js (needs the secret at call time); this
 // module holds the shared, provider-agnostic logic.
 const axios = require('axios')
+const crypto = require('crypto')
 
 // Hardcoded admin allowlist fallback so the panel works before config/billing
 // exists. Extendable via the config/billing doc's `adminEmails`.
@@ -90,9 +91,18 @@ async function processReferralReward(db, uid, cfg) {
   } catch (e) { console.warn(`referral reward failed for ${uid}:`, e.message); return null }
 }
 
+// The allowlist is matched on the token's email — which is only trustworthy if
+// the provider actually proved ownership of it. Email/password signup lets
+// anyone self-assert ANY address, so without the email_verified check a stranger
+// could register an allowlisted address and walk into the admin panel (which can
+// rewrite the crypto receiving addresses, the fee wallets, and the allowlist
+// itself). Google sign-in sets email_verified; password signup does not until
+// the user completes verification.
 function isAdminEmail(context, cfg) {
-  const email = (context.auth && context.auth.token && context.auth.token.email || '').toLowerCase()
-  return !!email && cfg.adminEmails.includes(email)
+  const token = (context.auth && context.auth.token) || {}
+  const email = (token.email || '').toLowerCase()
+  if (!email || token.email_verified !== true) return false
+  return cfg.adminEmails.includes(email)
 }
 
 // Server-only entitlement write. plan: 'free'|'pro'|'elite'.
@@ -110,12 +120,37 @@ async function grantPlan(db, uid, plan, opts = {}) {
 // ── Crypto amount calc ──
 function isStable(asset) { return asset === 'usdt' || asset === 'usdc' }
 
+// Every invoice gets its own slightly-unique amount. Two users buying the same
+// plan on the same chain must NOT ask for the identical figure — otherwise one
+// user's payment satisfies the other's invoice and a single transfer can be
+// claimed by many accounts.
+//
+// `step` is the dust granularity, and it is also what makes the amounts
+// *distinguishable*: the matcher accepts a payment only within step/4 of the
+// invoiced figure, so two invoices (which always differ by at least one whole
+// step) can never fall inside each other's window. It is chosen per asset —
+// fine enough to cost the payer almost nothing, coarse enough to survive the
+// token's decimal precision.
+// DUST_SLOTS is the size of the space, and it has to be big: with only a few
+// hundred slots, a few hundred live invoices collide by the birthday bound and
+// the uniqueness buys nothing. 100k slots keeps expected collisions negligible
+// at realistic concurrency while the dust stays trivial — ≤ $0.10 on a
+// stablecoin, ≤ 0.0001 ETH/BNB/SOL on a native transfer.
+const DUST_SLOTS  = 100000
+const STABLE_STEP = 1e-6 // USDT/USDC have ≥6 decimals everywhere we accept them
+const NATIVE_STEP = 1e-9 // SOL has 9 decimals; ETH/BNB have 18
+
+function uniquify(amount, step) {
+  const dp = Math.round(-Math.log10(step))
+  return +(amount + crypto.randomInt(1, DUST_SLOTS + 1) * step).toFixed(dp)
+}
+
 async function computeCryptoAmount(plan, chain, asset, prices) {
   const usd = prices[plan] || DEFAULT_PRICES[plan] || 29
   if (isStable(asset)) {
     const meta = (STABLECOINS[chain] || {})[asset]
     if (!meta) throw new Error(`${asset.toUpperCase()} not supported on ${chain.toUpperCase()}`)
-    return { amountUsd: usd, amountToken: usd, tokenContract: meta.addr, decimals: meta.dec, symbol: asset.toUpperCase() }
+    return { amountUsd: usd, amountToken: uniquify(usd, STABLE_STEP), amountStep: STABLE_STEP, tokenContract: meta.addr, decimals: meta.dec, symbol: asset.toUpperCase() }
   }
   // native: price via CoinGecko
   const id = NATIVE_CG[chain]
@@ -123,17 +158,31 @@ async function computeCryptoAmount(plan, chain, asset, prices) {
   try { const r = await axios.get(`https://api.coingecko.com/api/v3/simple/price?ids=${id}&vs_currencies=usd`, { timeout: 10000 }); px = r.data?.[id]?.usd || 0 } catch (e) {}
   if (!px) throw new Error('Could not fetch native price; try a stablecoin instead')
   const sym = chain === 'bsc' ? 'BNB' : chain === 'sol' ? 'SOL' : 'ETH'
-  return { amountUsd: usd, amountToken: +(usd / px).toFixed(6), tokenContract: null, decimals: chain === 'sol' ? 9 : 18, symbol: sym, nativePrice: px }
+  return { amountUsd: usd, amountToken: uniquify(+(usd / px).toFixed(6), NATIVE_STEP), amountStep: NATIVE_STEP, tokenContract: null, decimals: chain === 'sol' ? 9 : 18, symbol: sym, nativePrice: px }
 }
 
 // ── On-chain verification ──
 // Returns { paid: bool, txHash } — looks for an incoming transfer to `receiving`
-// of >= amountToken (1% tolerance) since `sinceMs`.
-async function verifyEvmPayment({ moralisKey, chain, receiving, asset, tokenContract, amountToken, sinceMs }) {
+// that matches THIS invoice's amount since `sinceMs`.
+//
+// Two rules keep one payment from settling more than one invoice:
+//   * the amount must land in a tight band around the invoice's unique figure
+//     (see uniquify) instead of the old open-ended ">= 99% of the price", which
+//     let any sufficiently large transfer satisfy every pending invoice; and
+//   * `isSpent` rejects a tx hash already credited to some other invoice.
+// Quarter of a dust step: wide enough to absorb float/decimal rounding, far
+// narrower than the gap between any two invoices' amounts.
+function amountMatches(val, want, step) {
+  const tol = (step || STABLE_STEP) / 4
+  return val >= want - tol && val <= want + tol
+}
+
+const notSpent = async () => false
+
+async function verifyEvmPayment({ moralisKey, chain, receiving, asset, tokenContract, amountToken, amountStep, sinceMs, isSpent = notSpent }) {
   if (!moralisKey) throw new Error('Moralis key not configured on the server')
   const hex = MORALIS_HEX[chain]
   if (!hex) throw new Error('Unsupported EVM chain')
-  const need = amountToken * 0.99
   const headers = { 'X-API-Key': moralisKey }
   if (isStable(asset)) {
     const meta = (STABLECOINS[chain] || {})[asset]
@@ -145,7 +194,7 @@ async function verifyEvmPayment({ moralisKey, chain, receiving, asset, tokenCont
       const ts = t.block_timestamp ? Date.parse(t.block_timestamp) : 0
       if (ts < sinceMs - 60000) continue
       const val = Number(t.value || 0) / Math.pow(10, meta.dec)
-      if (val >= need) return { paid: true, txHash: t.transaction_hash }
+      if (amountMatches(val, amountToken, amountStep) && !(await isSpent(t.transaction_hash))) return { paid: true, txHash: t.transaction_hash }
     }
     return { paid: false }
   }
@@ -157,15 +206,14 @@ async function verifyEvmPayment({ moralisKey, chain, receiving, asset, tokenCont
     const ts = t.block_timestamp ? Date.parse(t.block_timestamp) : 0
     if (ts < sinceMs - 60000) continue
     const val = Number(t.value || 0) / 1e18
-    if (val >= need) return { paid: true, txHash: t.hash }
+    if (amountMatches(val, amountToken, amountStep) && !(await isSpent(t.hash))) return { paid: true, txHash: t.hash }
   }
   return { paid: false }
 }
 
-async function verifySolPayment({ heliusKey, receiving, asset, amountToken, sinceMs }) {
+async function verifySolPayment({ heliusKey, receiving, asset, amountToken, amountStep, sinceMs, isSpent = notSpent }) {
   if (!heliusKey) throw new Error('Helius key not configured on the server')
   if (isStable(asset)) throw new Error('SOL stablecoin payments not supported yet — pay with SOL')
-  const need = amountToken * 0.99
   const url = `https://api.helius.xyz/v0/addresses/${receiving}/transactions?api-key=${heliusKey}&limit=100`
   const { data } = await axios.get(url, { timeout: 15000 })
   for (const tx of (data || [])) {
@@ -174,7 +222,7 @@ async function verifySolPayment({ heliusKey, receiving, asset, amountToken, sinc
     for (const nt of (tx.nativeTransfers || [])) {
       if (nt.toUserAccount !== receiving) continue
       const val = Number(nt.amount || 0) / 1e9
-      if (val >= need) return { paid: true, txHash: tx.signature }
+      if (amountMatches(val, amountToken, amountStep) && !(await isSpent(tx.signature))) return { paid: true, txHash: tx.signature }
     }
   }
   return { paid: false }
@@ -182,8 +230,12 @@ async function verifySolPayment({ heliusKey, receiving, asset, amountToken, sinc
 
 async function verifyPayment(ctx, invoice) {
   const { chain, asset, address, amountToken, tokenContract, createdAt } = invoice
-  if (chain === 'sol') return verifySolPayment({ heliusKey: ctx.heliusKey, receiving: address, asset, amountToken, sinceMs: createdAt })
-  return verifyEvmPayment({ moralisKey: ctx.moralisKey, chain, receiving: address, asset, tokenContract, amountToken, sinceMs: createdAt })
+  const isSpent = ctx.isSpent || notSpent
+  // Invoices issued before per-invoice amounts existed carry no step; fall back
+  // to the asset default so they still verify.
+  const amountStep = invoice.amountStep || (isStable(asset) ? STABLE_STEP : NATIVE_STEP)
+  if (chain === 'sol') return verifySolPayment({ heliusKey: ctx.heliusKey, receiving: address, asset, amountToken, amountStep, sinceMs: createdAt, isSpent })
+  return verifyEvmPayment({ moralisKey: ctx.moralisKey, chain, receiving: address, asset, tokenContract, amountToken, amountStep, sinceMs: createdAt, isSpent })
 }
 
 // Resolve the trading fee for a user on a chain, loading the billing config and
