@@ -115,7 +115,16 @@ const EXPLORER = {
   rhood: (a) => `https://robinhoodchain.blockscout.com/token/${a}`,
 };
 function shortAddr(a) { return a && a.length > 16 ? a.slice(0, 6) + '…' + a.slice(-4) : (a || ''); }
-function openUrl(u) { try { window.open(u, '_blank', 'noopener,noreferrer'); } catch (e) {} }
+// Some of these URLs come from market APIs rather than our own code, so the
+// scheme is checked before opening: window.open('javascript:…') executes in
+// this origin, where the wallet lives.
+function openUrl(u) {
+  try {
+    const p = new URL(String(u)).protocol;
+    if (p !== 'http:' && p !== 'https:') return;
+    window.open(u, '_blank', 'noopener,noreferrer');
+  } catch (e) {}
+}
 // Build the list of working research links for a token (contract-based or coin-based).
 function tokenLinks(t) {
   const a = t.address || t.tokenAddress;

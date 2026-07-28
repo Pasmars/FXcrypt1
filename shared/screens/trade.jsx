@@ -564,7 +564,14 @@ function gemToken(g) {
   };
 }
 function gemDexUrl(g) {
-  if (g.dexUrl) return g.dexUrl;
+  // g.dexUrl is echoed from the DexScreener pair payload, so it is third-party
+  // data on its way into window.open — only ever hand back an http(s) URL.
+  if (g.dexUrl) {
+    try {
+      const p = new URL(String(g.dexUrl)).protocol;
+      if (p === 'http:' || p === 'https:') return g.dexUrl;
+    } catch (_) {}
+  }
   if (g.address) return `https://dexscreener.com/${GEM_DS_SLUG[g.chain] || g.chain}/${g.address}`;
   return null;
 }

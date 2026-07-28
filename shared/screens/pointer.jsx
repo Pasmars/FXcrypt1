@@ -644,11 +644,23 @@ function SourceChips({ sources }) {
     if (!label) { try { label = new URL(s.url).hostname.replace(/^www\./, ''); } catch (_) { label = 'source'; } }
     return label.length > 24 ? label.slice(0, 22) + '…' : label;
   };
+  // These URLs originate in third-party feeds Pointer searched, and React does
+  // NOT sanitize href — a `javascript:` link would run script in this origin,
+  // where the wallet lives. The server filters them too; this is the second
+  // lock, so a bad URL can never reach the DOM even if the server changes.
+  const safeHref = (u) => {
+    try {
+      const p = new URL(String(u)).protocol;
+      return (p === 'http:' || p === 'https:') ? String(u) : null;
+    } catch (_) { return null; }
+  };
+  const safe = sources.map((s) => ({ ...s, url: safeHref(s.url) })).filter((s) => s.url);
+  if (!safe.length) return null;
   return (
     <div style={{ marginTop: 9 }}>
       <div style={{ fontSize: 10.5, fontWeight: 800, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 5 }}>Sources</div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-        {sources.map((s, i) => (
+        {safe.map((s, i) => (
           <a key={i} href={s.url} target="_blank" rel="noreferrer" title={s.title || s.url}
             onClick={(e) => e.stopPropagation()}
             style={{ display: 'inline-flex', alignItems: 'center', gap: 4, maxWidth: 170, background: 'var(--surface2)', color: 'var(--accent)', fontSize: 11, fontWeight: 700, padding: '4px 9px', borderRadius: 8, textDecoration: 'none', border: '1px solid var(--line)' }}>

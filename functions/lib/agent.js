@@ -865,12 +865,25 @@ async function runAgent({ prompt, history = [], ctx, provider = 'deepseek', apiK
   // Real reference links the agent actually consulted (web_search articles) —
   // surfaced to the client as clickable, shortened source chips. Deduped by URL.
   const sources = []
+  // Source links are parsed out of third-party feeds and end up in an <a href>
+  // in the app. An href is executable surface: a `javascript:` (or `data:`)
+  // link would run script in the signed-in origin, next to the wallet. Only
+  // real http(s) URLs are ever passed to the client.
+  const safeUrl = (raw) => {
+    let u
+    try { u = new URL(String(raw)) } catch (_) { return null }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null
+    return u.toString()
+  }
+
   const addSources = (results) => {
     for (const r of results || []) {
-      if (!r || !r.link || sources.some((s) => s.url === r.link)) continue
+      if (!r || !r.link) continue
+      const url = safeUrl(r.link)
+      if (!url || sources.some((s) => s.url === url)) continue
       let host = ''
-      try { host = new URL(r.link).hostname.replace(/^www\./, '') } catch (_) {}
-      sources.push({ label: r.source || host || 'source', title: r.title || '', url: r.link })
+      try { host = new URL(url).hostname.replace(/^www\./, '') } catch (_) {}
+      sources.push({ label: r.source || host || 'source', title: r.title || '', url })
       if (sources.length >= 6) break
     }
   }

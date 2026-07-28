@@ -1,6 +1,7 @@
 const { ethers } = require('ethers')
 const axios = require('axios')
 const https = require('https')
+const { safeRpcUrl } = require('./rpc-guard')
 
 // ── DEX addresses ──────────────────────────────────────────────────────────
 const PANCAKESWAP_ROUTER = '0x10ED43C718714eb63d5aA57B78B54704E256024E'
@@ -93,7 +94,10 @@ function chainConfig(chain) {
 
 async function getWorkingProvider(chain, preferredRpc) {
   const { chainId, rpcs } = chainConfig(chain)
-  const list = preferredRpc ? [preferredRpc, ...rpcs] : rpcs
+  // preferredRpc comes from user-writable botSettings — gate it before the
+  // server dials it, or a custom "RPC" becomes an SSRF target (see rpc-guard).
+  const custom = safeRpcUrl(preferredRpc)
+  const list = custom ? [custom, ...rpcs] : rpcs
   for (const rpc of list) {
     try {
       const provider = makeProvider(rpc, chainId)
@@ -106,7 +110,7 @@ async function getWorkingProvider(chain, preferredRpc) {
 
 function evmProvider(chain, rpcUrl) {
   const { chainId, rpcs } = chainConfig(chain)
-  return makeProvider(rpcUrl || rpcs[0], chainId)
+  return makeProvider(safeRpcUrl(rpcUrl) || rpcs[0], chainId)
 }
 
 
@@ -284,7 +288,7 @@ async function buyTokenSOL(privateKeyBase58, tokenMint, amountSOL, slippage, rpc
   const slip = Math.min(Math.max(slippage || 5, 0.1), 50)
 
   // Priority: user's custom RPC → Helius (backend key) → public mainnet (slow)
-  const solRpc = rpcUrl
+  const solRpc = safeRpcUrl(rpcUrl)
     || (heliusApiKey ? `https://mainnet.helius-rpc.com/?api-key=${heliusApiKey}` : null)
     || 'https://api.mainnet-beta.solana.com'
 
@@ -355,7 +359,7 @@ async function sellTokenSOL(privateKeyBase58, tokenMint, percentToSell, slippage
 
   const slip = Math.min(Math.max(slippage || 5, 0.1), 50)
 
-  const solRpc = rpcUrl
+  const solRpc = safeRpcUrl(rpcUrl)
     || (heliusApiKey ? `https://mainnet.helius-rpc.com/?api-key=${heliusApiKey}` : null)
     || 'https://api.mainnet-beta.solana.com'
   const connection  = new Connection(solRpc, 'confirmed')
@@ -451,7 +455,7 @@ async function signAndSubmitSolTx(privateKeyBase58, serializedTxBase64, rpcUrl, 
   const { Connection, Keypair, VersionedTransaction } = require('@solana/web3.js')
   const bs58 = require('bs58')
 
-  const solRpc = rpcUrl
+  const solRpc = safeRpcUrl(rpcUrl)
     || (heliusApiKey ? `https://mainnet.helius-rpc.com/?api-key=${heliusApiKey}` : null)
     || 'https://api.mainnet-beta.solana.com'
 
@@ -504,7 +508,8 @@ async function getEVMBalance(address, chain, rpcUrl) {
   // chain's public endpoints — applies to BSC/Base/ETH alike so one flaky
   // endpoint doesn't fail the whole balance lookup.
   const { rpcs: defaults } = chainConfig(chain)
-  const list = rpcUrl ? [rpcUrl, ...defaults] : defaults
+  const custom = safeRpcUrl(rpcUrl)
+  const list = custom ? [custom, ...defaults] : defaults
   // Race every endpoint — the first to respond wins; we only fail if ALL fail.
   // Sequential fallback could stall ~5s on each dead/geo-blocked node (e.g.
   // binance.org dataseeds time out for some ISPs), so racing is both faster and
@@ -519,7 +524,7 @@ async function getEVMBalance(address, chain, rpcUrl) {
 
 async function getSOLBalance(address, rpcUrl) {
   const { Connection, PublicKey } = require('@solana/web3.js')
-  const connection = new Connection(rpcUrl || 'https://api.mainnet-beta.solana.com', 'confirmed')
+  const connection = new Connection(safeRpcUrl(rpcUrl) || 'https://api.mainnet-beta.solana.com', 'confirmed')
   const lamports   = await withTimeout(connection.getBalance(new PublicKey(address)))
   return { native: (lamports / 1e9).toFixed(6) }
 }

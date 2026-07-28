@@ -1,5 +1,6 @@
 const { ethers } = require('ethers')
 const axios = require('axios')
+const { safeRpcUrl } = require('./rpc-guard')
 
 const HTTP_TIMEOUT = 10000
 
@@ -153,7 +154,7 @@ async function executeArbitrageBSC(privateKey, opp, amountBNB, settings) {
 
   const network  = ethers.Network.from(56)
   const provider = new ethers.JsonRpcProvider(
-    settings.bscRpc || 'https://bsc-dataseed.binance.org',
+    safeRpcUrl(settings.bscRpc) || 'https://bsc-dataseed.binance.org',
     network, { staticNetwork: network }
   )
   const wallet = new ethers.Wallet(privateKey, provider)
@@ -219,7 +220,7 @@ async function executeArbitrageSOL(privateKey, opp, amountSOL, settings) {
   const bs58 = require('bs58')
 
   const connection = new Connection(
-    settings.solRpc || 'https://api.mainnet-beta.solana.com', 'confirmed'
+    safeRpcUrl(settings.solRpc) || 'https://api.mainnet-beta.solana.com', 'confirmed'
   )
   const keypair    = Keypair.fromSecretKey(bs58.decode(privateKey))
   const SOL_MINT   = 'So11111111111111111111111111111111111111112'

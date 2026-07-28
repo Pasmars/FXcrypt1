@@ -25,6 +25,7 @@ const gemTracker     = require('./lib/gem-tracker')
 const notify         = require('./lib/notify')
 const copytrader     = require('./lib/copytrader')
 const mcpLib         = require('./lib/mcp')
+const ratelimit      = require('./lib/ratelimit')
 const crypto2        = require('crypto')
 
 const DISCORD_TOPIC = 'fxcrypt-discord-jobs'
@@ -119,6 +120,7 @@ function validatePercent(percent) {
 // ── Get Token Holders (backend API key — no per-user key needed) ──────────
 exports.getTokenHolders = fn.https.onCall(async (data, context) => {
   if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
+  await ratelimit.check(db, context.auth.uid, 'getTokenHolders')
 
   const { chain, contractAddress } = data
   validateChain(chain)
@@ -176,6 +178,7 @@ const TOKEN_PROGRAM_ID = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'
 
 exports.getWalletTokens = fn.https.onCall(async (data, context) => {
   if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
+  await ratelimit.check(db, context.auth.uid, 'getWalletTokens')
 
   const { chain, address } = data
   validateChain(chain)
@@ -455,6 +458,9 @@ exports.getHolderGraph = functions.region('europe-west1')
   .runWith({ secrets: ALL_SECRETS, timeoutSeconds: 120, memory: '512MB' })
   .https.onCall(async (data, context) => {
   if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
+  // The single most expensive endpoint in the app: 120s at 512MB, paid indexer
+  // quota on every call. Capped hardest.
+  await ratelimit.check(db, context.auth.uid, 'getHolderGraph')
   const { chain, contractAddress } = data
   validateChain(chain)
   if (chain === 'ton')
@@ -484,6 +490,7 @@ exports.getHolderGraph = functions.region('europe-west1')
 // locally — no keys or funds ever touch the server.
 exports.bridgeQuote = fn.https.onCall(async (data, context) => {
   if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
+  await ratelimit.check(db, context.auth.uid, 'bridgeQuote')
   const axios = require('axios')
   const BRIDGE_CHAINS = { eth: 1, base: 8453, bsc: 56, matic: 137, rhood: 4663 }
   const origin = BRIDGE_CHAINS[data && data.fromChain]
@@ -516,6 +523,7 @@ exports.bridgeQuote = fn.https.onCall(async (data, context) => {
 // client signs locally and only forwards the resulting raw transaction.
 exports.rpcProxy = fn.https.onCall(async (data, context) => {
   if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
+  await ratelimit.check(db, context.auth.uid, 'rpcProxy')
   const axios = require('axios')
   // Every EVM chain the wallet supports — not only Robinhood. Some ISPs block
   // browser TLS to ALL public RPC hosts (drpc/cloudflare/publicnode alike), so
@@ -553,6 +561,7 @@ exports.rpcProxy = fn.https.onCall(async (data, context) => {
 // ── Deep IN/OUT transfer history between two wallets ────────────────────────
 exports.getPairTransfers = fn.https.onCall(async (data, context) => {
   if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
+  await ratelimit.check(db, context.auth.uid, 'getPairTransfers')
   const { chain, addrA, addrB } = data
   validateChain(chain)
   validateAddress(chain, addrA)
@@ -875,6 +884,7 @@ exports.removeWallet = fn.https.onCall(async (data, context) => {
 // ── Get Wallet Balances ────────────────────────────────────────────────────
 exports.getBalances = fn.https.onCall(async (data, context) => {
   if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
+  await ratelimit.check(db, context.auth.uid, 'getBalances')
 
   const uid      = context.auth.uid
   const userSnap = await db.doc(`users/${uid}`).get()
@@ -940,6 +950,7 @@ exports.getBotInfo = fn.https.onCall(async (data, context) => {
 // ── Scan Arbitrage Opportunities (callable) ───────────────────────────────
 exports.scanArbitrage = fn.https.onCall(async (data, context) => {
   if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
+  await ratelimit.check(db, context.auth.uid, 'scanArbitrage')
 
   const uid      = context.auth.uid
   const chains   = Array.isArray(data?.chains) ? data.chains.filter(c => VALID_CHAINS.has(c)) : ['bsc', 'sol']
@@ -964,6 +975,11 @@ exports.executeArbitrage = fn.https.onCall(async (data, context) => {
   validateChain(chain)
   if (!opportunity || !opportunity.tokenAddress)
     throw new functions.https.HttpsError('invalid-argument', 'opportunity.tokenAddress is required')
+  // The whole `opportunity` object is client-supplied and its tokenAddress is
+  // used to build a contract the server then signs `approve` against — so it
+  // gets the same address validation every other trade path applies, rather
+  // than being trusted because it came back from scanArbitrage.
+  validateAddress(chain, opportunity.tokenAddress)
 
   const userSnap = await db.doc(`users/${uid}`).get()
   if (!userSnap.exists) throw new functions.https.HttpsError('not-found', 'User not found')
@@ -1978,6 +1994,7 @@ exports.removeCexApiKey = fn.https.onCall(async (data, context) => {
 // ── Get CEX Spot Balances ─────────────────────────────────────────────────
 exports.getCexBalances = fn.https.onCall(async (data, context) => {
   if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
+  await ratelimit.check(db, context.auth.uid, 'getCexBalances')
 
   const uid      = context.auth.uid
   const userSnap = await db.doc(`users/${uid}`).get()
@@ -3377,8 +3394,20 @@ exports.adminSetConfig = adminFn.https.onCall(async (data, context) => {
     frontendUrl: String(c.frontendUrl || 'https://fxcrypt-app.web.app').trim(),
     // AI model for the in-app Pointer — admin-controlled (users can't switch).
     aiProvider: c.aiProvider === 'openai' ? 'openai' : 'deepseek',
-    adminEmails: Array.isArray(c.adminEmails) ? c.adminEmails.map((e) => String(e).toLowerCase().trim()).filter(Boolean) : [],
     updatedBy: context.auth.token.email, updatedAt: Date.now(),
+  }
+  // Only touch the admin allowlist when the caller actually sent one. The old
+  // `: []` fallback meant any panel save that omitted the field silently wiped
+  // every configured admin, leaving only the hardcoded fallback — a lockout
+  // waiting to happen, and a change to who holds admin that nobody asked for.
+  if (Array.isArray(c.adminEmails)) {
+    const emails = c.adminEmails.map((e) => String(e).toLowerCase().trim()).filter(Boolean)
+    // Refuse to hand over the last key: the caller must remain an admin, so a
+    // bad edit can't lock every real admin out of the panel.
+    const self = String(context.auth.token.email || '').toLowerCase()
+    if (!emails.includes(self))
+      throw new functions.https.HttpsError('invalid-argument', 'You cannot remove your own account from the admin list.')
+    clean.adminEmails = emails
   }
   // Usage metering + controls (optional blocks; only written when provided).
   const qInt = (v, d) => { const n = parseInt(v); return Number.isFinite(n) && n >= 0 ? n : d }
