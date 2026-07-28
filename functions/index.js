@@ -59,7 +59,20 @@ const CRYPTO_PAY_SECRETS = [SECRET_MORALIS, SECRET_HELIUS]
 
 
 // Pre-bound function builder — europe-west1 avoids Binance geo-block (HTTP 451) on GCP us-central1
-const fn = functions.region('europe-west1').runWith({ secrets: ALL_SECRETS })
+// ── App Check enforcement switch ────────────────────────────────────────────
+// One place to flip callable enforcement, because flipping it is dangerous: the
+// instant it is on, every caller without a valid attestation token is rejected —
+// including users still running a cached bundle from before App Check shipped,
+// and the admin panel if its key is missing. Turning this on before
+// adminStats.appCheck.pct reads 100 over real traffic is a self-inflicted outage.
+//
+// Set APPCHECK_ENFORCE=true in the functions environment to enable, so the
+// switch can be thrown (and reverted) by redeploying rather than editing code.
+// scripts/enforce-appcheck.js checks adoption before doing it for you.
+const ENFORCE_APP_CHECK = process.env.APPCHECK_ENFORCE === 'true'
+const appCheckOpt = ENFORCE_APP_CHECK ? { enforceAppCheck: true } : {}
+
+const fn = functions.region('europe-west1').runWith({ secrets: ALL_SECRETS, ...appCheckOpt })
 const discordFn = functions.region('europe-west1').runWith({ secrets: DISCORD_SECRETS, timeoutSeconds: 120 })
 
 // Fail fast if secrets not configured — prevents silently using weak defaults
@@ -1148,7 +1161,7 @@ exports.scanGems = functions.region('europe-west1').runWith({ secrets: ALL_SECRE
 // A 4-chain safety-checked scan per user can take well over the platform's 60s
 // default, so this scheduler gets its own extended timeout + memory — otherwise
 // the run is killed mid-scan and no alerts go out.
-const gemScanFn = functions.region('europe-west1').runWith({ secrets: ALL_SECRETS, timeoutSeconds: 300, memory: '512MB' })
+const gemScanFn = functions.region('europe-west1').runWith({ secrets: ALL_SECRETS, timeoutSeconds: 300, memory: '512MB', ...appCheckOpt })
 exports.processGemScanner = gemScanFn.pubsub
   .schedule('every 5 minutes')
   .onRun(async () => {
@@ -1570,7 +1583,7 @@ exports.processCopyTrading = gemScanFn.pubsub
   })
 
 // Feed + leaderboard for the Copy Trading screen (copyWallets is server-only).
-const copyFn = functions.region('europe-west1').runWith({ timeoutSeconds: 60 })
+const copyFn = functions.region('europe-west1').runWith({ timeoutSeconds: 60, ...appCheckOpt })
 exports.getCopyFeed = copyFn.https.onCall(async (data, context) => {
   if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
   return { items: await copytrader.feed(db, context.auth.uid) }
@@ -2788,10 +2801,10 @@ exports.chatPointer = functions
 // ═══════════════════════════════════════════════════════════════════════════
 //  PREMIUM PAYMENTS (Stripe + on-chain crypto) and ADMIN CONTROL PANEL
 // ═══════════════════════════════════════════════════════════════════════════
-const billingFn   = functions.region('europe-west1').runWith({ secrets: BILLING_SECRETS, timeoutSeconds: 60 })
-const cryptoPayFn = functions.region('europe-west1').runWith({ secrets: CRYPTO_PAY_SECRETS, timeoutSeconds: 60 })
-const plainFn     = functions.region('europe-west1').runWith({ timeoutSeconds: 60 })
-const adminFn     = functions.region('europe-west1').runWith({ timeoutSeconds: 60, memory: '256MB' })
+const billingFn   = functions.region('europe-west1').runWith({ secrets: BILLING_SECRETS, timeoutSeconds: 60, ...appCheckOpt })
+const cryptoPayFn = functions.region('europe-west1').runWith({ secrets: CRYPTO_PAY_SECRETS, timeoutSeconds: 60, ...appCheckOpt })
+const plainFn     = functions.region('europe-west1').runWith({ timeoutSeconds: 60, ...appCheckOpt })
+const adminFn     = functions.region('europe-west1').runWith({ timeoutSeconds: 60, memory: '256MB', ...appCheckOpt })
 
 // ── Stripe Checkout (subscription OR one-time, caller chooses) ──
 exports.createStripeCheckout = billingFn.https.onCall(async (data, context) => {
