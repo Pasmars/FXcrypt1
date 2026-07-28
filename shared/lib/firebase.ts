@@ -5,7 +5,7 @@ import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 import { getFunctions } from 'firebase/functions';
-import { initializeAppCheck, ReCaptchaV3Provider } from 'firebase/app-check';
+import { initializeAppCheck, ReCaptchaEnterpriseProvider } from 'firebase/app-check';
 
 const firebaseConfig = {
   apiKey: 'AIzaSyCpdVnFtB1dnlZmvfJ9srIBvgFl1ZqNLmQ',
@@ -23,11 +23,13 @@ const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
 // ID token, and is what lets the backend refuse traffic from anything else.
 //
 // The reCAPTCHA site key is public by design (it ships in the page, like the
-// apiKey above), so it lives here rather than in a secret. Paste the key from
-// Firebase console → App Check → Apps → Web → reCAPTCHA v3 to switch it on.
+// apiKey above), so it lives here rather than in a secret. This is a reCAPTCHA
+// ENTERPRISE score-based key, registered against this project's App Check
+// recaptchaEnterpriseConfig — it must stay in sync with that registration and
+// with admin/index.html, which uses the same key.
 // While it is empty, App Check simply does not initialize — nothing breaks, and
 // the backend stays in monitor-only mode.
-const APP_CHECK_SITE_KEY = '';
+const APP_CHECK_SITE_KEY = '6Lf2IGotAAAAADM5HJH1HSkGOcNZZu9aSazur6iK';
 
 // Local development can't solve reCAPTCHA against a localhost origin. Setting
 // this makes the SDK print a debug token to the console; register that token
@@ -40,7 +42,7 @@ if (typeof window !== 'undefined' && /^(localhost|127\.0\.0\.1)$/.test(window.lo
 if (APP_CHECK_SITE_KEY && typeof window !== 'undefined') {
   try {
     initializeAppCheck(app, {
-      provider: new ReCaptchaV3Provider(APP_CHECK_SITE_KEY),
+      provider: new ReCaptchaEnterpriseProvider(APP_CHECK_SITE_KEY),
       // Keeps the token fresh so long sessions don't start failing mid-use.
       isTokenAutoRefreshEnabled: true,
     });

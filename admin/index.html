@@ -71,19 +71,19 @@ firebase.initializeApp(firebaseConfig);
 // fxcrypt-admin.web.app alongside the other hosting domains, or attestation
 // fails here while working everywhere else.
 //
-// Paste the same key used in shared/lib/firebase.ts below. Keep the two in sync:
+// Same reCAPTCHA ENTERPRISE key as shared/lib/firebase.ts. Keep the two in sync:
 // once enforcement is on, an unattested admin panel is locked out of every
 // admin* callable — and this is the surface that edits receiving addresses, fee
 // wallets and the admin allowlist. While the key is empty App Check does not
 // initialize and nothing changes.
-const APP_CHECK_SITE_KEY = '';
+const APP_CHECK_SITE_KEY = '6Lf2IGotAAAAADM5HJH1HSkGOcNZZu9aSazur6iK';
 if (APP_CHECK_SITE_KEY) {
   try {
     // Dev machines can't solve reCAPTCHA against localhost — the debug token is
     // printed to the console; allowlist it under App Check -> Manage debug tokens.
     if (/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) self.FIREBASE_APPCHECK_DEBUG_TOKEN = true;
     firebase.appCheck().activate(
-      new firebase.appCheck.ReCaptchaV3Provider(APP_CHECK_SITE_KEY),
+      new firebase.appCheck.ReCaptchaEnterpriseProvider(APP_CHECK_SITE_KEY),
       true // auto-refresh so a long admin session doesn't start failing mid-use
     );
   } catch (e) {

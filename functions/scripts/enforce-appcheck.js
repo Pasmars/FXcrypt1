@@ -82,6 +82,24 @@ async function currentModes(token) {
   return map
 }
 
+// Callable enforcement is not a service-level setting — it is the
+// enforceAppCheck runtime option, driven by APPCHECK_ENFORCE on the deployed
+// function. Sample one representative callable to report the live truth.
+async function callableEnforcement(token) {
+  try {
+    const r = await fetch(
+      `https://cloudfunctions.googleapis.com/v1/projects/${PROJECT}/locations/europe-west1/functions/getBalances`,
+      { headers: { Authorization: 'Bearer ' + token } }
+    )
+    const j = await r.json()
+    if (j.error) return `unknown (${j.error.code})`
+    const v = (j.environmentVariables || {}).APPCHECK_ENFORCE
+    return v === 'true'
+      ? 'ENFORCED (APPCHECK_ENFORCE=true on deployed fns)'
+      : 'UNENFORCED (set APPCHECK_ENFORCE=true in functions/.env and redeploy)'
+  } catch (e) { return 'unknown (' + e.message.slice(0, 40) + ')' }
+}
+
 async function setMode(token, service, mode) {
   const url = `https://firebaseappcheck.googleapis.com/v1/projects/${PROJECT}/services/${service}?updateMask=enforcementMode`
   const r = await fetch(url, {
@@ -132,7 +150,10 @@ async function main() {
   const modes = await currentModes(token)
   console.log('\nCurrent enforcement:')
   for (const s of SERVICES) console.log(`  ${s.padEnd(34)} ${modes[s] || 'UNENFORCED'}`)
-  console.log(`  ${'cloud functions (callables)'.padEnd(34)} ${process.env.APPCHECK_ENFORCE === 'true' ? 'ENFORCED via APPCHECK_ENFORCE' : 'UNENFORCED (set APPCHECK_ENFORCE=true and redeploy)'}`)
+  // Read the DEPLOYED function's env, not this shell's. Reporting the local
+  // value was actively misleading: it says UNENFORCED on a machine that simply
+  // doesn't export the flag, while production is enforcing (or the reverse).
+  console.log(`  ${'cloud functions (callables)'.padEnd(34)} ${await callableEnforcement(token)}`)
 
   let ad = null
   try {
