@@ -11,6 +11,21 @@ import { fns } from './firebase.js';
 const getHolderGraphFn  = httpsCallable(fns, 'getHolderGraph');
 const getPairTransfersFn = httpsCallable(fns, 'getPairTransfers');
 
+// Everything this module renders comes from a chain indexer, so it is authored
+// by whoever deployed the token — a contract can call itself
+// `<img src=x onerror=...>` and holder labels are no safer. These panels are
+// built with innerHTML, and the app's CSP allows inline script, so any untrusted
+// value MUST be escaped before it is interpolated: an XSS here runs beside a
+// signed-in session that can move funds.
+function esc(v) {
+  return String(v ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 const CLUSTER_COLORS = [
   '#00c853', '#F0B90B', '#627EEA', '#9945FF', '#0098EA', '#ff6b6b',
   '#26a69a', '#ec407a', '#42a5f5', '#ffa726', '#ab47bc', '#66bb6a'
@@ -316,10 +331,10 @@ function selectNode(n) {
       <button class="bm-inspect-close" id="bmInspectClose">✕</button>
     </div>
     <div class="bm-addr-row">
-      <a href="${(EXPLORER[chain] || '') + n.address}" target="_blank" rel="noopener" title="${n.address}">${short(n.address)} ↗</a>
-      <button class="bm-copy" data-copy="${n.address}">Copy</button>
+      <a href="${esc((EXPLORER[chain] || '') + n.address)}" target="_blank" rel="noopener" title="${esc(n.address)}">${esc(short(n.address))} ↗</a>
+      <button class="bm-copy" data-copy="${esc(n.address)}">Copy</button>
     </div>
-    ${n.label ? `<div class="bm-label-chip">${n.label}</div>` : ''}
+    ${n.label ? `<div class="bm-label-chip">${esc(n.label)}</div>` : ''}
     <div class="bm-stat-grid">
       <div class="bm-stat"><span>% Supply</span><b>${n.pct != null ? n.pct.toFixed(3) + '%' : '—'}</b></div>
       <div class="bm-stat"><span>Tokens</span><b>${fmtNum(n.balance)}</b></div>
@@ -355,12 +370,12 @@ async function loadPairHistory(a, b) {
       ${list.length ? `<div class="bm-pair-list">${list.slice(0, 40).map(t => `
         <div class="bm-pair-row ${t.direction === 'IN' ? 'in' : 'out'}">
           <span class="bm-dir">${t.direction}</span>
-          <span class="bm-pair-amt">${fmtNum(t.amount)} ${t.symbol || ''}</span>
+          <span class="bm-pair-amt">${fmtNum(t.amount)} ${esc(t.symbol || '')}</span>
           <span class="bm-pair-date">${t.ts ? new Date(t.ts).toLocaleDateString() : ''}</span>
         </div>`).join('')}</div>`
       : '<div class="bm-empty">No direct transfers found between these wallets.</div>'}`;
   } catch (e) {
-    box.innerHTML = `<div class="tracker-error">${e.message || 'Failed to load history.'}</div>`;
+    box.innerHTML = `<div class="tracker-error">${esc(e.message || 'Failed to load history.')}</div>`;
   }
 }
 
@@ -433,7 +448,7 @@ async function generateMap(addr, restore) {
     // token header
     const t = graph.token || {};
     $('bmTokenHead').innerHTML = `
-      <div class="bm-token-name">${t.name || 'Token'} <span>${t.symbol || ''}</span></div>
+      <div class="bm-token-name">${esc(t.name || 'Token')} <span>${esc(t.symbol || '')}</span></div>
       <div class="bm-token-sub">${graph.holders.length} holders mapped · ${graph.transfers?.length || 0} transfers sampled · ${chain.toUpperCase()}</div>`;
 
     // restore state
@@ -464,7 +479,7 @@ async function generateMap(addr, restore) {
     selectNode(null);
     rebuild();
   } catch (e) {
-    status.innerHTML = `<div class="tracker-error">❌ ${e.message || 'Failed to generate map.'}</div>`;
+    status.innerHTML = `<div class="tracker-error">❌ ${esc(e.message || 'Failed to generate map.')}</div>`;
   } finally {
     btn.disabled = false; btn.textContent = 'Generate Map';
   }
