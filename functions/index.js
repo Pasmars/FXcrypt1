@@ -26,6 +26,7 @@ const notify         = require('./lib/notify')
 const copytrader     = require('./lib/copytrader')
 const mcpLib         = require('./lib/mcp')
 const ratelimit      = require('./lib/ratelimit')
+const appcheck       = require('./lib/appcheck')
 const crypto2        = require('crypto')
 
 const DISCORD_TOPIC = 'fxcrypt-discord-jobs'
@@ -461,6 +462,7 @@ exports.getHolderGraph = functions.region('europe-west1')
   // The single most expensive endpoint in the app: 120s at 512MB, paid indexer
   // quota on every call. Capped hardest.
   await ratelimit.check(db, context.auth.uid, 'getHolderGraph')
+  appcheck.note(db, admin, context)
   const { chain, contractAddress } = data
   validateChain(chain)
   if (chain === 'ton')
@@ -524,6 +526,7 @@ exports.bridgeQuote = fn.https.onCall(async (data, context) => {
 exports.rpcProxy = fn.https.onCall(async (data, context) => {
   if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
   await ratelimit.check(db, context.auth.uid, 'rpcProxy')
+  appcheck.note(db, admin, context)
   const axios = require('axios')
   // Every EVM chain the wallet supports — not only Robinhood. Some ISPs block
   // browser TLS to ALL public RPC hosts (drpc/cloudflare/publicnode alike), so
@@ -885,6 +888,7 @@ exports.removeWallet = fn.https.onCall(async (data, context) => {
 exports.getBalances = fn.https.onCall(async (data, context) => {
   if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
   await ratelimit.check(db, context.auth.uid, 'getBalances')
+  appcheck.note(db, admin, context)
 
   const uid      = context.auth.uid
   const userSnap = await db.doc(`users/${uid}`).get()
@@ -2674,6 +2678,7 @@ exports.chatPointer = functions
   .https.onCall(async (data, context) => {
     if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
     const uid = context.auth.uid
+    appcheck.note(db, admin, context)
     const prompt = String(data?.prompt || '').trim()
     if (!prompt) throw new functions.https.HttpsError('invalid-argument', 'prompt is required')
 
@@ -3131,7 +3136,10 @@ exports.adminStats = adminFn.https.onCall(async (data, context) => {
       funnel30d.checkoutComplete += x.checkoutComplete || 0
     })
   } catch (e) { /* best-effort */ }
-  return { totalUsers: total, byPlan: counts, premium: counts.pro + counts.elite, pointerReqsMTD, activeUsers, active, creditsOutstanding, funnel30d, period: metering.currentPeriod(), generatedAt: Date.now() }
+  // App Check adoption (sampled). Enforcement is only safe once pct sits at 100
+  // across several days of real traffic — see lib/appcheck.js.
+  const appCheck = await appcheck.stats(db)
+  return { totalUsers: total, byPlan: counts, premium: counts.pro + counts.elite, pointerReqsMTD, activeUsers, active, creditsOutstanding, funnel30d, appCheck, period: metering.currentPeriod(), generatedAt: Date.now() }
 })
 
 exports.adminListUsers = adminFn.https.onCall(async (data, context) => {

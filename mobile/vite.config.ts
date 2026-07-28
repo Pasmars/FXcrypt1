@@ -17,6 +17,7 @@ export default defineConfig({
       // shared/ sits outside this app, so its bare `firebase/*` imports must
       // resolve to THIS app's node_modules copy (single Firebase instance).
       'firebase/app': here('./node_modules/firebase/app'),
+      'firebase/app-check': here('./node_modules/firebase/app-check'),
       'firebase/auth': here('./node_modules/firebase/auth'),
       'firebase/firestore': here('./node_modules/firebase/firestore'),
       'firebase/functions': here('./node_modules/firebase/functions'),
