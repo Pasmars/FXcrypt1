@@ -82,10 +82,18 @@ if (APP_CHECK_SITE_KEY) {
     // Dev machines can't solve reCAPTCHA against localhost — the debug token is
     // printed to the console; allowlist it under App Check -> Manage debug tokens.
     if (/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) self.FIREBASE_APPCHECK_DEBUG_TOKEN = true;
-    firebase.appCheck().activate(
+    const ac = firebase.appCheck();
+    ac.activate(
       new firebase.appCheck.ReCaptchaEnterpriseProvider(APP_CHECK_SITE_KEY),
       true // auto-refresh so a long admin session doesn't start failing mid-use
     );
+    // Probe once so a browser that cannot reach reCAPTCHA is visible here
+    // rather than discovered later as an opaque lockout. window.__APPCHECK__
+    window.__APPCHECK__ = { state: 'initializing' };
+    ac.getToken(false)
+      .then(function(r){ window.__APPCHECK__ = { state: 'ok', tokenLength: (r && r.token || '').length }; })
+      .catch(function(e){ window.__APPCHECK__ = { state: 'FAILED', error: String(e && e.message || e).slice(0,300) };
+        console.warn('[appcheck] token acquisition FAILED — this browser would be locked out if enforced:', e); });
   } catch (e) {
     // Never let attestation setup stop the panel loading — the admin callables
     // are still gated server-side by the verified-email allowlist.

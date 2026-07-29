@@ -5,7 +5,7 @@ import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 import { getFunctions } from 'firebase/functions';
-import { initializeAppCheck, ReCaptchaEnterpriseProvider } from 'firebase/app-check';
+import { initializeAppCheck, ReCaptchaEnterpriseProvider, getToken } from 'firebase/app-check';
 
 const firebaseConfig = {
   apiKey: 'AIzaSyCpdVnFtB1dnlZmvfJ9srIBvgFl1ZqNLmQ',
@@ -39,14 +39,36 @@ if (typeof window !== 'undefined' && /^(localhost|127\.0\.0\.1)$/.test(window.lo
   window.FIREBASE_APPCHECK_DEBUG_TOKEN = true;
 }
 
+// Whether this browser can actually attest. Enforcement turns a failure here
+// into "every Firebase call is rejected", which surfaces to the user as an
+// opaque auth/internal-error — so it must be observable BEFORE enforcing, not
+// diagnosed afterwards from user reports. Inspect with window.__APPCHECK__.
+declare global { interface Window { __APPCHECK__?: Record<string, unknown> } }
+
 if (APP_CHECK_SITE_KEY && typeof window !== 'undefined') {
+  window.__APPCHECK__ = { state: 'initializing', key: APP_CHECK_SITE_KEY.slice(0, 12) + '…' };
   try {
-    initializeAppCheck(app, {
+    const ac = initializeAppCheck(app, {
       provider: new ReCaptchaEnterpriseProvider(APP_CHECK_SITE_KEY),
       // Keeps the token fresh so long sessions don't start failing mid-use.
       isTokenAutoRefreshEnabled: true,
     });
+    // Actively probe once. reCAPTCHA is blocked outright by a good number of
+    // privacy extensions and corporate proxies; that is invisible until it is
+    // fatal, so find out now while enforcement is still off.
+    getToken(ac, false)
+      .then((r) => {
+        window.__APPCHECK__ = { state: 'ok', tokenLength: (r?.token || '').length };
+      })
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        window.__APPCHECK__ = { state: 'FAILED', error: msg.slice(0, 300) };
+        console.warn('[appcheck] token acquisition FAILED — this browser would be ' +
+          'locked out if App Check were enforced:', msg);
+      });
   } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    window.__APPCHECK__ = { state: 'INIT_FAILED', error: msg.slice(0, 300) };
     // App Check must never be the reason the app fails to boot — if attestation
     // is broken the backend still has auth, rules and rate limits behind it.
     console.warn('[appcheck] init failed; continuing without attestation:', err);

@@ -177,10 +177,23 @@ async function main() {
   }
 
   // MODE === 'enforce' — gates
+  // A percentage means nothing without volume behind it. Enforcement was once
+  // turned on here against 3 sampled calls reading "100%" — all of them from a
+  // verification script, none from a real user's browser. Real users then hit
+  // auth/internal-error. Hence a floor on sample count AND on days: reCAPTCHA is
+  // blocked outright by plenty of privacy extensions and corporate proxies, and
+  // only genuine traffic across more than one day reveals that.
+  const MIN_SAMPLES = 200
+  const MIN_DAYS = 2
+
   const problems = []
   if (!keysReady) problems.push('a client is missing its site key: it would be rejected the moment enforcement starts')
   if (!ad || ad.total === 0) problems.push('no adoption data yet: nothing proves any client is attesting')
-  else if (ad.pct !== 100) problems.push(`adoption is ${ad.pct}% — the remaining ${(100 - ad.pct).toFixed(1)}% of real traffic would start failing`)
+  else {
+    if (ad.pct !== 100) problems.push(`adoption is ${ad.pct}% — the remaining ${(100 - ad.pct).toFixed(1)}% of real traffic would start failing`)
+    if (ad.total < MIN_SAMPLES) problems.push(`only ${ad.total} sampled calls (need ${MIN_SAMPLES}); a clean percentage over a handful of calls is not evidence`)
+    if (ad.days < MIN_DAYS) problems.push(`only ${ad.days} day(s) of data (need ${MIN_DAYS}); one day can be a single browser`)
+  }
 
   if (problems.length && !has('--force')) {
     console.log('\nREFUSING to enforce:')
