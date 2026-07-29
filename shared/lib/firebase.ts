@@ -45,6 +45,26 @@ if (typeof window !== 'undefined' && /^(localhost|127\.0\.0\.1)$/.test(window.lo
 // diagnosed afterwards from user reports. Inspect with window.__APPCHECK__.
 declare global { interface Window { __APPCHECK__?: Record<string, unknown> } }
 
+// Opening the page with ?appcheck shows the result as an on-screen banner.
+// The failure this diagnoses happens on phones too, where a DevTools console
+// is not a realistic thing to ask anyone to open — so the answer has to be
+// readable without one. Only renders when explicitly asked for.
+function showAppCheckBanner(status: Record<string, unknown>) {
+  if (typeof document === 'undefined') return;
+  if (!/[?&]appcheck\b/.test(window.location.search)) return;
+  const ok = status.state === 'ok';
+  const el = document.getElementById('__appcheck_banner') || document.createElement('div');
+  el.id = '__appcheck_banner';
+  el.setAttribute('style', [
+    'position:fixed', 'inset:auto 8px 8px 8px', 'z-index:2147483647',
+    'font:13px/1.45 ui-monospace,monospace', 'padding:12px 14px', 'border-radius:10px',
+    'white-space:pre-wrap', 'word-break:break-word', 'max-height:45vh', 'overflow:auto',
+    'color:#fff', `background:${ok ? '#11603a' : '#7f1d1d'}`, `border:1px solid ${ok ? '#22C55E' : '#EF4444'}`,
+  ].join(';'));
+  el.textContent = (ok ? 'App Check OK\n' : 'App Check FAILED\n') + JSON.stringify(status, null, 1);
+  if (!el.parentNode) document.body.appendChild(el);
+}
+
 if (APP_CHECK_SITE_KEY && typeof window !== 'undefined') {
   window.__APPCHECK__ = { state: 'initializing', key: APP_CHECK_SITE_KEY.slice(0, 12) + '…' };
   try {
@@ -59,16 +79,19 @@ if (APP_CHECK_SITE_KEY && typeof window !== 'undefined') {
     getToken(ac, false)
       .then((r) => {
         window.__APPCHECK__ = { state: 'ok', tokenLength: (r?.token || '').length };
+        showAppCheckBanner(window.__APPCHECK__);
       })
       .catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
         window.__APPCHECK__ = { state: 'FAILED', error: msg.slice(0, 300) };
+        showAppCheckBanner(window.__APPCHECK__);
         console.warn('[appcheck] token acquisition FAILED — this browser would be ' +
           'locked out if App Check were enforced:', msg);
       });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     window.__APPCHECK__ = { state: 'INIT_FAILED', error: msg.slice(0, 300) };
+    showAppCheckBanner(window.__APPCHECK__);
     // App Check must never be the reason the app fails to boot — if attestation
     // is broken the backend still has auth, rules and rate limits behind it.
     console.warn('[appcheck] init failed; continuing without attestation:', err);

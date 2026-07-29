@@ -89,10 +89,22 @@ if (APP_CHECK_SITE_KEY) {
     );
     // Probe once so a browser that cannot reach reCAPTCHA is visible here
     // rather than discovered later as an opaque lockout. window.__APPCHECK__
+    // ?appcheck renders the result on screen — no DevTools needed.
+    var acBanner = function(st){
+      if(!/[?&]appcheck/.test(location.search)) return;
+      var ok = st.state==='ok';
+      var el = document.getElementById('__appcheck_banner') || document.createElement('div');
+      el.id='__appcheck_banner';
+      el.setAttribute('style','position:fixed;inset:auto 8px 8px 8px;z-index:2147483647;font:13px/1.45 ui-monospace,monospace;padding:12px 14px;border-radius:10px;white-space:pre-wrap;word-break:break-word;max-height:45vh;overflow:auto;color:#fff;background:'+(ok?'#11603a':'#7f1d1d')+';border:1px solid '+(ok?'#22C55E':'#EF4444'));
+      el.textContent=(ok?'App Check OK
+':'App Check FAILED
+')+JSON.stringify(st,null,1);
+      if(!el.parentNode) document.body.appendChild(el);
+    };
     window.__APPCHECK__ = { state: 'initializing' };
     ac.getToken(false)
-      .then(function(r){ window.__APPCHECK__ = { state: 'ok', tokenLength: (r && r.token || '').length }; })
-      .catch(function(e){ window.__APPCHECK__ = { state: 'FAILED', error: String(e && e.message || e).slice(0,300) };
+      .then(function(r){ window.__APPCHECK__ = { state: 'ok', tokenLength: (r && r.token || '').length }; acBanner(window.__APPCHECK__); })
+      .catch(function(e){ window.__APPCHECK__ = { state: 'FAILED', error: String(e && e.message || e).slice(0,300) }; acBanner(window.__APPCHECK__);
         console.warn('[appcheck] token acquisition FAILED — this browser would be locked out if enforced:', e); });
   } catch (e) {
     // Never let attestation setup stop the panel loading — the admin callables
