@@ -2,10 +2,16 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { setPayload, getPayload, keyToPath } from '@/lib/nav';
+import Landing from '@/components/Landing';
 
 // Mirrors the mobile app's TWEAK_DEFAULTS (theme/appearance + fallback plan).
 const TWEAK_DEFAULTS: any = { dark: true, accent: 'gold', homeLayout: 'agent', pointerStyle: 'bubbles', plan: 'free' };
 const PUBLIC_ROUTES = new Set(['/login', '/signup']);
+// The marketing site. A signed-out visitor to the root gets the landing page
+// rather than being bounced to /login — but it is NOT in PUBLIC_ROUTES, because
+// a signed-in user at '/' must still land on the app home, not be redirected
+// away from it.
+const LANDING_ROUTE = '/';
 
 const Ctx = createContext<any>(null);
 export const useApp = () => useContext(Ctx);
@@ -27,6 +33,8 @@ function AuthRedirector() {
   useEffect(() => {
     if (!authReady) return;
     const isPublic = PUBLIC_ROUTES.has(path);
+    // Signed out at the root: show the marketing site, don't redirect.
+    if (!user && path === LANDING_ROUTE) return;
     if (!user && !isPublic) router.replace('/login');
     else if (user && isPublic) router.replace('/');
   }, [user, authReady, path, router]);
@@ -159,7 +167,11 @@ export function ClientRoot({ children }: { children: React.ReactNode }) {
   // Gate: wait for bootstrap + first auth resolution. Don't flash protected
   // content for signed-out users (AuthRedirector will bounce them to /login).
   const isPublic = PUBLIC_ROUTES.has(path);
-  const gated = !ready || !authReady || (!user && !isPublic);
+  // Signed-out root = the marketing site. Checked before `gated` so the landing
+  // page renders instead of the splash, and outside `children` so it never
+  // picks up the app's tab chrome.
+  const showLanding = authReady && !user && path === LANDING_ROUTE;
+  const gated = !showLanding && (!ready || !authReady || (!user && !isPublic));
   // First-run onboarding overlays the app until dismissed (signed-in users only).
   const showOnboard = !gated && !isPublic && user && onboard === 'show';
   const OnboardComp: any = ready ? (window as any).Onboarding : null;
@@ -168,7 +180,7 @@ export function ClientRoot({ children }: { children: React.ReactNode }) {
     <div ref={rootRef} className="fx-root">
       <Ctx.Provider value={value}>
         {ready && authReady && <AuthRedirector />}
-        {gated ? <Splash /> : showOnboard && OnboardComp
+        {showLanding ? <Landing /> : gated ? <Splash /> : showOnboard && OnboardComp
           ? <OnboardComp postAuth dark={t.dark} onDone={finishOnboard} />
           : children}
       </Ctx.Provider>
