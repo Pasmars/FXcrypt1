@@ -8,7 +8,7 @@
       "Bash(firebase functions:config:get)",
       "Bash(firebase functions:list)",
       "Bash(firebase use *)",
-      "Bash(curl -s \"https://api.telegram.org/bot7926435599:AAELOUwZMwa1Uw0UUIPxJ5stMMTyqWPBGw8/getWebhookInfo\")",
+      "Bash(curl -s \"https://api.telegram.org/bot$TELEGRAM_TOKEN/getWebhookInfo\")",
       "Bash(gcloud functions *)",
       "PowerShell(gcloud functions add-iam-policy-binding telegramWebhook --region=us-central1 --project=pnl-calculator --member=allUsers --role=roles/cloudfunctions.invoker 2>&1)",
       "PowerShell(Get-Command gcloud -ErrorAction SilentlyContinue)",
