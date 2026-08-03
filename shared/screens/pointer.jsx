@@ -524,7 +524,11 @@ function PointerChat({ go, seed, style, plan, onProposalTrade }) {
       if (genRef.current !== gen) return; // stopped — swallow the late error
       // Out of Pointer requests → show a buy-credits paywall card instead of an error.
       const details = (e && e.details) || {};
-      const isQuota = details.code === 'quota_exhausted' || String((e && e.code) || '').includes('resource-exhausted');
+      // Only the CHAT allowance is extendable with credits, so only it opens the
+      // buy-credits card. A chart-quota or plan-gate refusal carries its own
+      // code and falls through to its (already actionable) message instead.
+      const isQuota = details.code === 'quota_exhausted'
+        || (!details.code && String((e && e.code) || '').includes('resource-exhausted'));
       if (isQuota) {
         if (details.quota != null) setUsage((u) => ({ ...(u || {}), remaining: 0, quota: details.quota, credits: details.credits ?? (u && u.credits) ?? 0, resetsAt: details.resetsAt, pack: details.pack || (u && u.pack) }));
         setMsgs(m => [...m, { role: 'quota', info: details, restore: text }]);

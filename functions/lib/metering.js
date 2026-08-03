@@ -1,32 +1,41 @@
 // metering.js — per-user usage metering for Pointer (AI) requests and gem scans.
 //
 // Model (fields on users/{uid}):
-//   pointerUsage / gemScanUsage / imageUsage
+//   pointerUsage / gemScanUsage / imageUsage / visionUsage
 //                               : { period:'YYYY-MM', used:N }  monthly counter
 //   pointerCredits              : N  non-expiring credits (spent AFTER the monthly
 //                                     plan allowance is exhausted)
-//   featureFlags                : { pointer, deepResearch, images, scanner, signals, autoExecute }
+//   featureFlags                : { pointer, deepResearch, images, vision, scanner, signals, autoExecute }
 //                                 absent = enabled (default on)
-//   userLimits                  : { pointerQuota, gemScanQuota, imageQuota, maxBuyUsd, dailyTradeCap }
+//   userLimits                  : { pointerQuota, gemScanQuota, imageQuota, visionQuota, maxBuyUsd, dailyTradeCap }
 //                                 admin per-user overrides; null/absent = plan default
 //
 // Plan quotas default to Free 10 / Pro(=Basic) 50 / Elite 200 for Pointer, Free 2 /
-// Pro 25 / Elite 100 for images, and are admin-configurable via
-// config/billing.pointerQuota / .imageQuota (surfaced on cfg.raw).
+// Pro 25 / Elite 100 for images, Free 0 / Pro 25 / Elite 100 for chart reads, and
+// are admin-configurable via config/billing.pointerQuota / .imageQuota /
+// .visionQuota (surfaced on cfg.raw).
 const admin = require('firebase-admin')
 const FieldValue = () => admin.firestore.FieldValue
 
 // Image generation is metered separately from chat because its unit cost is an
 // order of magnitude higher (a legible data infographic must render at 'medium'
 // quality), so it cannot share the Pointer allowance without blowing the budget.
+//
+// Chart reading ('vision') gets its own allowance for the same reason in the
+// other direction: it is priced per IMAGE at high detail, so letting it draw on
+// the plain chat allowance meant one user could spend a whole month's Pointer
+// requests on screenshots. Free is 0 — the feature is Pro-gated at the callable,
+// and a zero quota is the belt to that braces.
 const FALLBACK_QUOTA = {
   pointer: { free: 10, pro: 50, elite: 200 },
   gemScan: { free: 5, pro: 50, elite: 200 },
   image:   { free: 2, pro: 25, elite: 100 },
+  vision:  { free: 0, pro: 25, elite: 100 },
 }
-const USAGE_FIELD  = { pointer: 'pointerUsage', gemScan: 'gemScanUsage', image: 'imageUsage' }
-const CREDIT_FIELD = { pointer: 'pointerCredits', gemScan: null, image: null } // only Pointer has credits
-const LIMIT_KEY    = { pointer: 'pointerQuota', gemScan: 'gemScanQuota', image: 'imageQuota' }
+const USAGE_FIELD  = { pointer: 'pointerUsage', gemScan: 'gemScanUsage', image: 'imageUsage', vision: 'visionUsage' }
+const CREDIT_FIELD = { pointer: 'pointerCredits', gemScan: null, image: null, vision: null } // only Pointer has credits
+const LIMIT_KEY    = { pointer: 'pointerQuota', gemScan: 'gemScanQuota', image: 'imageQuota', vision: 'visionQuota' }
+const CONFIG_KEY   = { pointer: 'pointerQuota', gemScan: 'gemScanQuota', image: 'imageQuota', vision: 'visionQuota' }
 
 // Current billing period as 'YYYY-MM' (UTC).
 function currentPeriod(d = new Date()) {
@@ -42,7 +51,10 @@ function nextPeriodStart(d = new Date()) {
 function planQuota(cfg, plan, kind = 'pointer') {
   const p = ['free', 'pro', 'elite'].includes(plan) ? plan : 'free'
   const raw = (cfg && cfg.raw) || {}
-  const cfgMap = kind === 'gemScan' ? raw.gemScanQuota : (kind === 'image' ? raw.imageQuota : raw.pointerQuota)
+  // Table lookup, not a ternary chain — the chain silently fell through to the
+  // Pointer quota for any kind it didn't name, which is the wrong default for a
+  // new kind and fails open.
+  const cfgMap = raw[CONFIG_KEY[kind] || CONFIG_KEY.pointer]
   const fb = FALLBACK_QUOTA[kind] || FALLBACK_QUOTA.pointer
   const v = cfgMap && cfgMap[p] != null ? parseInt(cfgMap[p]) : fb[p]
   return Number.isFinite(v) ? v : fb[p]

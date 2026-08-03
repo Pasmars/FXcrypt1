@@ -2822,6 +2822,33 @@ exports.chatPointer = functions
       throw new functions.https.HttpsError('internal', 'Usage check failed. Try again.')
     }
 
+    // Chart reads come out of their OWN monthly allowance, charged per image —
+    // the cost is per-image at high detail, so sharing the chat allowance let a
+    // single user spend a whole month of Pointer requests on screenshots. The
+    // chat unit above is refunded if this fails, so a refused upload is free.
+    let visionSpent = null
+    if (userImages.length) {
+      try {
+        visionSpent = await metering.consume(db, uid, { kind: 'vision', plan, cfg, count: userImages.length, flagKey: 'vision' })
+      } catch (e) {
+        await metering.refund(db, uid, { kind: 'pointer', ...spent })
+        if (e.kind === 'feature-disabled') throw new functions.https.HttpsError('permission-denied', 'Chart image analysis is disabled on your account.')
+        if (e.kind === 'quota-exhausted') {
+          const i = e.info || {}
+          // Deliberately NOT code 'quota_exhausted': that opens the buy-credits
+          // card, and Pointer credits do not extend the chart allowance.
+          throw new functions.https.HttpsError('resource-exhausted',
+            `You've used all ${i.quota} chart analyses for this period. Your allowance resets on the 1st${plan === 'elite' ? '' : ', or upgrade for more'} — in the meantime, name the pair and I'll pull the live chart myself.`,
+            { code: 'vision_quota_exhausted', quota: i.quota, used: i.used, resetsAt: i.resetsAt })
+        }
+        throw new functions.https.HttpsError('internal', 'Usage check failed. Try again.')
+      }
+    }
+    const refundAll = async () => {
+      await metering.refund(db, uid, { kind: 'pointer', ...spent })
+      if (visionSpent) await metering.refund(db, uid, { kind: 'vision', ...visionSpent })
+    }
+
     // Provider/model is chosen centrally by the admin (config/billing.aiProvider).
     // Model access is a PLAN ENTITLEMENT: free runs on DeepSeek only, paid plans
     // (pro/elite) may pick either DeepSeek or ChatGPT. Resolved server-side from
@@ -2834,7 +2861,7 @@ exports.chatPointer = functions
     let deepModel = cfg.raw.aiDeepModel ? String(cfg.raw.aiDeepModel) : null
     const apiKey = prov === 'openai' ? SECRET_OPENAI.value() : SECRET_DEEPSEEK.value()
     if (!apiKey) {
-      await metering.refund(db, uid, { kind: 'pointer', ...spent })
+      await refundAll()
       throw new functions.https.HttpsError('failed-precondition', `No API key configured for ${prov === 'openai' ? 'ChatGPT' : 'DeepSeek'}`)
     }
 
@@ -2896,6 +2923,9 @@ exports.chatPointer = functions
       const { text, proposal, history: newHistory, model, sources, images, imageNote } = await agentLib.runAgent({ prompt, history, ctx, provider: prov, apiKey, surface: 'pointer', deep, deepModel, mcp, userImages })
       await metering.track(db, uid, { pointerReqs: 1, ...(deep ? { deepReqs: 1 } : {}), ...(images && images.length ? { imageReqs: images.length } : {}), ...(userImages.length ? { visionImgs: userImages.length } : {}) }, { userInitiated: true })
       const usage = { used: spent.used, remaining: spent.remaining, credits: spent.credits, quota: spent.quota, resetsAt: spent.resetsAt }
+      // Chart allowance rides alongside the chat one so the UI can show what's
+      // left without a second round-trip.
+      if (visionSpent) usage.vision = { used: visionSpent.used, remaining: visionSpent.remaining, quota: visionSpent.quota }
       // allowedProviders/providerDowngraded let the UI show the model picker only
       // to plans that have one, and explain a silent downgrade instead of showing
       // a reply from a model the user didn't pick.
@@ -2905,8 +2935,8 @@ exports.chatPointer = functions
       // of the history so follow-up questions still have the chart's figures.
       return { text, proposal: proposal || null, history: newHistory, provider: prov, deep, model, usage, sources: sources || [], images: images || [], attachments, imageNote: imageNote || null, allowedProviders: picked.allowed, providerDowngraded: picked.downgraded }
     } catch (e) {
-      // Infra failure — refund the metered unit so a failed call isn't charged.
-      await metering.refund(db, uid, { kind: 'pointer', ...spent })
+      // Infra failure — refund every metered unit so a failed call isn't charged.
+      await refundAll()
       await metering.track(db, uid, { pointerErrors: 1 }, { userInitiated: true })
       throw new functions.https.HttpsError('internal', e.message || 'Pointer failed')
     }
@@ -2973,13 +3003,16 @@ exports.getPointerUsage = plainFn.https.onCall(async (data, context) => {
   const plan = ['free', 'pro', 'elite'].includes(d.plan) ? d.plan : 'free'
   const u = metering.readUsage(d, plan, cfg, 'pointer')
   const img = metering.readUsage(d, plan, cfg, 'image')
+  const vis = metering.readUsage(d, plan, cfg, 'vision')
   const flags = d.featureFlags || {}
   return {
     plan, quota: u.quota, used: u.used, remaining: u.remaining, credits: u.credits, resetsAt: u.resetsAt,
     pack: cfg.creditPack,
-    // Image generation runs on its own monthly allowance (see metering.js).
+    // Image generation and chart reading each run on their own monthly
+    // allowance, separate from chat requests (see metering.js).
     images: { quota: img.quota, used: img.used, remaining: img.remaining },
-    flags: { pointer: flags.pointer !== false, deepResearch: flags.deepResearch !== false, images: flags.images !== false },
+    vision: { quota: vis.quota, used: vis.used, remaining: vis.remaining },
+    flags: { pointer: flags.pointer !== false, deepResearch: flags.deepResearch !== false, images: flags.images !== false, vision: flags.vision !== false },
     // Which chat models this plan may use, and which one a turn defaults to.
     // Free = DeepSeek only; paid = both. The UI shows a picker only when there is
     // more than one to pick from.
@@ -3367,7 +3400,7 @@ exports.adminSetUserLimits = adminFn.https.onCall(async (data, context) => {
     const ul = {}
     const intOrNull = (v) => { if (v === null || v === '' || v === undefined) return null; const n = parseInt(v); return Number.isFinite(n) ? Math.max(0, n) : null }
     const numOrNull = (v) => { if (v === null || v === '' || v === undefined) return null; const n = parseFloat(v); return Number.isFinite(n) ? Math.max(0, n) : null }
-    for (const k of ['pointerQuota', 'gemScanQuota', 'imageQuota', 'dailyTradeCap', 'priceAlertQuota', 'pointerTaskQuota']) if (data.userLimits[k] !== undefined) ul[k] = intOrNull(data.userLimits[k])
+    for (const k of ['pointerQuota', 'gemScanQuota', 'imageQuota', 'visionQuota', 'dailyTradeCap', 'priceAlertQuota', 'pointerTaskQuota']) if (data.userLimits[k] !== undefined) ul[k] = intOrNull(data.userLimits[k])
     if (data.userLimits.maxBuyUsd !== undefined) ul.maxBuyUsd = numOrNull(data.userLimits.maxBuyUsd)
     if (Object.keys(ul).length) patch.userLimits = ul
   }
@@ -3565,6 +3598,7 @@ exports.adminSetConfig = adminFn.https.onCall(async (data, context) => {
   if (c.pointerQuota) clean.pointerQuota = { free: qInt(c.pointerQuota.free, 10), pro: qInt(c.pointerQuota.pro, 50), elite: qInt(c.pointerQuota.elite, 200) }
   if (c.imageQuota) clean.imageQuota = { free: qInt(c.imageQuota.free, 2), pro: qInt(c.imageQuota.pro, 25), elite: qInt(c.imageQuota.elite, 100) }
   if (c.gemScanQuota) clean.gemScanQuota = { free: qInt(c.gemScanQuota.free, 5), pro: qInt(c.gemScanQuota.pro, 50), elite: qInt(c.gemScanQuota.elite, 200) }
+  if (c.visionQuota) clean.visionQuota = { free: qInt(c.visionQuota.free, 0), pro: qInt(c.visionQuota.pro, 25), elite: qInt(c.visionQuota.elite, 100) }
   if (c.creditPack) clean.creditPack = { usd: Math.max(1, qInt(c.creditPack.usd, 10)), credits: Math.max(1, qInt(c.creditPack.credits, 50)) }
   if (c.autoTrade) clean.autoTrade = {
     globalEnabled: c.autoTrade.globalEnabled !== false,

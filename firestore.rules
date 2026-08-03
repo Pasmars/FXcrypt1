@@ -9,7 +9,10 @@ service cloud.firestore {
       return ['plan', 'planExpiry', 'subscription', 'banned', 'adminNote',
               // Metering & entitlement controls — a client writing any of these
               // could self-grant credits/quota or unlock disabled features.
-              'pointerCredits', 'pointerUsage', 'gemScanUsage', 'userLimits', 'featureFlags',
+              // Every monthly counter belongs here: a client that can write its
+              // own usage doc can reset it and mint unlimited allowance.
+              'pointerCredits', 'pointerUsage', 'gemScanUsage', 'imageUsage', 'visionUsage',
+              'userLimits', 'featureFlags',
               // Referral accounting — server-written only (self-granting rewards
               // or faking paid referrals must be impossible).
               'referralStats', 'referralRewarded', 'referredByUid'];
