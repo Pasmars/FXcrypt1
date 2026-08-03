@@ -155,7 +155,7 @@ function App() {
       <TopBar left={<button aria-label="Back" onClick={back} style={{ width: 40, height: 40, borderRadius: 12, background: 'var(--surface2)', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text)' }}><Icon name="chevL" size={21} /></button>} title={title} right={right} />
     );
     let inner, header = null, custom = false;
-    if (key === 'chat') { header = head('Pointer'); inner = <PointerChat go={go} seed={chatSeed} style={t.pointerStyle} onProposalTrade={() => {}} />; }
+    if (key === 'chat') { header = head('Pointer'); inner = <PointerChat go={go} seed={chatSeed} style={t.pointerStyle} plan={plan} onProposalTrade={() => {}} />; }
     else if (key === 'token') { header = head(props.token.sym); inner = <TokenDetail token={props.token} go={go} onTrade={openTrade} />; }
     else if (key === 'bubble') { header = head('Bubble Map'); inner = <BubbleMap token={props.token} go={go} />; }
     else if (key === 'trade') { header = head('Manual Trade', <Pill tone="muted">{plan === 'free' ? '1.0%' : plan === 'pro' ? '0.5%' : '0.2%'} fee</Pill>); inner = <TradeFlow token={props.token} side={props.side} go={go} onDone={back} />; }

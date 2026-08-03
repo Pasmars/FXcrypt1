@@ -60,7 +60,7 @@ function compressImage(file) {
   });
 }
 
-function AIBar({ onFocus, value, onChange, onSend, compact, deep, onToggleDeep, busy, onStop, attachments, onAttach, onRemoveAttach }) {
+function AIBar({ onFocus, value, onChange, onSend, compact, deep, onToggleDeep, busy, onStop, attachments, onAttach, onRemoveAttach, attachLocked }) {
   const taRef = uR(null);
   // Height follows content on every change, including programmatic ones (the
   // Edit affordance reloads a past prompt into the composer) and the reset to
@@ -120,10 +120,21 @@ function AIBar({ onFocus, value, onChange, onSend, compact, deep, onToggleDeep, 
           boxSizing: 'border-box',
         }} />
       {onAttach && (
-        <button onClick={onAttach} aria-label="Attach a chart screenshot" disabled={shots.length >= MAX_ATTACH}
-          title={shots.length >= MAX_ATTACH ? `Up to ${MAX_ATTACH} images per message` : 'Attach a chart screenshot for Pointer to analyze'}
-          style={{ width: 38, height: 38, borderRadius: 11, border: 'none', cursor: shots.length >= MAX_ATTACH ? 'default' : 'pointer', background: shots.length ? 'var(--glow)' : 'var(--chip)', color: shots.length ? 'var(--accent)' : 'var(--muted)', opacity: shots.length >= MAX_ATTACH ? 0.5 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'all .15s' }}>
+        // Kept visible (not hidden) on the free plan: the button is how anyone
+        // discovers the feature exists. A crown badge marks it as paid and the
+        // tap opens the paywall rather than a file picker leading to a refusal.
+        <button onClick={onAttach}
+          aria-label={attachLocked ? 'Chart analysis — a Pro feature' : 'Attach a chart screenshot'}
+          disabled={!attachLocked && shots.length >= MAX_ATTACH}
+          title={attachLocked ? 'Pointer can analyze chart screenshots on Pro — tap to upgrade'
+            : shots.length >= MAX_ATTACH ? `Up to ${MAX_ATTACH} images per message` : 'Attach a chart screenshot for Pointer to analyze'}
+          style={{ position: 'relative', width: 38, height: 38, borderRadius: 11, border: 'none', cursor: (!attachLocked && shots.length >= MAX_ATTACH) ? 'default' : 'pointer', background: shots.length ? 'var(--glow)' : 'var(--chip)', color: shots.length ? 'var(--accent)' : 'var(--muted)', opacity: (!attachLocked && shots.length >= MAX_ATTACH) ? 0.5 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'all .15s' }}>
           <Icon name="image" size={18} />
+          {attachLocked && (
+            <span aria-hidden="true" style={{ position: 'absolute', top: -3, right: -3, width: 15, height: 15, borderRadius: '50%', background: 'var(--accent)', color: 'var(--on-accent)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Icon name="crown" size={9} />
+            </span>
+          )}
         </button>
       )}
       {onToggleDeep && (
@@ -290,7 +301,14 @@ function PointerHome({ go, layout, openChat, user }) {
 }
 
 // ─── Full chat (with saved sessions) ───
-const POINTER_GREETING = { role: 'ai', text: 'Hey — I’m Pointer, your crypto trading copilot. I live and breathe markets, tokens and on-chain data: I can scan gems, analyze any coin, build trade setups and execute with your approval. You can also send me a screenshot of a chart and I’ll read it, then check it against live data. What do you want to look at?' };
+// The chart-upload line is only true on a paid plan, so it is only offered
+// there — promising it to a free user just sends them into the paywall.
+const greetingFor = (visionLocked) => ({
+  role: 'ai',
+  text: 'Hey — I’m Pointer, your crypto trading copilot. I live and breathe markets, tokens and on-chain data: I can scan gems, analyze any coin, build trade setups and execute with your approval. '
+    + (visionLocked ? '' : 'You can also send me a screenshot of a chart and I’ll read it, then check it against live data. ')
+    + 'What do you want to look at?',
+});
 function chatAgo(ms) {
   if (!ms) return '';
   const s = Math.max(0, (Date.now() - ms) / 1000);
@@ -299,8 +317,14 @@ function chatAgo(ms) {
   if (s < 86400) return Math.floor(s / 3600) + 'h ago';
   return Math.floor(s / 86400) + 'd ago';
 }
-function PointerChat({ go, seed, style, onProposalTrade }) {
-  const [msgs, setMsgs] = uS([POINTER_GREETING]);
+function PointerChat({ go, seed, style, plan, onProposalTrade }) {
+  // Reading chart screenshots is a paid feature. The server is what actually
+  // enforces it (from the stored plan, never anything sent from here); this is
+  // purely so a free user meets the paywall instead of picking a file, waiting
+  // for the upload and then getting an error. Resolved before the first render
+  // because the greeting's wording depends on it.
+  const visionLocked = ((plan || (window.FX && window.FX.plan) || 'free') === 'free');
+  const [msgs, setMsgs] = uS([greetingFor(visionLocked)]);
   const [input, setInput] = uS(seed || '');
   const [typing, setTyping] = uS(false);
   const [deep, setDeep] = uS(false);           // deep-research: use the admin model's top tier
@@ -329,11 +353,14 @@ function PointerChat({ go, seed, style, onProposalTrade }) {
   const [attachErr, setAttachErr] = uS('');
   const fileRef = uR(null);
 
-  const pickImages = () => { if (fileRef.current) fileRef.current.click(); };
+  const pickImages = () => {
+    if (visionLocked) { setAttachErr(''); go('paywall'); return; }
+    if (fileRef.current) fileRef.current.click();
+  };
   const onFiles = async (e) => {
     const files = Array.from((e.target && e.target.files) || []);
     e.target.value = ''; // let the same file be re-picked after a remove
-    if (!files.length) return;
+    if (!files.length || visionLocked) return; // never stage what the server would refuse
     setAttachErr('');
     const room = MAX_ATTACH - attach.length;
     if (room <= 0) { setAttachErr(`Up to ${MAX_ATTACH} images per message.`); return; }
@@ -518,7 +545,7 @@ function PointerChat({ go, seed, style, onProposalTrade }) {
     stopGen();
     const kept = msgs.slice(0, i);
     history.current = kept.filter((x) => x.role === 'user' || x.role === 'ai').map((x) => ({ role: x.role === 'ai' ? 'assistant' : 'user', content: x.text }));
-    setMsgs(kept.length ? kept : [POINTER_GREETING]);
+    setMsgs(kept.length ? kept : [greetingFor(visionLocked)]);
     setInput(target.text);
   };
 
@@ -530,7 +557,7 @@ function PointerChat({ go, seed, style, onProposalTrade }) {
     genRef.current++; // discard any in-flight reply so it can't land in the fresh chat
     clearInterval(streamT.current); streaming.current = false;
     setTyping(false); setGenBusy(false);
-    setMsgs([POINTER_GREETING]); history.current = []; setChatId(null); setInput(''); played.current = true; setSheetOpen(false);
+    setMsgs([greetingFor(visionLocked)]); history.current = []; setChatId(null); setInput(''); played.current = true; setSheetOpen(false);
   };
   const openSessions = async () => { setSheetOpen(true); try { setSessions(await window.FXChats.list()); } catch (e) {} };
   // Deep link from a watch-task push (?goto=chat&session=…) → open that session.
@@ -545,7 +572,7 @@ function PointerChat({ go, seed, style, onProposalTrade }) {
     clearInterval(streamT.current); streaming.current = false;
     setTyping(false); setGenBusy(false);
     if (!s) return;
-    const loaded = (s.messages && s.messages.length) ? s.messages : [POINTER_GREETING];
+    const loaded = (s.messages && s.messages.length) ? s.messages : [greetingFor(visionLocked)];
     setMsgs(loaded);
     // Rebuild the backend context from the saved turns (proposals are display-only).
     history.current = loaded.filter((m) => m.role === 'user' || m.role === 'ai').map((m) => ({ role: m.role === 'ai' ? 'assistant' : 'user', content: m.text }));
@@ -605,7 +632,7 @@ function PointerChat({ go, seed, style, onProposalTrade }) {
           style={{ display: 'none' }} aria-hidden="true" tabIndex={-1} />
         <AIBar compact value={input} onChange={setInput} onSend={() => send()} deep={deep} onToggleDeep={() => setDeep(d => !d)}
           busy={genBusy} onStop={stopGen}
-          attachments={attach} onAttach={pickImages} onRemoveAttach={removeAttach} />
+          attachments={attach} onAttach={pickImages} onRemoveAttach={removeAttach} attachLocked={visionLocked} />
         {attachErr && <div style={{ fontSize: 11.5, color: 'var(--down)', marginTop: 6, paddingLeft: 2 }}>{attachErr}</div>}
         <div style={{ textAlign: 'center', fontSize: 10.5, color: 'var(--faint)', marginTop: 6, lineHeight: 1.4 }}>
           Pointer can make mistakes — verify important info before acting on it. Not financial advice.

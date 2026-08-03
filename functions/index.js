@@ -2784,10 +2784,18 @@ exports.chatPointer = functions
       throw new functions.https.HttpsError('permission-denied', 'Deep research uses our most capable model and is a Pro feature — upgrade to unlock it.')
     }
 
-    // Chart reading is an admin kill-switch away from off (absent flag = on) and
-    // needs the OpenAI key regardless of which brain drives the chat, exactly
-    // like image generation and web search.
+    // Chart reading is a PAID feature (same shape as deep research): the plan is
+    // read from the stored user doc, never from the request, so a free client
+    // that posts images anyway is refused here rather than trusted. It is also
+    // an admin kill-switch away from off (absent flag = on), and needs the
+    // OpenAI key regardless of which brain drives the chat, exactly like image
+    // generation and web search.
     if (userImages.length) {
+      if (plan === 'free') {
+        throw new functions.https.HttpsError('permission-denied',
+          'Reading chart screenshots is a Pro feature — upgrade to have Pointer analyze your charts.',
+          { code: 'plan_required', feature: 'vision' })
+      }
       if (!metering.flagEnabled(userDoc, 'vision')) {
         throw new functions.https.HttpsError('permission-denied', 'Chart image analysis is disabled on your account.')
       }

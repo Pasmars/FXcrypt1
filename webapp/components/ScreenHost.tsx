@@ -28,7 +28,7 @@ function buildProps(screen: string, app: any, payload: any) {
     case 'markets': return { go: app.go };
     case 'wallet': return { go: app.go };
     case 'signals': return { go: app.go, onUpsell: app.onUpsell };
-    case 'chat': return { go: app.go, seed: payload.seed, style: app.t.pointerStyle, onProposalTrade: () => {} };
+    case 'chat': return { go: app.go, seed: payload.seed, style: app.t.pointerStyle, plan: app.plan, onProposalTrade: () => {} };
     case 'token': return { token: payload.token, go: app.go, onTrade: app.onTrade };
     case 'bubble': return { token: payload.token, go: app.go };
     case 'trade': return { token: payload.token, side: payload.side, go: app.go, onDone: app.onDone };

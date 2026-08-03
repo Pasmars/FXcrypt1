@@ -968,6 +968,11 @@ async function runAgent({ prompt, history = [], ctx, provider = 'deepseek', apiK
   const mcpTools = (isPointer && mcp && Array.isArray(mcp.tools)) ? mcp.tools : []
   const mcpNames = new Set(mcpTools.map((t) => t.function && t.function.name))
   const tools = isPointer ? [...TOOLS_POINTER, ...mcpTools] : TOOLS
+  // Reading uploaded charts is a paid feature, so a free-plan owner must not be
+  // invited to attach a screenshot that would then be refused at the callable.
+  const visionDirective = (isPointer && ctx && ctx.plan === 'free')
+    ? `\n\nCHART UPLOADS ARE NOT ON THIS OWNER'S PLAN: they are on the free plan, which does not include reading uploaded chart screenshots. Never invite them to send, attach, upload or "share" a chart image, and never imply you are about to look at one. If they ask, say plainly that chart-image analysis is a Pro feature, then offer the thing you CAN do — name the pair and you will pull the live chart data and analyse it yourself.`
+    : ''
   const mcpDirective = mcpTools.length ? `\n\nGLASSNODE ON-CHAIN ANALYTICS: you also have Glassnode tools (named gn_*) for institutional on-chain metrics — SOPR, MVRV, realized cap, exchange in/outflows, active/new addresses, supply distribution, HODL waves, miner data and more. Use them for deep on-chain questions on major assets (BTC, ETH, etc.), and attribute the data to Glassnode.` : ''
   // Images generated during this turn (by generate_image). Collected here rather
   // than returned through the tool result so the base64/URL never re-enters the
@@ -1009,7 +1014,7 @@ ${openaiMedia.formatChartReadings(readings)}
   }
 
   const messages = [
-    { role: 'system', content: (isPointer ? SYSTEM_POINTER : SYSTEM) + dateDirective + (deep ? DEEP_DIRECTIVE : '') + mcpDirective },
+    { role: 'system', content: (isPointer ? SYSTEM_POINTER : SYSTEM) + dateDirective + (deep ? DEEP_DIRECTIVE : '') + visionDirective + mcpDirective },
     ...history.map(h => ({ role: h.role, content: h.content })),
     { role: 'user', content: prompt + visionBlock },
   ]
