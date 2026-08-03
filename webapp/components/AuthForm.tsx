@@ -16,6 +16,9 @@ export default function AuthForm({ mode }: { mode: 'login' | 'signup' }) {
   const [note, setNote] = useState('');
 
   const FXAuth = () => (typeof window !== 'undefined' ? (window as any).FXAuth : null);
+  // ClientRoot shows the first-run onboarding intro only when this is set, so a
+  // sign-in never lands anyone back in the setup flow.
+  const markNewAccount = () => { try { sessionStorage.setItem('fx_new_account', '1'); } catch {} };
 
   const submit = async () => {
     if (busy) return;
@@ -26,7 +29,7 @@ export default function AuthForm({ mode }: { mode: 'login' | 'signup' }) {
     try {
       let ref = '';
       try { ref = new URLSearchParams(window.location.search).get('ref') || ''; } catch {}
-      if (signup) await fx.signUp({ firstName, lastName, email, password, ref });
+      if (signup) { await fx.signUp({ firstName, lastName, email, password, ref }); markNewAccount(); }
       else await fx.signIn(email, password);
       // AuthRedirector in providers will route to the app once auth state flips.
       router.replace('/');
@@ -47,7 +50,7 @@ export default function AuthForm({ mode }: { mode: 'login' | 'signup' }) {
     const fx = FXAuth();
     if (!fx || !fx.googleSignIn) { setErr('Still loading — try again in a moment.'); return; }
     setErr(''); setNote(''); setBusy(true);
-    try { await fx.googleSignIn(); router.replace('/'); }
+    try { const r = await fx.googleSignIn(); if (r && r.isNewUser) markNewAccount(); router.replace('/'); }
     catch (e: any) { setErr(fx.mapError ? fx.mapError(e?.code, e?.message) : (e?.message || 'Could not sign in with Google.')); setBusy(false); }
   };
 

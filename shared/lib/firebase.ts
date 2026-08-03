@@ -31,12 +31,27 @@ const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
 // the backend stays in monitor-only mode.
 const APP_CHECK_SITE_KEY = '6Lf2IGotAAAAADM5HJH1HSkGOcNZZu9aSazur6iK';
 
-// Local development can't solve reCAPTCHA against a localhost origin. Setting
-// this makes the SDK print a debug token to the console; register that token
-// under App Check → Apps → Manage debug tokens to let a dev machine through.
+// Local development can't solve reCAPTCHA against a localhost origin, so the
+// SDK's debug-token path is the only way to attest from a dev machine.
+//
+// But a debug token is minted per browser profile and only works once it has
+// been pasted into App Check → Apps → Manage debug tokens. Setting this flag to
+// `true` unconditionally therefore mints an UNREGISTERED token on every dev
+// machine, and the exchange answers 403 — so every local page load logged
+//   "AppCheck: Fetch server returned an HTTP error status. HTTP status: 403"
+// and left window.__APPCHECK__ reading FAILED. Harmless in itself (nothing is
+// enforced and the error is caught below), but it drowns out a REAL attestation
+// failure, which is the one thing this diagnostic exists to make visible.
+//
+// So locally we attest only when a token has been supplied deliberately:
+//   localStorage.setItem('FIREBASE_APPCHECK_DEBUG_TOKEN', '<token from console>')
+// With no token, App Check simply does not initialize on localhost.
 declare global { interface Window { FIREBASE_APPCHECK_DEBUG_TOKEN?: boolean | string } }
-if (typeof window !== 'undefined' && /^(localhost|127\.0\.0\.1)$/.test(window.location.hostname)) {
-  window.FIREBASE_APPCHECK_DEBUG_TOKEN = true;
+const IS_LOCAL = typeof window !== 'undefined' && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(window.location.hostname);
+let localDebugToken: string | null = null;
+if (IS_LOCAL) {
+  try { localDebugToken = window.localStorage.getItem('FIREBASE_APPCHECK_DEBUG_TOKEN'); } catch (_) { /* storage blocked */ }
+  if (localDebugToken) window.FIREBASE_APPCHECK_DEBUG_TOKEN = localDebugToken;
 }
 
 // Whether this browser can actually attest. Enforcement turns a failure here
@@ -53,19 +68,24 @@ function showAppCheckBanner(status: Record<string, unknown>) {
   if (typeof document === 'undefined') return;
   if (!/[?&]appcheck\b/.test(window.location.search)) return;
   const ok = status.state === 'ok';
+  // "Off on purpose" is not a failure — showing it in alarm red would train
+  // everyone to ignore the banner that actually matters.
+  const skipped = status.state === 'skipped-localhost';
   const el = document.getElementById('__appcheck_banner') || document.createElement('div');
   el.id = '__appcheck_banner';
   el.setAttribute('style', [
     'position:fixed', 'inset:auto 8px 8px 8px', 'z-index:2147483647',
     'font:13px/1.45 ui-monospace,monospace', 'padding:12px 14px', 'border-radius:10px',
     'white-space:pre-wrap', 'word-break:break-word', 'max-height:45vh', 'overflow:auto',
-    'color:#fff', `background:${ok ? '#11603a' : '#7f1d1d'}`, `border:1px solid ${ok ? '#22C55E' : '#EF4444'}`,
+    'color:#fff',
+    `background:${ok ? '#11603a' : skipped ? '#3f3f46' : '#7f1d1d'}`,
+    `border:1px solid ${ok ? '#22C55E' : skipped ? '#A1A1AA' : '#EF4444'}`,
   ].join(';'));
-  el.textContent = (ok ? 'App Check OK\n' : 'App Check FAILED\n') + JSON.stringify(status, null, 1);
+  el.textContent = (ok ? 'App Check OK\n' : skipped ? 'App Check OFF (localhost)\n' : 'App Check FAILED\n') + JSON.stringify(status, null, 1);
   if (!el.parentNode) document.body.appendChild(el);
 }
 
-if (APP_CHECK_SITE_KEY && typeof window !== 'undefined') {
+if (APP_CHECK_SITE_KEY && typeof window !== 'undefined' && (!IS_LOCAL || localDebugToken)) {
   window.__APPCHECK__ = { state: 'initializing', key: APP_CHECK_SITE_KEY.slice(0, 12) + '…' };
   try {
     const ac = initializeAppCheck(app, {
@@ -96,6 +116,14 @@ if (APP_CHECK_SITE_KEY && typeof window !== 'undefined') {
     // is broken the backend still has auth, rules and rate limits behind it.
     console.warn('[appcheck] init failed; continuing without attestation:', err);
   }
+} else if (IS_LOCAL) {
+  // Say so explicitly, so ?appcheck on a dev build reports "deliberately off"
+  // rather than looking like a silent failure.
+  window.__APPCHECK__ = {
+    state: 'skipped-localhost',
+    note: "App Check is off on localhost. To attest locally, set localStorage FIREBASE_APPCHECK_DEBUG_TOKEN to a token registered under App Check → Apps → Manage debug tokens, then reload.",
+  };
+  showAppCheckBanner(window.__APPCHECK__);
 }
 
 export const auth = getAuth(app);

@@ -1,18 +1,28 @@
 // onboarding.jsx — splash, value carousel, auth, connect wallet
 const { useState: oS, useEffect: oE } = React;
 
+// Shown only to a signed-OUT visitor (the host decides — see shell.jsx / the
+// webapp's ClientRoot). Signing in to an existing account ends the flow right
+// there and hands over to the dashboard; only a brand-new account continues to
+// the connect-wallet step, and `onDone` reports which happened so the host can
+// decide whether to follow up with the first-trade nudge.
+//
 // postAuth: the webapp runs its own /login & /signup routes, so its first-run
-// onboarding starts at the carousel and skips the Auth step entirely.
+// onboarding starts at the carousel and skips the Auth step entirely — it is
+// only mounted there straight after a successful sign-up.
 function Onboarding({ onDone, dark, postAuth }) {
   const [step, setStep] = oS(postAuth ? 1 : 0); // 0 splash, 1 carousel, 2 auth, 3 connect
-  const next = () => setStep(s => (postAuth && s === 1 ? 3 : s + 1));
+  const [isNew, setIsNew] = oS(!!postAuth);
 
   return (
     <div className="fx-onboard" style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg)' }}>
-      {step === 0 && <Splash onDone={next} />}
-      {step === 1 && <Carousel onDone={next} />}
-      {step === 2 && <Auth onDone={() => setStep(3)} />}
-      {step === 3 && <ConnectWallet onDone={onDone} />}
+      {step === 0 && <Splash onDone={() => setStep(1)} />}
+      {step === 1 && <Carousel onDone={() => setStep(postAuth ? 3 : 2)} />}
+      {step === 2 && <Auth onDone={(created) => {
+        if (!created) { onDone({ isNew: false }); return; }
+        setIsNew(true); setStep(3);
+      }} />}
+      {step === 3 && <ConnectWallet onDone={() => onDone({ isNew })} />}
     </div>
   );
 }
@@ -85,7 +95,7 @@ function Auth({ onDone }) {
     try {
       if (mode === 'signup') await window.FXAuth.signUp({ email, password, ref });
       else await window.FXAuth.signIn(email, password);
-      onDone();
+      onDone(mode === 'signup');
     } catch (e) {
       setErr(window.FXAuth.mapError(e && e.code, e && e.message));
       setBusy(false);
@@ -101,7 +111,7 @@ function Auth({ onDone }) {
   const google = async () => {
     if (busy) return;
     setErr(''); setBusy(true);
-    try { await window.FXAuth.googleSignIn(); onDone(); }
+    try { const r = await window.FXAuth.googleSignIn(); onDone(!!(r && r.isNewUser)); }
     catch (e) { setErr(window.FXAuth.mapError(e && e.code, e && e.message)); setBusy(false); }
   };
   const social = (provider) => {

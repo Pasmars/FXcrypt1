@@ -122,21 +122,27 @@ export function ClientRoot({ children }: { children: React.ReactNode }) {
     } catch {}
   }, [ready, user, router]);
 
-  // First-run onboarding (per account): show the shared carousel + connect-wallet
-  // intro once after the first sign-in, mirroring the mobile flow (minus Auth,
-  // which the /login & /signup routes already handled).
-  const [onboard, setOnboard] = useState<'unknown' | 'show' | 'done'>('unknown');
+  // Onboarding runs ONCE, for an account created moments ago in this tab — the
+  // carousel + connect-wallet intro, minus Auth (the /signup route did that).
+  // It is deliberately keyed off a sessionStorage flag AuthForm sets on a
+  // successful sign-up, not off a stored per-account flag: the previous version
+  // asked Firestore whether the account had `webOnboarded` and, because every
+  // account predating that flag answers "no", replayed the whole setup flow at
+  // every single app open. Signing in never sets the flag, so a returning user
+  // now goes straight to the dashboard with no round-trip and no flash.
+  const [onboard, setOnboard] = useState<'show' | 'done'>('done');
   useEffect(() => {
     if (!ready || !user) return;
-    let alive = true;
-    (window as any).FXAuth?.getProfile?.().then((p: any) => {
-      if (alive) setOnboard(p && p.webOnboarded ? 'done' : 'show');
-    }).catch(() => { if (alive) setOnboard('done'); });
-    return () => { alive = false; };
+    // Consumed the moment it is shown, not when it completes: abandoning the
+    // intro half-way and reloading should land on the dashboard too.
+    try {
+      if (sessionStorage.getItem('fx_new_account') !== '1') return;
+      sessionStorage.removeItem('fx_new_account');
+      setOnboard('show');
+    } catch {}
   }, [ready, user]);
   const finishOnboard = useCallback(() => {
     setOnboard('done');
-    (window as any).FXAuth?.markOnboarded?.();
     try { if (sessionStorage.getItem('fx_intent') === 'wallet') { sessionStorage.removeItem('fx_intent'); router.push('/wallet'); } } catch {}
   }, [router]);
 

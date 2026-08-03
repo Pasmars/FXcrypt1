@@ -19,7 +19,10 @@ export const callSaveBotWallet = httpsCallable(fns, 'saveWallet');
 export const callRemoveBotWallet = httpsCallable(fns, 'removeWallet');
 export const callGenerateTelegramCode = httpsCallable(fns, 'generateTelegramCode');
 export const callGenerateDiscordCode = httpsCallable(fns, 'generateDiscordCode');
-export const callChatPointer = httpsCallable(fns, 'chatPointer', { timeout: 120000 });
+// 300s to match the callable's own timeout. Generating an infographic adds
+// ~30-60s on top of the agent's tool calls, and a client that gave up first
+// would show an error for a request the server actually completed and metered.
+export const callChatPointer = httpsCallable(fns, 'chatPointer', { timeout: 300000 });
 
 // Agent
 export const callRunAgentScan = httpsCallable(fns, 'runAgentScan', { timeout: 300000 });

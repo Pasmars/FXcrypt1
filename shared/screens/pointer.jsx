@@ -11,7 +11,45 @@ const { useState: uS, useEffect: uE, useRef: uR } = React;
 // Ctrl/Cmd+Enter on a hardware keyboard.
 const COMPOSER_MAX_H = 168;   // ~6 lines, then it scrolls instead of growing
 
-function AIBar({ onFocus, value, onChange, onSend, compact, deep, onToggleDeep, busy, onStop }) {
+// ─── Chart-screenshot attachments ───
+// Images travel to Pointer inside the callable payload, so they are downscaled
+// here first. 1600px on the long edge is the floor at which a chart's price axis
+// and indicator readouts stay legible to the vision model — go smaller and the
+// numbers blur into each other, which is the one failure the whole feature
+// cannot tolerate. At that size a screenshot lands around 200-400KB.
+const MAX_ATTACH = 3;
+const ATTACH_MAX_EDGE = 1600;
+const ATTACH_QUALITY = 0.85;
+
+function compressImage(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const longest = Math.max(img.width, img.height);
+      const scale = longest > ATTACH_MAX_EDGE ? ATTACH_MAX_EDGE / longest : 1;
+      const w = Math.max(1, Math.round(img.width * scale));
+      const h = Math.max(1, Math.round(img.height * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      const cx = canvas.getContext('2d');
+      if (!cx) { reject(new Error('Could not process that image.')); return; }
+      // JPEG has no alpha, so a transparent PNG would flatten onto black by
+      // default anyway — do it explicitly against the app's own background so a
+      // screenshot with rounded/transparent corners stays consistent.
+      cx.fillStyle = '#0B0E11';
+      cx.fillRect(0, 0, w, h);
+      cx.drawImage(img, 0, 0, w, h);
+      try { resolve(canvas.toDataURL('image/jpeg', ATTACH_QUALITY)); }
+      catch (e) { reject(new Error('Could not process that image.')); }
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("That file isn't a readable image.")); };
+    img.src = url;
+  });
+}
+
+function AIBar({ onFocus, value, onChange, onSend, compact, deep, onToggleDeep, busy, onStop, attachments, onAttach, onRemoveAttach }) {
   const taRef = uR(null);
   // Height follows content on every change, including programmatic ones (the
   // Edit affordance reloads a past prompt into the composer) and the reset to
@@ -31,11 +69,29 @@ function AIBar({ onFocus, value, onChange, onSend, compact, deep, onToggleDeep, 
     // Plain Enter falls through to the textarea's own newline.
   };
 
+  const shots = attachments || [];
+  // The send button lights up for an image-only message too: attaching a chart
+  // and hitting send with no text is a complete request.
+  const hasContent = !!value || shots.length > 0;
+
   return (
-    <div style={{
-      display: 'flex', alignItems: 'flex-end', gap: 8, background: 'var(--surface)',
-      borderRadius: 16, padding: '8px 8px 8px 14px', boxShadow: 'inset 0 0 0 1px var(--line)',
-    }}>
+    <div style={{ background: 'var(--surface)', borderRadius: 16, boxShadow: 'inset 0 0 0 1px var(--line)' }}>
+      {shots.length > 0 && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', padding: '10px 12px 2px' }}>
+          {shots.map((a) => (
+            <div key={a.id} style={{ position: 'relative', width: 62, height: 62, borderRadius: 10, overflow: 'hidden', boxShadow: 'inset 0 0 0 1px var(--line2)', background: 'var(--surface2)' }}>
+              <img src={a.dataUrl} alt={a.name || 'Attached chart'} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+              {onRemoveAttach && (
+                <button onClick={() => onRemoveAttach(a.id)} aria-label={`Remove ${a.name || 'image'}`} title="Remove"
+                  style={{ position: 'absolute', top: 3, right: 3, width: 19, height: 19, borderRadius: '50%', border: 'none', cursor: 'pointer', background: 'rgba(0,0,0,.62)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>
+                  <Icon name="x" size={11} color="#fff" />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, padding: '8px 8px 8px 14px' }}>
       <Icon name="spark" size={18} color="var(--accent)" style={{ flexShrink: 0, marginBottom: 9 }} />
       <textarea ref={taRef} value={value} rows={1}
         onChange={e => onChange && onChange(e.target.value)} onFocus={onFocus}
@@ -52,6 +108,13 @@ function AIBar({ onFocus, value, onChange, onSend, compact, deep, onToggleDeep, 
           // the host page ships a border-box reset.
           boxSizing: 'border-box',
         }} />
+      {onAttach && (
+        <button onClick={onAttach} aria-label="Attach a chart screenshot" disabled={shots.length >= MAX_ATTACH}
+          title={shots.length >= MAX_ATTACH ? `Up to ${MAX_ATTACH} images per message` : 'Attach a chart screenshot for Pointer to analyze'}
+          style={{ width: 38, height: 38, borderRadius: 11, border: 'none', cursor: shots.length >= MAX_ATTACH ? 'default' : 'pointer', background: shots.length ? 'var(--glow)' : 'var(--chip)', color: shots.length ? 'var(--accent)' : 'var(--muted)', opacity: shots.length >= MAX_ATTACH ? 0.5 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'all .15s' }}>
+          <Icon name="image" size={18} />
+        </button>
+      )}
       {onToggleDeep && (
         <button onClick={onToggleDeep} aria-pressed={!!deep} aria-label="Deep research"
           title={deep ? 'Deep research: on — uses the most capable model' : 'Deep research: off'}
@@ -65,10 +128,11 @@ function AIBar({ onFocus, value, onChange, onSend, compact, deep, onToggleDeep, 
           <span style={{ width: 12, height: 12, borderRadius: 3, background: 'currentColor', display: 'block' }} />
         </button>
       ) : (
-        <button onClick={onSend} aria-label="Send" title="Send (Ctrl+Enter) — Enter starts a new line" style={{ width: 38, height: 38, borderRadius: 11, border: 'none', cursor: 'pointer', background: value ? 'var(--accent)' : 'var(--chip)', color: value ? 'var(--on-accent)' : 'var(--muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'all .15s' }}>
+        <button onClick={onSend} aria-label="Send" title="Send (Ctrl+Enter) — Enter starts a new line" style={{ width: 38, height: 38, borderRadius: 11, border: 'none', cursor: 'pointer', background: hasContent ? 'var(--accent)' : 'var(--chip)', color: hasContent ? 'var(--on-accent)' : 'var(--muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'all .15s' }}>
           <Icon name={compact ? 'send' : 'arrowUR'} size={18} />
         </button>
       )}
+      </div>
     </div>
   );
 }
@@ -215,7 +279,7 @@ function PointerHome({ go, layout, openChat, user }) {
 }
 
 // ─── Full chat (with saved sessions) ───
-const POINTER_GREETING = { role: 'ai', text: 'Hey — I’m Pointer, your crypto trading copilot. I live and breathe markets, tokens and on-chain data: I can scan gems, analyze any coin, build trade setups and execute with your approval. What do you want to look at?' };
+const POINTER_GREETING = { role: 'ai', text: 'Hey — I’m Pointer, your crypto trading copilot. I live and breathe markets, tokens and on-chain data: I can scan gems, analyze any coin, build trade setups and execute with your approval. You can also send me a screenshot of a chart and I’ll read it, then check it against live data. What do you want to look at?' };
 function chatAgo(ms) {
   if (!ms) return '';
   const s = Math.max(0, (Date.now() - ms) / 1000);
@@ -231,6 +295,12 @@ function PointerChat({ go, seed, style, onProposalTrade }) {
   const [deep, setDeep] = uS(false);           // deep-research: use the admin model's top tier
   const deepRef = uR(false);                    // latest deep flag for send() closures
   uE(() => { deepRef.current = deep; }, [deep]);
+  // Chat model. Paid plans may switch between DeepSeek and ChatGPT; free plans
+  // get DeepSeek and no picker. This is only ever a REQUEST — the server decides
+  // from the stored plan, so nothing here can unlock a model the plan lacks.
+  const [model, setModel] = uS(null);           // 'deepseek' | 'openai' | null (= server default)
+  const modelRef = uR(null);
+  uE(() => { modelRef.current = model; }, [model]);
   const [chatId, setChatId] = uS(null);        // null = unsaved new chat
   const [sheetOpen, setSheetOpen] = uS(false);
   const [sessions, setSessions] = uS([]);
@@ -243,6 +313,29 @@ function PointerChat({ go, seed, style, onProposalTrade }) {
   const genRef = uR(0);        // generation counter — bumping it discards in-flight replies
   const [genBusy, setGenBusy] = uS(false); // true from send until the reply is fully shown (drives the Stop button)
   const [usage, setUsage] = uS(null); // { remaining, quota, credits, resetsAt, pack }
+  // Chart screenshots staged in the composer: [{ id, dataUrl, name }].
+  const [attach, setAttach] = uS([]);
+  const [attachErr, setAttachErr] = uS('');
+  const fileRef = uR(null);
+
+  const pickImages = () => { if (fileRef.current) fileRef.current.click(); };
+  const onFiles = async (e) => {
+    const files = Array.from((e.target && e.target.files) || []);
+    e.target.value = ''; // let the same file be re-picked after a remove
+    if (!files.length) return;
+    setAttachErr('');
+    const room = MAX_ATTACH - attach.length;
+    if (room <= 0) { setAttachErr(`Up to ${MAX_ATTACH} images per message.`); return; }
+    if (files.length > room) setAttachErr(`Only the first ${room} image${room === 1 ? '' : 's'} were added — ${MAX_ATTACH} per message.`);
+    const added = [];
+    for (const f of files.slice(0, room)) {
+      if (!f.type || f.type.indexOf('image/') !== 0) { setAttachErr('Only image files can be attached.'); continue; }
+      try { added.push({ id: Math.random().toString(36).slice(2), dataUrl: await compressImage(f), name: f.name || 'chart' }); }
+      catch (err) { setAttachErr((err && err.message) || 'Could not read that image.'); }
+    }
+    if (added.length) setAttach((a) => [...a, ...added].slice(0, MAX_ATTACH));
+  };
+  const removeAttach = (id) => setAttach((a) => a.filter((x) => x.id !== id));
 
   // Stop generation: discard a reply still in flight (network phase), or freeze
   // the typewriter where it is (keeping the partial text as the reply — the
@@ -273,7 +366,12 @@ function PointerChat({ go, seed, style, onProposalTrade }) {
   // Load the Pointer usage snapshot (quota pill / out-of-requests paywall).
   uE(() => {
     let alive = true;
-    if (window.FXAPI && window.FXAPI.getPointerUsage) window.FXAPI.getPointerUsage().then((u) => { if (alive && u) setUsage(u); }).catch(() => {});
+    if (window.FXAPI && window.FXAPI.getPointerUsage) window.FXAPI.getPointerUsage().then((u) => {
+      if (!alive || !u) return;
+      setUsage(u);
+      // Seed the picker from whatever the server says this plan defaults to.
+      if (u.models && u.models.current) setModel((m) => m || u.models.current);
+    }).catch(() => {});
     return () => { alive = false; };
   }, []);
 
@@ -283,13 +381,16 @@ function PointerChat({ go, seed, style, onProposalTrade }) {
 
   // Reveal an AI reply one keystroke at a time (typewriter effect). Resolves
   // once the full text is on screen so the caller can append any proposal after.
-  function streamReply(full, token, sources) {
+  function streamReply(full, token, sources, images) {
     return new Promise((resolve) => {
       const text = String(full == null ? '' : full);
       const src = (sources && sources.length) ? sources : null;
+      // Attached up front, not after the typewriter finishes: the graphic is the
+      // payoff, so it appears immediately and the commentary types in beneath it.
+      const imgs = (images && images.length) ? images : null;
       streaming.current = true;
       setTyping(false); // swap the "thinking" dots for live text
-      setMsgs(m => [...m, { role: 'ai', text: '', token, sources: src, streaming: true }]);
+      setMsgs(m => [...m, { role: 'ai', text: '', token, sources: src, images: imgs, streaming: true }]);
       if (!text) { streaming.current = false; resolve(); return; }
       let i = 0;
       // Scale the stride so long replies still finish in a few seconds while
@@ -333,22 +434,52 @@ function PointerChat({ go, seed, style, onProposalTrade }) {
   // discards a reply that arrives after the user cancelled.
   async function send(t) {
     const text = String((typeof t === 'string' ? t : '') || input).trim();
-    if (!text || typing || streaming.current) return;
+    // An attached chart is a complete request on its own — Pointer is told to
+    // give its read when a message arrives with images and no question.
+    const shots = attach.slice();
+    if ((!text && !shots.length) || typing || streaming.current) return;
     const gen = ++genRef.current;
     setInput('');
-    setMsgs(m => [...m, { role: 'user', text }]);
+    setAttach([]); setAttachErr('');
+    // `preview` is the local downscaled copy, shown immediately; `url` is filled
+    // in from the server's Storage upload so the saved session keeps the image.
+    const shown = shots.length ? shots.map((s) => ({ url: '', preview: s.dataUrl, prompt: s.name || 'Attached chart' })) : null;
+    setMsgs(m => [...m, { role: 'user', text, images: shown }]);
     setTyping(true);
     setGenBusy(true);
     const hist = history.current.slice();
     history.current.push({ role: 'user', content: text });
     const isDeep = deepRef.current;
     try {
-      const res = await window.FXAPI.chatPointer(text, hist, { deep: isDeep });
+      const res = await window.FXAPI.chatPointer(text, hist, { deep: isDeep, provider: modelRef.current, images: shots });
       if (genRef.current !== gen) return; // stopped while waiting — drop the reply
       const reply = res.text || res.reply || '…';
+      // Fold the chart transcription into our own copy of the history (the
+      // client owns context, not the server), so a follow-up question about the
+      // same chart still has its figures without re-uploading the image.
+      if (res.imageNote) {
+        const h = history.current;
+        for (let j = h.length - 1; j >= 0; j--) {
+          if (h[j].role === 'user') { h[j] = { role: 'user', content: text + res.imageNote }; break; }
+        }
+      }
+      // Swap in the persistable Storage URLs, keeping the local preview on
+      // screen so the thumbnail doesn't blink through a re-fetch.
+      if (shots.length && Array.isArray(res.attachments) && res.attachments.length) {
+        setMsgs(m => {
+          const n = m.slice();
+          for (let j = n.length - 1; j >= 0; j--) {
+            if (n[j].role === 'user' && n[j].images) {
+              n[j] = { ...n[j], images: n[j].images.map((im, k) => (res.attachments[k] && res.attachments[k].url ? { ...im, url: res.attachments[k].url } : im)) };
+              break;
+            }
+          }
+          return n;
+        });
+      }
       history.current.push({ role: 'assistant', content: reply });
       if (res.usage) setUsage((u) => ({ ...(u || {}), ...res.usage }));
-      await streamReply(reply, res.proposal ? (res.proposal.tokenSymbol || res.proposal.tokenAddress) : undefined, res.sources);
+      await streamReply(reply, res.proposal ? (res.proposal.tokenSymbol || res.proposal.tokenAddress) : undefined, res.sources, res.images);
       if (genRef.current !== gen) return; // stopped mid-typewriter — partial kept by stopGen
       if (res.proposal) setMsgs(m => [...m, { role: 'proposal', proposal: res.proposal }]);
     } catch (e) {
@@ -435,6 +566,15 @@ function PointerChat({ go, seed, style, onProposalTrade }) {
             </button>
           );
         })()}
+        {/* Model picker — renders itself only for plans with a real choice (paid). */}
+        {usage && usage.models && (
+          <ModelPicker
+            allowed={usage.models.allowed}
+            value={model || usage.models.current}
+            onChange={setModel}
+            disabled={genBusy}
+          />
+        )}
         <button aria-label="Chat history" onClick={openSessions} style={sbBtn}><Icon name="history" size={18} /></button>
         <button aria-label="New chat" onClick={newChat} style={{ ...sbBtn, background: 'var(--accent)', color: 'var(--on-accent)' }}><Icon name="plus" size={18} /></button>
       </div>
@@ -443,14 +583,19 @@ function PointerChat({ go, seed, style, onProposalTrade }) {
         {typing && <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--muted)', fontSize: 13 }}>
           <div style={{ width: 26, height: 26, borderRadius: 9, background: 'var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={deep ? 'compass' : 'spark'} size={15} color="var(--on-accent)" /></div>
           {deep ? <span style={{ display: 'flex', alignItems: 'center', gap: 7, fontWeight: 600, color: 'var(--accent)' }}>Researching deeply <TypingDots /></span> : <TypingDots />}
+          <SlowHint text="still working — research and graphics can take up to a minute" />
         </div>}
       </div>
       {deep && <div style={{ padding: '0 16px 6px', display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'var(--accent)', fontWeight: 600 }}>
         <Icon name="compass" size={13} /> Deep research on — replies use the most capable model and may take longer.
       </div>}
       <div style={{ padding: '8px 16px 10px', borderTop: '1px solid var(--line)', background: 'var(--bg)' }}>
+        <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={onFiles}
+          style={{ display: 'none' }} aria-hidden="true" tabIndex={-1} />
         <AIBar compact value={input} onChange={setInput} onSend={() => send()} deep={deep} onToggleDeep={() => setDeep(d => !d)}
-          busy={genBusy} onStop={stopGen} />
+          busy={genBusy} onStop={stopGen}
+          attachments={attach} onAttach={pickImages} onRemoveAttach={removeAttach} />
+        {attachErr && <div style={{ fontSize: 11.5, color: 'var(--down)', marginTop: 6, paddingLeft: 2 }}>{attachErr}</div>}
         <div style={{ textAlign: 'center', fontSize: 10.5, color: 'var(--faint)', marginTop: 6, lineHeight: 1.4 }}>
           Pointer can make mistakes — verify important info before acting on it. Not financial advice.
         </div>
@@ -481,6 +626,95 @@ function TypingDots() {
   return <div style={{ display: 'flex', gap: 4 }}>
     {[0, 1, 2].map(i => <div key={i} style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--muted)', animation: `fxdot 1s ${i * 0.15}s infinite ease-in-out` }} />)}
   </div>;
+}
+
+// Chat model picker for paid plans: a bot-head button that opens a menu.
+//
+// The providers are presented as "Model 1" / "Model 2" rather than by vendor —
+// the user picks a capability tier, not a supplier, and that keeps the UI stable
+// if a slot is ever repointed at a different provider. The wire values stay the
+// real provider ids, because that is what the server's entitlement check reads.
+const MODEL_ORDER = ['deepseek', 'openai'];
+const MODEL_LABEL = { deepseek: 'Model 1', openai: 'Model 2' };
+const MODEL_HINT  = { deepseek: 'Fast, everyday analysis', openai: 'Stronger reasoning, images & web research' };
+
+function ModelPicker({ allowed, value, onChange, disabled }) {
+  const [open, setOpen] = uS(false);
+  const wrap = uR(null);
+  // Dismiss on outside click or Escape — a menu that can only be closed by
+  // picking something is a trap on touch screens.
+  uE(() => {
+    if (!open) return;
+    const onDoc = (e) => { if (wrap.current && !wrap.current.contains(e.target)) setOpen(false); };
+    const onKey = (e) => { if (e.key === 'Escape') { setOpen(false); } };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey); };
+  }, [open]);
+
+  const options = MODEL_ORDER.filter((p) => (allowed || []).includes(p));
+  if (options.length < 2) return null; // nothing to choose from → no control at all
+  const cur = options.includes(value) ? value : options[0];
+
+  return (
+    <div ref={wrap} style={{ position: 'relative', flexShrink: 0 }}>
+      <button
+        onClick={() => !disabled && setOpen((o) => !o)}
+        disabled={disabled}
+        aria-haspopup="menu" aria-expanded={open}
+        aria-label={`AI model: ${MODEL_LABEL[cur]}. Change model`}
+        title={`AI model — ${MODEL_LABEL[cur]}`}
+        style={{
+          width: 34, height: 34, borderRadius: 10, border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          cursor: disabled ? 'default' : 'pointer', flexShrink: 0, fontFamily: 'inherit', opacity: disabled ? 0.5 : 1,
+          background: open ? 'var(--accent)' : 'var(--surface2)', color: open ? 'var(--on-accent)' : 'var(--text)',
+        }}>
+        <Icon name="robot" size={18} />
+      </button>
+      {open && (
+        <div role="menu" aria-label="Choose AI model"
+          style={{
+            position: 'absolute', top: 40, right: 0, zIndex: 40, minWidth: 210,
+            background: 'var(--surface)', borderRadius: 12, padding: 5,
+            boxShadow: '0 10px 30px rgba(0,0,0,.35), inset 0 0 0 1px var(--line)',
+          }}>
+          {options.map((p) => {
+            const active = p === cur;
+            return (
+              <button key={p} role="menuitemradio" aria-checked={active}
+                onClick={() => { onChange(p); setOpen(false); }}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left',
+                  padding: '9px 10px', borderRadius: 9, border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+                  background: active ? 'var(--surface2)' : 'transparent', color: 'var(--text)',
+                }}>
+                <Icon name="robot" size={15} color={active ? 'var(--accent)' : 'var(--muted)'} />
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ display: 'block', fontSize: 13, fontWeight: 700 }}>{MODEL_LABEL[p]}</span>
+                  <span style={{ display: 'block', fontSize: 11, color: 'var(--muted)', marginTop: 1 }}>{MODEL_HINT[p]}</span>
+                </span>
+                {active && <Icon name="check" size={14} color="var(--accent)" />}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Long waits became normal once Pointer could draw: generating an infographic
+// adds ~30-60s on top of its data gathering. A minute of silent bouncing dots
+// reads as a hang, so say something once the wait stops looking routine.
+function SlowHint({ afterMs = 15000, text }) {
+  const [show, setShow] = uS(false);
+  uE(() => {
+    setShow(false);
+    const t = setTimeout(() => setShow(true), afterMs);
+    return () => clearTimeout(t);
+  }, [afterMs]);
+  if (!show) return null;
+  return <span style={{ fontSize: 12, color: 'var(--muted)', opacity: 0.85 }}>{text}</span>;
 }
 
 // Copy-to-clipboard action for a chat message. Falls back to execCommand for
@@ -591,15 +825,18 @@ function Msg({ m, style, go, onTrade, onEdit }) {
   const ai = m.role === 'ai';
   if (m.role === 'user') {
     return <div style={{ alignSelf: 'flex-end', maxWidth: '82%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
-      <div style={{ background: 'var(--accent)', color: 'var(--on-accent)', padding: '10px 14px', borderRadius: '16px 16px 4px 16px', fontSize: 14.5, fontWeight: 500, lineHeight: 1.4, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{m.text}</div>
+      {m.images && m.images.length > 0 && <AttachedImages images={m.images} />}
+      {/* An image-only message has no bubble — an empty accent pill under the
+          thumbnail reads as a rendering bug. */}
+      {m.text && <div style={{ background: 'var(--accent)', color: 'var(--on-accent)', padding: '10px 14px', borderRadius: '16px 16px 4px 16px', fontSize: 14.5, fontWeight: 500, lineHeight: 1.4, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{m.text}</div>}
       <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-        {onEdit && (
+        {onEdit && m.text && (
           <button onClick={onEdit} aria-label="Edit this prompt" title="Edit — reloads this prompt into the composer and rewinds the chat to this point"
             style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--muted)', opacity: 0.7, fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600, padding: '2px 3px', transition: 'opacity .15s' }}>
             <Icon name="edit" size={13} /> Edit
           </button>
         )}
-        <CopyBtn text={m.text} />
+        {m.text && <CopyBtn text={m.text} />}
       </div>
     </div>;
   }
@@ -607,6 +844,8 @@ function Msg({ m, style, go, onTrade, onEdit }) {
   const body = (
     <div style={{ fontSize: 14.5, color: 'var(--text2)', lineHeight: 1.5, minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
       {m.tool && <Pill tone="accent" style={{ marginBottom: 7 }}><Icon name="sliders" size={12} /> {m.tool}</Pill>}
+      {/* Above the text so the graphic stays put while the commentary types in below it. */}
+      {m.images && m.images.length > 0 && <ChatImages images={m.images} />}
       <div>{mdRender(m.text)}{m.streaming && <span style={{ display: 'inline-block', width: 2, height: '1em', marginLeft: 1, verticalAlign: '-0.15em', background: 'var(--accent)', animation: 'fxblink 1s step-end infinite' }} />}</div>
       {!m.streaming && m.token && <TokenInline sym={m.token} go={go} />}
       {!m.streaming && m.sources && m.sources.length > 0 && <SourceChips sources={m.sources} />}
@@ -633,6 +872,101 @@ function Msg({ m, style, go, onTrade, onEdit }) {
     <div style={{ width: 28, height: 28, borderRadius: 9, background: 'var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="spark" size={15} color="var(--on-accent)" /></div>
     <div style={{ background: 'var(--surface)', padding: '11px 14px', borderRadius: '16px 16px 16px 4px', boxShadow: 'inset 0 0 0 1px var(--line)', minWidth: 0 }}>{body}</div>
   </div>;
+}
+
+// Chart screenshots the USER attached, shown above their message bubble.
+// Each item carries `preview` (the local downscaled copy, on screen instantly)
+// and `url` (the Storage copy the backend saved, which is what survives a
+// reload). Preview wins while both exist so the thumbnail never blinks; a
+// session reopened from Firestore has only `url`.
+function AttachedImages({ images }) {
+  const safeSrc = (u) => {
+    const s = String(u || '');
+    // A reopened session's URL comes back from Firestore, so it gets the same
+    // protocol check as any other link before it reaches an attribute. The
+    // local preview is a data: URL we just built ourselves.
+    if (s.startsWith('data:image/')) return s;
+    try {
+      const p = new URL(s).protocol;
+      return (p === 'http:' || p === 'https:') ? s : null;
+    } catch (_) { return null; }
+  };
+  const safe = (images || []).map((im) => ({ ...im, src: safeSrc(im.preview || im.url) })).filter((im) => im.src);
+  if (!safe.length) return null;
+  return (
+    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end', marginBottom: 4 }}>
+      {safe.map((im, i) => {
+        const thumb = (
+          <img src={im.src} alt={im.prompt || 'Attached chart'} loading="lazy"
+            style={{ display: 'block', width: '100%', height: '100%', objectFit: 'cover' }} />
+        );
+        return (
+          <div key={im.src.slice(0, 64) + i} style={{ width: 132, height: 92, borderRadius: 12, overflow: 'hidden', boxShadow: 'inset 0 0 0 1px var(--line)', background: 'var(--surface2)' }}>
+            {/* Only the persisted copy is worth opening full size — a data: URL
+                in a new tab is a multi-hundred-KB address bar entry. */}
+            {im.url && im.url.startsWith('http')
+              ? <a href={im.url} target="_blank" rel="noopener noreferrer" title="Open full size" style={{ display: 'block', width: '100%', height: '100%', lineHeight: 0 }}>{thumb}</a>
+              : thumb}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Infographics/charts Pointer generated with generate_image. The backend stores
+// the PNG in Cloud Storage and returns a download-token URL, so what lands here
+// is just a link — small enough to persist with the saved chat session.
+function ChatImages({ images }) {
+  // Same reasoning as SourceChips: only ever put http(s) in the DOM. These URLs
+  // come from our own backend, but this is the second lock — if the shape of
+  // that response ever changes, nothing exotic reaches an attribute.
+  const safeSrc = (u) => {
+    try {
+      const p = new URL(String(u)).protocol;
+      return (p === 'http:' || p === 'https:') ? String(u) : null;
+    } catch (_) { return null; }
+  };
+  const safe = (images || []).map((im) => ({ ...im, url: safeSrc(im.url) })).filter((im) => im.url);
+  if (!safe.length) return null;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 9 }}>
+      {safe.map((im, i) => <ChatImage key={im.url || i} im={im} />)}
+    </div>
+  );
+}
+
+function ChatImage({ im }) {
+  const [state, setState] = uS('loading'); // loading → ok | error
+  // The spec doubles as alt text — it literally describes what was drawn.
+  const alt = (im.prompt || 'Pointer-generated crypto graphic').slice(0, 180);
+  if (state === 'error') {
+    return <div style={{ fontSize: 12.5, color: 'var(--muted)', padding: '10px 12px', borderRadius: 12, boxShadow: 'inset 0 0 0 1px var(--line)' }}>
+      This graphic could not be loaded. Ask Pointer to generate it again.
+    </div>;
+  }
+  return (
+    <div style={{ position: 'relative', borderRadius: 12, overflow: 'hidden', boxShadow: 'inset 0 0 0 1px var(--line)', background: 'var(--surface2)' }}>
+      {state === 'loading' && (
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12.5, color: 'var(--muted)' }}>
+          Loading graphic…
+        </div>
+      )}
+      <a href={im.url} target="_blank" rel="noopener noreferrer" title="Open full size" style={{ display: 'block', lineHeight: 0 }}>
+        <img
+          src={im.url} alt={alt} loading="lazy"
+          onLoad={() => setState('ok')} onError={() => setState('error')}
+          style={{ display: 'block', width: '100%', height: 'auto', maxWidth: '100%', minHeight: state === 'loading' ? 180 : 0, cursor: 'zoom-in' }}
+        />
+      </a>
+      {state === 'ok' && (
+        <a href={im.url} download target="_blank" rel="noopener noreferrer" aria-label="Download graphic" title="Download"
+          style={{ position: 'absolute', right: 8, bottom: 8, width: 30, height: 30, borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,.55)', color: '#fff', textDecoration: 'none', backdropFilter: 'blur(4px)' }}>
+          <Icon name="download" size={14} color="#fff" />
+        </a>
+      )}
+    </div>
+  );
 }
 
 // Clickable, shortened reference links for sources Pointer consulted via

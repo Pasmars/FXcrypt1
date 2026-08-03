@@ -1,26 +1,32 @@
 // metering.js — per-user usage metering for Pointer (AI) requests and gem scans.
 //
 // Model (fields on users/{uid}):
-//   pointerUsage / gemScanUsage : { period:'YYYY-MM', used:N }  monthly counter
+//   pointerUsage / gemScanUsage / imageUsage
+//                               : { period:'YYYY-MM', used:N }  monthly counter
 //   pointerCredits              : N  non-expiring credits (spent AFTER the monthly
 //                                     plan allowance is exhausted)
-//   featureFlags                : { pointer, deepResearch, scanner, signals, autoExecute }
+//   featureFlags                : { pointer, deepResearch, images, scanner, signals, autoExecute }
 //                                 absent = enabled (default on)
-//   userLimits                  : { pointerQuota, gemScanQuota, maxBuyUsd, dailyTradeCap }
+//   userLimits                  : { pointerQuota, gemScanQuota, imageQuota, maxBuyUsd, dailyTradeCap }
 //                                 admin per-user overrides; null/absent = plan default
 //
-// Plan quotas default to Free 10 / Pro(=Basic) 50 / Elite 200 for Pointer, and are
-// admin-configurable via config/billing.pointerQuota (surfaced on cfg.raw).
+// Plan quotas default to Free 10 / Pro(=Basic) 50 / Elite 200 for Pointer, Free 2 /
+// Pro 25 / Elite 100 for images, and are admin-configurable via
+// config/billing.pointerQuota / .imageQuota (surfaced on cfg.raw).
 const admin = require('firebase-admin')
 const FieldValue = () => admin.firestore.FieldValue
 
+// Image generation is metered separately from chat because its unit cost is an
+// order of magnitude higher (a legible data infographic must render at 'medium'
+// quality), so it cannot share the Pointer allowance without blowing the budget.
 const FALLBACK_QUOTA = {
   pointer: { free: 10, pro: 50, elite: 200 },
   gemScan: { free: 5, pro: 50, elite: 200 },
+  image:   { free: 2, pro: 25, elite: 100 },
 }
-const USAGE_FIELD  = { pointer: 'pointerUsage', gemScan: 'gemScanUsage' }
-const CREDIT_FIELD = { pointer: 'pointerCredits', gemScan: null } // only Pointer has credits
-const LIMIT_KEY    = { pointer: 'pointerQuota', gemScan: 'gemScanQuota' }
+const USAGE_FIELD  = { pointer: 'pointerUsage', gemScan: 'gemScanUsage', image: 'imageUsage' }
+const CREDIT_FIELD = { pointer: 'pointerCredits', gemScan: null, image: null } // only Pointer has credits
+const LIMIT_KEY    = { pointer: 'pointerQuota', gemScan: 'gemScanQuota', image: 'imageQuota' }
 
 // Current billing period as 'YYYY-MM' (UTC).
 function currentPeriod(d = new Date()) {
@@ -36,7 +42,7 @@ function nextPeriodStart(d = new Date()) {
 function planQuota(cfg, plan, kind = 'pointer') {
   const p = ['free', 'pro', 'elite'].includes(plan) ? plan : 'free'
   const raw = (cfg && cfg.raw) || {}
-  const cfgMap = kind === 'gemScan' ? raw.gemScanQuota : raw.pointerQuota
+  const cfgMap = kind === 'gemScan' ? raw.gemScanQuota : (kind === 'image' ? raw.imageQuota : raw.pointerQuota)
   const fb = FALLBACK_QUOTA[kind] || FALLBACK_QUOTA.pointer
   const v = cfgMap && cfgMap[p] != null ? parseInt(cfgMap[p]) : fb[p]
   return Number.isFinite(v) ? v : fb[p]

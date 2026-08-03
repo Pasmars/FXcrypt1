@@ -77,11 +77,21 @@ firebase.initializeApp(firebaseConfig);
 // wallets and the admin allowlist. While the key is empty App Check does not
 // initialize and nothing changes.
 const APP_CHECK_SITE_KEY = '6Lf2IGotAAAAADM5HJH1HSkGOcNZZu9aSazur6iK';
-if (APP_CHECK_SITE_KEY) {
+// Dev machines can't solve reCAPTCHA against localhost, so the debug token is
+// the only way to attest locally. It is minted per browser profile though, and
+// only works once allowlisted under App Check -> Manage debug tokens — so
+// setting the flag unconditionally just mints an UNREGISTERED token and the
+// exchange 403s on every load, burying any real failure. Mirrors the same fix in
+// shared/lib/firebase.ts: attest locally only when a token is supplied via
+//   localStorage.setItem('FIREBASE_APPCHECK_DEBUG_TOKEN', '<token>')
+var IS_LOCAL = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+var localDebugToken = null;
+if (IS_LOCAL) {
+  try { localDebugToken = localStorage.getItem('FIREBASE_APPCHECK_DEBUG_TOKEN'); } catch (e) { /* storage blocked */ }
+  if (localDebugToken) self.FIREBASE_APPCHECK_DEBUG_TOKEN = localDebugToken;
+}
+if (APP_CHECK_SITE_KEY && (!IS_LOCAL || localDebugToken)) {
   try {
-    // Dev machines can't solve reCAPTCHA against localhost — the debug token is
-    // printed to the console; allowlist it under App Check -> Manage debug tokens.
-    if (/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) self.FIREBASE_APPCHECK_DEBUG_TOKEN = true;
     const ac = firebase.appCheck();
     ac.activate(
       new firebase.appCheck.ReCaptchaEnterpriseProvider(APP_CHECK_SITE_KEY),
@@ -96,9 +106,7 @@ if (APP_CHECK_SITE_KEY) {
       var el = document.getElementById('__appcheck_banner') || document.createElement('div');
       el.id='__appcheck_banner';
       el.setAttribute('style','position:fixed;inset:auto 8px 8px 8px;z-index:2147483647;font:13px/1.45 ui-monospace,monospace;padding:12px 14px;border-radius:10px;white-space:pre-wrap;word-break:break-word;max-height:45vh;overflow:auto;color:#fff;background:'+(ok?'#11603a':'#7f1d1d')+';border:1px solid '+(ok?'#22C55E':'#EF4444'));
-      el.textContent=(ok?'App Check OK
-':'App Check FAILED
-')+JSON.stringify(st,null,1);
+      el.textContent=(ok?'App Check OK\n':'App Check FAILED\n')+JSON.stringify(st,null,1);
       if(!el.parentNode) document.body.appendChild(el);
     };
     window.__APPCHECK__ = { state: 'initializing' };
@@ -111,6 +119,9 @@ if (APP_CHECK_SITE_KEY) {
     // are still gated server-side by the verified-email allowlist.
     console.warn('[appcheck] init failed; continuing without attestation:', e);
   }
+} else if (IS_LOCAL) {
+  // Off on purpose, so ?appcheck reports that rather than looking like a fault.
+  window.__APPCHECK__ = { state: 'skipped-localhost', note: 'App Check is off on localhost. Set localStorage FIREBASE_APPCHECK_DEBUG_TOKEN to a registered debug token to attest locally.' };
 }
 
 const auth = firebase.auth();
@@ -361,11 +372,11 @@ function showUser(u,d){
     </div>
     <div style="font-weight:700;margin:6px 0 6px;font-size:13px">Feature access</div>
     <div style="margin-bottom:8px">
-      ${chk('ff_pointer','Pointer',ff.pointer)}${chk('ff_deep','Deep research',ff.deepResearch)}${chk('ff_scanner','Gem scanner',ff.scanner)}${chk('ff_signals','Signals',ff.signals)}${chk('ff_auto','Auto-execute',ff.autoExecute)}
+      ${chk('ff_pointer','Pointer',ff.pointer)}${chk('ff_deep','Deep research',ff.deepResearch)}${chk('ff_images','Image gen',ff.images)}${chk('ff_scanner','Gem scanner',ff.scanner)}${chk('ff_signals','Signals',ff.signals)}${chk('ff_auto','Auto-execute',ff.autoExecute)}
     </div>
     <div style="font-weight:700;margin:6px 0 6px;font-size:13px">Limit overrides <span class="muted" style="font-weight:400">(blank = plan default)</span></div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
-      ${lim('ul_pq','Pointer quota/mo',ul.pointerQuota)}${lim('ul_gq','Gem scans/mo',ul.gemScanQuota)}${lim('ul_mb','Max auto-buy $',ul.maxBuyUsd)}${lim('ul_dc','Daily auto-trades',ul.dailyTradeCap)}
+      ${lim('ul_pq','Pointer quota/mo',ul.pointerQuota)}${lim('ul_gq','Gem scans/mo',ul.gemScanQuota)}${lim('ul_iq','Images/mo',ul.imageQuota)}${lim('ul_mb','Max auto-buy $',ul.maxBuyUsd)}${lim('ul_dc','Daily auto-trades',ul.dailyTradeCap)}
     </div>
     <button class="btn" id="sc_btn" style="width:100%;margin-bottom:8px">Save controls</button>
 
@@ -383,11 +394,12 @@ function showUser(u,d){
   bg.querySelector('#sc_btn').onclick = async ()=>{
     const featureFlags = {
       pointer:document.getElementById('ff_pointer').checked, deepResearch:document.getElementById('ff_deep').checked,
+      images:document.getElementById('ff_images').checked,
       scanner:document.getElementById('ff_scanner').checked, signals:document.getElementById('ff_signals').checked,
       autoExecute:document.getElementById('ff_auto').checked,
     };
     const num = v => v===''? null : v;
-    const userLimits = { pointerQuota:num(gv('ul_pq')), gemScanQuota:num(gv('ul_gq')), maxBuyUsd:num(gv('ul_mb')), dailyTradeCap:num(gv('ul_dc')) };
+    const userLimits = { pointerQuota:num(gv('ul_pq')), gemScanQuota:num(gv('ul_gq')), imageQuota:num(gv('ul_iq')), maxBuyUsd:num(gv('ul_mb')), dailyTradeCap:num(gv('ul_dc')) };
     try{ await call('adminSetUserLimits',{uid:u.uid,featureFlags,userLimits}); toast('Controls saved'); }catch(e){ toast(e.message,true); }
   };
 }
@@ -396,7 +408,7 @@ async function showConfig(){
   let cfg = {};
   try{ const r = await call('adminGetConfig'); cfg = r.config||{}; }catch(e){ toast(e.message,true); return; }
   const ra = cfg.receivingAddresses||{}, pp = cfg.planPricesUsd||{}, sp = cfg.stripePriceIds||{};
-  const pq = cfg.pointerQuota||{}, gq = cfg.gemScanQuota||{}, cpk = cfg.creditPack||{}, at = cfg.autoTrade||{};
+  const pq = cfg.pointerQuota||{}, gq = cfg.gemScanQuota||{}, iq = cfg.imageQuota||{}, cpk = cfg.creditPack||{}, at = cfg.autoTrade||{};
   const tf = cfg.tradingFee||{}, fw = cfg.feeWallets||{};
   const bg = document.createElement('div'); bg.className='modal-bg';
   const fld = (id,label,val,ph)=>`<label style="display:block;margin-bottom:10px"><div class="muted" style="font-size:12px;margin-bottom:4px">${label}</div><input id="${id}" value="${esc(val||'')}" placeholder="${ph||''}" style="width:100%"/></label>`;
@@ -418,12 +430,15 @@ async function showConfig(){
       <option value="deepseek"${(cfg.aiProvider||'deepseek')==='deepseek'?' selected':''}>DeepSeek</option>
       <option value="openai"${cfg.aiProvider==='openai'?' selected':''}>ChatGPT (OpenAI)</option>
     </select>
-    <div class="muted" style="font-size:12px;margin:6px 0 0">Applies to every user's in-app Pointer. The matching API key must be set in Secret Manager.</div>
+    <div class="muted" style="font-size:12px;margin:6px 0 0">Default model for <b>paid</b> plans (Pro/Elite), who can also switch between ChatGPT and DeepSeek in the app. <b>Free plans always run on DeepSeek</b> and ignore this setting. The matching API key must be set in Secret Manager.</div>
 
     <div style="font-weight:700;margin:16px 0 8px">Pointer request quotas / month</div>
     <div style="display:flex;gap:10px">${fld('q_pf','Free',pq.free!=null?pq.free:10)}${fld('q_pp','Basic (Pro)',pq.pro!=null?pq.pro:50)}${fld('q_pe','Elite',pq.elite!=null?pq.elite:200)}</div>
     <div style="font-weight:700;margin:8px 0 8px">Gem scan quotas / month</div>
     <div style="display:flex;gap:10px">${fld('q_gf','Free',gq.free!=null?gq.free:5)}${fld('q_gp','Basic (Pro)',gq.pro!=null?gq.pro:50)}${fld('q_ge','Elite',gq.elite!=null?gq.elite:200)}</div>
+    <div style="font-weight:700;margin:8px 0 8px">Pointer image generations / month</div>
+    <div style="display:flex;gap:10px">${fld('q_if','Free',iq.free!=null?iq.free:2)}${fld('q_ip','Basic (Pro)',iq.pro!=null?iq.pro:25)}${fld('q_ie','Elite',iq.elite!=null?iq.elite:100)}</div>
+    <div class="muted" style="font-size:12px;margin:6px 0 0">Images are generated by ChatGPT (gpt-image-2) and always billed to the OpenAI key, whichever brain Pointer is set to above. They cost far more per unit than a chat request — keep these low.</div>
     <div style="font-weight:700;margin:8px 0 8px">Pointer credit pack</div>
     <div style="display:flex;gap:10px">${fld('cp_usd','Price (USD)',cpk.usd!=null?cpk.usd:10)}${fld('cp_cr','Credits',cpk.credits!=null?cpk.credits:50)}</div>
     <div style="font-weight:700;margin:8px 0 8px">Auto-trade controls</div>
@@ -447,15 +462,25 @@ async function showConfig(){
   bg.onclick = e=>{ if(e.target===bg||e.target.id==='cclose') bg.remove(); };
   document.body.appendChild(bg);
   const v = id=>document.getElementById(id).value.trim();
+  // Unlike the other quotas, 0 is a real setting for images (turn the feature
+  // off for a plan), so an explicit 0 must survive instead of falling back.
+  const qz = (id,dflt)=>{ const s=v(id); if(s==='') return dflt; const n=parseInt(s); return Number.isFinite(n)&&n>=0?n:dflt; };
   document.getElementById('csave').onclick = async ()=>{
     try{
       await call('adminSetConfig',{ config:{
         receivingAddresses:{eth:v('r_eth'),bsc:v('r_bsc'),base:v('r_base'),sol:v('r_sol')},
         planPricesUsd:{pro:parseInt(v('p_pro'))||29,elite:parseInt(v('p_elite'))||99},
         stripePriceIds:{proMonthly:v('s_pro'),eliteMonthly:v('s_elite')},
-        frontendUrl:v('furl'), aiProvider:document.getElementById('aimodel').value, adminEmails:(cfg.adminEmails||[]),
+        frontendUrl:v('furl'), aiProvider:document.getElementById('aimodel').value,
+        // Only echo the allowlist back when the config doc actually has one. It
+        // often doesn't — admins can come from the hardcoded fallback — and the
+        // old `|| []` sent an empty array, which the server correctly read as
+        // "remove every admin, including you" and rejected. That made EVERY save
+        // fail with "You cannot remove your own account from the admin list."
+        ...(Array.isArray(cfg.adminEmails) && cfg.adminEmails.length ? { adminEmails: cfg.adminEmails } : {}),
         pointerQuota:{free:parseInt(v('q_pf'))||10,pro:parseInt(v('q_pp'))||50,elite:parseInt(v('q_pe'))||200},
         gemScanQuota:{free:parseInt(v('q_gf'))||5,pro:parseInt(v('q_gp'))||50,elite:parseInt(v('q_ge'))||200},
+        imageQuota:{free:qz('q_if',2),pro:qz('q_ip',25),elite:qz('q_ie',100)},
         creditPack:{usd:parseInt(v('cp_usd'))||10,credits:parseInt(v('cp_cr'))||50},
         autoTrade:{globalEnabled:document.getElementById('at_on').checked,defaultMaxBuyUsd:parseFloat(v('at_mb'))||100,defaultDailyTradeCap:parseInt(v('at_dc'))||10},
         tradingFee:{free:parseFloat(v('tf_free'))||0,pro:parseFloat(v('tf_pro'))||0,elite:parseFloat(v('tf_elite'))||0},

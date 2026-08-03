@@ -105,6 +105,33 @@ function isAdminEmail(context, cfg) {
   return cfg.adminEmails.includes(email)
 }
 
+// ── Pointer model entitlement by plan ───────────────────────────────────────
+// Free plans run on DeepSeek only; paid plans (pro/elite) may use either DeepSeek
+// or ChatGPT. This is an entitlement, so it is decided SERVER-SIDE on the caller's
+// stored plan — a client asking for 'openai' on a free account is downgraded, not
+// trusted, and it holds for automated runs (watch-tasks, digests) too.
+const PAID_PLANS = ['pro', 'elite']
+
+function pointerProvidersFor(plan) {
+  return PAID_PLANS.includes(plan) ? ['deepseek', 'openai'] : ['deepseek']
+}
+
+// Resolve which provider a turn actually runs on.
+//   plan      — the user's stored plan
+//   requested — what the client asked for (may be undefined/absent)
+//   cfg       — billingConfig(); cfg.raw.aiProvider is the admin default
+// Returns { provider, allowed, downgraded } — `downgraded` is true when a paid-only
+// model was asked for on a free plan, so the caller can surface an upsell.
+function resolvePointerProvider({ plan, requested, cfg }) {
+  const allowed = pointerProvidersFor(plan)
+  const adminDefault = (cfg && cfg.raw && cfg.raw.aiProvider) === 'openai' ? 'openai' : 'deepseek'
+  const want = requested === 'openai' || requested === 'deepseek' ? requested : null
+  // Paid: honour an explicit choice, else the admin default.
+  if (allowed.includes('openai')) return { provider: want || adminDefault, allowed, downgraded: false }
+  // Free: always DeepSeek, whatever the client or the admin default says.
+  return { provider: 'deepseek', allowed, downgraded: (want || adminDefault) === 'openai' }
+}
+
 // Server-only entitlement write. plan: 'free'|'pro'|'elite'.
 async function grantPlan(db, uid, plan, opts = {}) {
   const now = Date.now()
@@ -321,6 +348,7 @@ function feeUsd(map, px) {
 
 module.exports = {
   billingConfig, isAdminEmail, grantPlan, computeCryptoAmount, verifyPayment,
+  pointerProvidersFor, resolvePointerProvider,
   processReferralReward, resolveTradeFee, tradeFeeFor, feeLine, aggregateTradeFees, feeUsd,
   STABLECOINS, DEFAULT_PRICES, isStable,
 }

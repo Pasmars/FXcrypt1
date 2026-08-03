@@ -11,6 +11,7 @@ import {
   onAuthStateChanged,
   GoogleAuthProvider,
   signInWithPopup,
+  getAdditionalUserInfo,
 } from 'firebase/auth';
 import { doc, setDoc, getDoc } from 'firebase/firestore';
 
@@ -95,12 +96,15 @@ window.FXAuth = {
     return cred;
   },
   // Real Google OAuth via Firebase. Creates the profile doc on first sign-in.
+  // `isNewUser` tells the caller whether this created an account or signed in to
+  // an existing one — the onboarding flow only runs for the former.
   googleSignIn: async () => {
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' });
     const cred = await signInWithPopup(auth, provider);
     await ensureProfileDoc(cred.user);
-    return cred;
+    const info = getAdditionalUserInfo(cred);
+    return { user: cred.user, isNewUser: !!(info && info.isNewUser) };
   },
   reset: (email) => sendPasswordResetEmail(auth, String(email).trim()),
   signOut: () => signOut(auth),
@@ -113,13 +117,6 @@ window.FXAuth = {
     } catch (e) {
       return null;
     }
-  },
-  // One-time webapp first-run flag — per account (Firestore), not per device,
-  // so onboarding never re-appears on a new browser.
-  markOnboarded: async () => {
-    const u = auth.currentUser;
-    if (!u) return;
-    try { await setDoc(doc(db, 'users', u.uid), { webOnboarded: true }, { merge: true }); } catch (e) { /* non-critical */ }
   },
   mapError,
 };

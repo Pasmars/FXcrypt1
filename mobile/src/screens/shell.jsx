@@ -25,19 +25,28 @@ function App() {
     catch (e) { return 'pointer'; }
   });
   const [stack, setStack] = shS([]); // overlay routes
-  const [phase, setPhase] = shS('onboard');
+  const [phase, setPhase] = shS('boot'); // boot → app (signed in) | onboard (signed out)
   const [wizard, setWizard] = shS(false);
   const [chatSeed, setChatSeed] = shS(null);
 
   shE(() => { if (rootRef.current) applyTheme(rootRef.current, t.dark, t.accent); }, [t.dark, t.accent]);
 
-  // Returning users with a live Firebase session skip onboarding.
+  // Onboarding is for signed-OUT visitors only. Anyone with a live Firebase
+  // session goes straight to the dashboard — so we hold on a plain boot splash
+  // until auth has actually resolved rather than opening on the setup flow and
+  // yanking it away (which is what made returning users see setup at all).
+  // Staying subscribed also means a sign-out anywhere returns here by itself.
   shE(() => {
+    if (!window.FXAuth) { setPhase('onboard'); return; }
     let mounted = true;
-    if (window.FXAuth) {
-      window.FXAuth.ready().then(() => { if (mounted && window.FXAuth.currentUser()) setPhase('app'); });
-    }
-    return () => { mounted = false; };
+    const unsub = window.FXAuth.onChange((u) => {
+      if (!mounted) return;
+      if (!u) { setPhase('onboard'); setStack([]); setWizard(false); return; }
+      // Mid-onboarding the Auth step owns the handover (a brand-new account
+      // still gets the connect-wallet step), so only auto-enter from boot.
+      setPhase((prev) => (prev === 'onboard' ? prev : 'app'));
+    });
+    return () => { mounted = false; try { unsub && unsub(); } catch (e) {} };
   }, []);
 
   // Re-render screens when the live data layer refreshes window.FX.
@@ -179,11 +188,14 @@ function App() {
 
   const body = (
     <div ref={rootRef} style={{ height: '100%', position: 'relative', fontFamily: 'inherit', overflow: 'hidden', background: 'var(--bg)', color: 'var(--text)' }}>
-      {phase === 'onboard' && <Onboarding dark={t.dark} onDone={() => {
+      {phase === 'boot' && <BootSplash />}
+      {phase === 'onboard' && <Onboarding dark={t.dark} onDone={({ isNew } = {}) => {
         let intent = null;
         try { intent = sessionStorage.getItem('fx_intent'); sessionStorage.removeItem('fx_intent'); } catch (e) {}
         setPhase('app');
-        if (intent === 'wallet') setTab('wallet'); else setWizard(true);
+        // The first-trade nudge is a welcome for a new account, not something a
+        // returning user should meet every time they sign in.
+        if (intent === 'wallet') setTab('wallet'); else if (isNew) setWizard(true);
       }} />}
       {phase === 'app' && <>
         <div className="fx-main" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -203,6 +215,18 @@ function App() {
   // Real mobile web app: render full-screen (no iOS device frame, no tweaks panel —
   // those were prototype scaffolding). Appearance is controlled from Profile.
   return body;
+}
+
+// Held for the few hundred ms Firebase needs to restore the session from
+// storage. Deliberately plain — it must not look like step 1 of anything, or a
+// returning user is back to "the app starts me at the setup screen".
+function BootSplash() {
+  return (
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20, background: 'var(--bg)' }}>
+      <Mark size={72} />
+      <span style={{ width: 18, height: 18, border: '2px solid var(--line2)', borderTopColor: 'var(--accent)', borderRadius: '50%', animation: 'fxspin .7s linear infinite' }} />
+    </div>
+  );
 }
 
 function BottomNav({ tab, onTab }) {

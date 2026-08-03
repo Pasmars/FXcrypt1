@@ -25,6 +25,7 @@ const gemTracker     = require('./lib/gem-tracker')
 const notify         = require('./lib/notify')
 const copytrader     = require('./lib/copytrader')
 const mcpLib         = require('./lib/mcp')
+const openaiMedia    = require('./lib/openai-media')
 const ratelimit      = require('./lib/ratelimit')
 const appcheck       = require('./lib/appcheck')
 const crypto2        = require('crypto')
@@ -1631,8 +1632,9 @@ exports.processPointerTasks = functions.region('europe-west1')
     for (const [chain, set] of Object.entries(byChain)) chainPx[chain] = await positions.batchPrices(chain, [...set])
 
     const cfg = await payments.billingConfig(db)
-    const prov = cfg.raw.aiProvider === 'openai' ? 'openai' : 'deepseek'
-    const apiKey = prov === 'openai' ? SECRET_OPENAI.value() : SECRET_DEEPSEEK.value()
+    // Provider is resolved PER USER inside the loop — model access is a plan
+    // entitlement (free = DeepSeek only), so it can't be hoisted out here.
+    const keyFor = (p) => (p === 'openai' ? SECRET_OPENAI.value() : SECRET_DEEPSEEK.value())
 
     for (const doc of snap.docs) {
       const t = doc.data()
@@ -1655,6 +1657,8 @@ exports.processPointerTasks = functions.region('europe-west1')
       const uSnap = await db.doc(`users/${uid}`).get()
       const uDoc = uSnap.exists ? uSnap.data() : {}
       const plan = ['free', 'pro', 'elite'].includes(uDoc.plan) ? uDoc.plan : 'free'
+      const prov = payments.resolvePointerProvider({ plan, cfg }).provider
+      const apiKey = keyFor(prov)
       let spent
       try {
         spent = await metering.consume(db, uid, { kind: 'pointer', plan, cfg, count: 1, flagKey: 'pointer' })
@@ -1674,7 +1678,7 @@ exports.processPointerTasks = functions.region('europe-west1')
         if (!apiKey) throw new Error('No AI provider key configured')
         const { text } = await agentLib.runAgent({
           prompt, history: [], provider: prov, apiKey, surface: 'pointer',
-          ctx: { uid, db, admin, trader, gemscanner, encryption, masterSecret: MASTER_SECRET(), heliusKey: SECRET_HELIUS.value() || null, moralisKey: SECRET_MORALIS.value() || null },
+          ctx: { uid, db, admin, trader, gemscanner, encryption, masterSecret: MASTER_SECRET(), heliusKey: SECRET_HELIUS.value() || null, moralisKey: SECRET_MORALIS.value() || null, openaiKey: SECRET_OPENAI.value() || null },
         })
         // Save as a chat session so the push deep-links into a real conversation.
         const chatRef = db.collection(`users/${uid}/pointerChats`).doc()
@@ -1719,9 +1723,9 @@ exports.processDailyDigest = functions.region('europe-west1')
     if (snap.empty) return null
 
     const cfg = await payments.billingConfig(db)
-    const prov = cfg.raw.aiProvider === 'openai' ? 'openai' : 'deepseek'
-    const apiKey = prov === 'openai' ? SECRET_OPENAI.value() : SECRET_DEEPSEEK.value()
-    if (!apiKey) return null
+    // Per user, not per run: model access is a plan entitlement (free = DeepSeek).
+    const keyFor = (p) => (p === 'openai' ? SECRET_OPENAI.value() : SECRET_DEEPSEEK.value())
+    if (!keyFor('deepseek') && !keyFor('openai')) return null
     const axios = require('axios')
 
     for (const userDoc of snap.docs) {
@@ -1731,6 +1735,9 @@ exports.processDailyDigest = functions.region('europe-west1')
         // Once per day, even across scheduler retries/restarts.
         if (d.digest.lastSentAt && Date.now() - d.digest.lastSentAt < 20 * 3600000) continue
         const plan = ['free', 'pro', 'elite'].includes(d.plan) ? d.plan : 'free'
+        const prov = payments.resolvePointerProvider({ plan, cfg }).provider
+        const apiKey = keyFor(prov)
+        if (!apiKey) continue
 
         // ── Gather structured facts (never free text from external sources) ──
         const facts = []
@@ -1776,7 +1783,7 @@ exports.processDailyDigest = functions.region('europe-west1')
           const prompt = `[Automated daily digest] Compose the owner's morning crypto digest from these facts about their account:\n- ${facts.join('\n- ')}\nAdd one line of overall market context (you may use ONE tool call for market movers if helpful). Format: short, warm, mobile-friendly markdown — 4-6 lines max, lead with their portfolio. End with one actionable suggestion.`
           const { text } = await agentLib.runAgent({
             prompt, history: [], provider: prov, apiKey, surface: 'pointer',
-            ctx: { uid, db, admin, trader, gemscanner, encryption, masterSecret: MASTER_SECRET(), heliusKey: SECRET_HELIUS.value() || null, moralisKey: SECRET_MORALIS.value() || null },
+            ctx: { uid, db, admin, trader, gemscanner, encryption, masterSecret: MASTER_SECRET(), heliusKey: SECRET_HELIUS.value() || null, moralisKey: SECRET_MORALIS.value() || null, openaiKey: SECRET_OPENAI.value() || null },
           })
           const chatRef = db.collection(`users/${uid}/pointerChats`).doc()
           const dayStr = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
@@ -2617,6 +2624,9 @@ exports.processDiscordAgent = discordFn
       uid, db, admin, trader, gemscanner, encryption,
       masterSecret: MASTER_SECRET(), heliusKey: SECRET_HELIUS.value() || null,
       moralisKey: SECRET_MORALIS.value() || null,
+      // Upgrades web_search to ChatGPT's hosted search here too. Image
+      // generation stays Pointer-only — Discord has nowhere to render it.
+      openaiKey: SECRET_OPENAI.value() || null,
     }
 
     try {
@@ -2625,8 +2635,12 @@ exports.processDiscordAgent = discordFn
         const [stateSnap, userSnap] = await Promise.all([stateRef.get(), db.doc(`users/${uid}`).get()])
         const history = (stateSnap.exists && stateSnap.data().history) || []
 
-        // Per-user AI model choice (set from the app); default DeepSeek.
-        const provider = (userSnap.data()?.botSettings?.aiProvider) === 'openai' ? 'openai' : 'deepseek'
+        // Per-user model choice, but gated by the same plan entitlement as the
+        // in-app Pointer — otherwise Discord would be a free route to ChatGPT.
+        const uData = userSnap.exists ? userSnap.data() : {}
+        const dPlan = ['free', 'pro', 'elite'].includes(uData.plan) ? uData.plan : 'free'
+        const dCfg = await payments.billingConfig(db)
+        const provider = payments.resolvePointerProvider({ plan: dPlan, requested: uData?.botSettings?.aiProvider, cfg: dCfg }).provider
         const apiKey = provider === 'openai' ? SECRET_OPENAI.value() : SECRET_DEEPSEEK.value()
         if (!apiKey) { await edit({ content: `⚠️ No API key configured for ${provider === 'openai' ? 'ChatGPT' : 'DeepSeek'}. Set its key in Cloud secrets or switch models in the app.` }); return }
 
@@ -2684,16 +2698,68 @@ exports.processDiscordAgent = discordFn
 
 
 
+// ── Chart-screenshot attachments ────────────────────────────────────────────
+// Images ride inside the callable payload as data URLs rather than being
+// uploaded client-side first: Storage rules deny all client SDK access to this
+// bucket by design (see storage.rules), so the function is the only thing that
+// writes there. The client downscales before sending, so a chart screenshot
+// arrives at ~200-400KB — well inside the callable's own request ceiling, which
+// these caps stay clear of.
+const MAX_CHART_IMAGES = 3
+const MAX_CHART_IMAGE_BYTES = 4 * 1024 * 1024
+const MAX_CHART_IMAGE_BYTES_TOTAL = 6 * 1024 * 1024
+const CHART_IMAGE_TYPES = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/webp': 'webp' }
+
+// Parse a `data:<mime>;base64,<payload>` string into { mime, ext, b64, bytes,
+// dataUrl }, or null if it isn't a supported image. Deliberately string-sliced
+// rather than regex-matched — this runs on untrusted input of arbitrary length,
+// and there is no pattern here worth the backtracking risk.
+function parseDataImage(value) {
+  const s = typeof value === 'string' ? value : ''
+  if (!s.startsWith('data:')) return null
+  const marker = ';base64,'
+  const at = s.indexOf(marker)
+  if (at < 0) return null
+  const mime = s.slice(5, at).toLowerCase()
+  const ext = CHART_IMAGE_TYPES[mime]
+  if (!ext) return null
+  const b64 = s.slice(at + marker.length)
+  if (!b64) return null
+  // Decoded length without materialising a second copy of the buffer.
+  const pad = b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0
+  const bytes = Math.floor((b64.length * 3) / 4) - pad
+  if (bytes <= 0) return null
+  // Normalise: the model and the uploader both get exactly what we validated.
+  return { mime, ext, b64, bytes, dataUrl: `data:${mime};base64,${b64}` }
+}
+
 // ── Pointer chat (web AI agent — DeepSeek/ChatGPT, same tools as Discord) ───
 exports.chatPointer = functions
   .region('europe-west1')
-  .runWith({ secrets: [...ALL_SECRETS, SECRET_DEEPSEEK, SECRET_OPENAI], timeoutSeconds: 120, memory: '512MB' })
+  // 300s, not 120s: a legible data infographic renders at 'medium' quality and
+  // takes ~30-60s on its own, on top of the agent's data-gathering tool calls.
+  .runWith({ secrets: [...ALL_SECRETS, SECRET_DEEPSEEK, SECRET_OPENAI], timeoutSeconds: 300, memory: '512MB' })
   .https.onCall(async (data, context) => {
     if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
     const uid = context.auth.uid
     appcheck.note(db, admin, context)
     const prompt = String(data?.prompt || '').trim()
-    if (!prompt) throw new functions.https.HttpsError('invalid-argument', 'prompt is required')
+    // An attached chart IS the request, so a message carrying images needs no
+    // text of its own — Pointer is told to give its read when there's no question.
+    const rawImages = Array.isArray(data?.images) ? data.images.slice(0, MAX_CHART_IMAGES) : []
+    if (!prompt && !rawImages.length) throw new functions.https.HttpsError('invalid-argument', 'prompt is required')
+
+    // Decode + validate the attachments before anything else spends money.
+    const userImages = []
+    let imageBudget = MAX_CHART_IMAGE_BYTES_TOTAL
+    for (const raw of rawImages) {
+      const parsed = parseDataImage(raw && (raw.dataUrl || raw))
+      if (!parsed) throw new functions.https.HttpsError('invalid-argument', 'Attachments must be PNG, JPEG or WebP images.')
+      if (parsed.bytes > MAX_CHART_IMAGE_BYTES) throw new functions.https.HttpsError('invalid-argument', 'That image is too large — please send a screenshot under 4MB.')
+      imageBudget -= parsed.bytes
+      if (imageBudget < 0) throw new functions.https.HttpsError('invalid-argument', 'Those images are too large in total — send fewer, or smaller screenshots.')
+      userImages.push(parsed)
+    }
 
     const history = Array.isArray(data?.history)
       ? data.history.slice(-12).filter((h) => h && (h.role === 'user' || h.role === 'assistant') && typeof h.content === 'string').map((h) => ({ role: h.role, content: h.content }))
@@ -2718,6 +2784,18 @@ exports.chatPointer = functions
       throw new functions.https.HttpsError('permission-denied', 'Deep research uses our most capable model and is a Pro feature — upgrade to unlock it.')
     }
 
+    // Chart reading is an admin kill-switch away from off (absent flag = on) and
+    // needs the OpenAI key regardless of which brain drives the chat, exactly
+    // like image generation and web search.
+    if (userImages.length) {
+      if (!metering.flagEnabled(userDoc, 'vision')) {
+        throw new functions.https.HttpsError('permission-denied', 'Chart image analysis is disabled on your account.')
+      }
+      if (!SECRET_OPENAI.value()) {
+        throw new functions.https.HttpsError('failed-precondition', 'Chart image analysis is not configured yet — send the ticker instead and I can analyse it live.')
+      }
+    }
+
     // Meter the request: consume 1 unit of the monthly Pointer allowance (then
     // credits). Blocks when the feature is disabled or the quota is exhausted.
     let spent
@@ -2737,9 +2815,14 @@ exports.chatPointer = functions
     }
 
     // Provider/model is chosen centrally by the admin (config/billing.aiProvider).
-    // Users no longer switch models in-app; the client request can't override it.
+    // Model access is a PLAN ENTITLEMENT: free runs on DeepSeek only, paid plans
+    // (pro/elite) may pick either DeepSeek or ChatGPT. Resolved server-side from
+    // the stored plan, so a free client asking for 'openai' is quietly downgraded
+    // rather than trusted. Paid callers with no explicit choice get the admin
+    // default (config/billing.aiProvider).
+    const picked = payments.resolvePointerProvider({ plan, requested: data?.provider, cfg })
+    let prov = picked.provider
     // The admin may optionally pin the deep-research model via config/billing.aiDeepModel.
-    let prov = cfg.raw.aiProvider === 'openai' ? 'openai' : 'deepseek'
     let deepModel = cfg.raw.aiDeepModel ? String(cfg.raw.aiDeepModel) : null
     const apiKey = prov === 'openai' ? SECRET_OPENAI.value() : SECRET_DEEPSEEK.value()
     if (!apiKey) {
@@ -2750,6 +2833,12 @@ exports.chatPointer = functions
     const ctx = {
       uid, db, admin, trader, gemscanner, encryption,
       masterSecret: MASTER_SECRET(), heliusKey: SECRET_HELIUS.value() || null, moralisKey: SECRET_MORALIS.value() || null,
+      // ChatGPT-backed capabilities (image generation + hosted web search) always
+      // use the OpenAI key, independent of which brain `prov` selected — DeepSeek
+      // has neither an image endpoint nor a hosted search tool. plan/billingCfg
+      // ride along because generate_image meters itself before it spends money.
+      openaiKey: SECRET_OPENAI.value() || null,
+      plan, billingCfg: cfg,
     }
 
     // Optional MCP bridge (Glassnode on-chain analytics). Built here so a slow
@@ -2784,11 +2873,29 @@ exports.chatPointer = functions
       }
     } catch (e) { /* MCP is optional — Pointer works without it */ }
 
+    // Persist the attachments so a reopened chat still shows what was analysed.
+    // Best-effort: the reading itself runs off the data URL we already hold, so
+    // a Storage hiccup must not cost the user their answer.
+    const attachments = []
+    for (const im of userImages) {
+      try {
+        const up = await openaiMedia.uploadImage({ admin, uid, b64: im.b64, contentType: im.mime, prefix: 'pointer-uploads', ext: im.ext })
+        attachments.push({ url: up.url, path: up.path })
+      } catch (e) { console.warn('[chart-vision] attachment upload failed:', e.message) }
+    }
+
     try {
-      const { text, proposal, history: newHistory, model, sources } = await agentLib.runAgent({ prompt, history, ctx, provider: prov, apiKey, surface: 'pointer', deep, deepModel, mcp })
-      await metering.track(db, uid, { pointerReqs: 1, ...(deep ? { deepReqs: 1 } : {}) }, { userInitiated: true })
+      const { text, proposal, history: newHistory, model, sources, images, imageNote } = await agentLib.runAgent({ prompt, history, ctx, provider: prov, apiKey, surface: 'pointer', deep, deepModel, mcp, userImages })
+      await metering.track(db, uid, { pointerReqs: 1, ...(deep ? { deepReqs: 1 } : {}), ...(images && images.length ? { imageReqs: images.length } : {}), ...(userImages.length ? { visionImgs: userImages.length } : {}) }, { userInitiated: true })
       const usage = { used: spent.used, remaining: spent.remaining, credits: spent.credits, quota: spent.quota, resetsAt: spent.resetsAt }
-      return { text, proposal: proposal || null, history: newHistory, provider: prov, deep, model, usage, sources: sources || [] }
+      // allowedProviders/providerDowngraded let the UI show the model picker only
+      // to plans that have one, and explain a silent downgrade instead of showing
+      // a reply from a model the user didn't pick.
+      // `attachments` are the user's own uploads (echoed back as Storage URLs so
+      // the client can swap its local preview for something persistable);
+      // `imageNote` is the transcription, which the client folds into its copy
+      // of the history so follow-up questions still have the chart's figures.
+      return { text, proposal: proposal || null, history: newHistory, provider: prov, deep, model, usage, sources: sources || [], images: images || [], attachments, imageNote: imageNote || null, allowedProviders: picked.allowed, providerDowngraded: picked.downgraded }
     } catch (e) {
       // Infra failure — refund the metered unit so a failed call isn't charged.
       await metering.refund(db, uid, { kind: 'pointer', ...spent })
@@ -2857,11 +2964,21 @@ exports.getPointerUsage = plainFn.https.onCall(async (data, context) => {
   const d = snap.exists ? snap.data() : {}
   const plan = ['free', 'pro', 'elite'].includes(d.plan) ? d.plan : 'free'
   const u = metering.readUsage(d, plan, cfg, 'pointer')
+  const img = metering.readUsage(d, plan, cfg, 'image')
   const flags = d.featureFlags || {}
   return {
     plan, quota: u.quota, used: u.used, remaining: u.remaining, credits: u.credits, resetsAt: u.resetsAt,
     pack: cfg.creditPack,
-    flags: { pointer: flags.pointer !== false, deepResearch: flags.deepResearch !== false },
+    // Image generation runs on its own monthly allowance (see metering.js).
+    images: { quota: img.quota, used: img.used, remaining: img.remaining },
+    flags: { pointer: flags.pointer !== false, deepResearch: flags.deepResearch !== false, images: flags.images !== false },
+    // Which chat models this plan may use, and which one a turn defaults to.
+    // Free = DeepSeek only; paid = both. The UI shows a picker only when there is
+    // more than one to pick from.
+    models: {
+      allowed: payments.pointerProvidersFor(plan),
+      current: payments.resolvePointerProvider({ plan, cfg }).provider,
+    },
   }
 })
 
@@ -3205,7 +3322,7 @@ exports.adminGetUser = adminFn.https.onCall(async (data, context) => {
   // Usage + controls (metering) for the admin panel.
   const cfg = await payments.billingConfig(db)
   const plan = ['free', 'pro', 'elite'].includes(d.plan) ? d.plan : 'free'
-  const usage = { pointer: metering.readUsage(d, plan, cfg, 'pointer'), gemScan: metering.readUsage(d, plan, cfg, 'gemScan') }
+  const usage = { pointer: metering.readUsage(d, plan, cfg, 'pointer'), gemScan: metering.readUsage(d, plan, cfg, 'gemScan'), image: metering.readUsage(d, plan, cfg, 'image') }
   const featureFlags = d.featureFlags || {}
   const userLimits = d.userLimits || {}
   let daily = []
@@ -3235,14 +3352,14 @@ exports.adminSetUserLimits = adminFn.https.onCall(async (data, context) => {
   const patch = {}
   if (data.featureFlags && typeof data.featureFlags === 'object') {
     const ff = {}
-    for (const k of ['pointer', 'deepResearch', 'scanner', 'signals', 'autoExecute']) if (data.featureFlags[k] !== undefined) ff[k] = !!data.featureFlags[k]
+    for (const k of ['pointer', 'deepResearch', 'images', 'scanner', 'signals', 'autoExecute']) if (data.featureFlags[k] !== undefined) ff[k] = !!data.featureFlags[k]
     if (Object.keys(ff).length) patch.featureFlags = ff
   }
   if (data.userLimits && typeof data.userLimits === 'object') {
     const ul = {}
     const intOrNull = (v) => { if (v === null || v === '' || v === undefined) return null; const n = parseInt(v); return Number.isFinite(n) ? Math.max(0, n) : null }
     const numOrNull = (v) => { if (v === null || v === '' || v === undefined) return null; const n = parseFloat(v); return Number.isFinite(n) ? Math.max(0, n) : null }
-    for (const k of ['pointerQuota', 'gemScanQuota', 'dailyTradeCap', 'priceAlertQuota', 'pointerTaskQuota']) if (data.userLimits[k] !== undefined) ul[k] = intOrNull(data.userLimits[k])
+    for (const k of ['pointerQuota', 'gemScanQuota', 'imageQuota', 'dailyTradeCap', 'priceAlertQuota', 'pointerTaskQuota']) if (data.userLimits[k] !== undefined) ul[k] = intOrNull(data.userLimits[k])
     if (data.userLimits.maxBuyUsd !== undefined) ul.maxBuyUsd = numOrNull(data.userLimits.maxBuyUsd)
     if (Object.keys(ul).length) patch.userLimits = ul
   }
@@ -3421,18 +3538,24 @@ exports.adminSetConfig = adminFn.https.onCall(async (data, context) => {
   // `: []` fallback meant any panel save that omitted the field silently wiped
   // every configured admin, leaving only the hardcoded fallback — a lockout
   // waiting to happen, and a change to who holds admin that nobody asked for.
-  if (Array.isArray(c.adminEmails)) {
-    const emails = c.adminEmails.map((e) => String(e).toLowerCase().trim()).filter(Boolean)
+  // An EMPTY array is never a legitimate instruction — it can only ever mean
+  // "remove every admin", which the guard below would reject anyway. Treating it
+  // as "field not sent" is what makes the panel usable when config/billing has no
+  // adminEmails at all (admins coming from the hardcoded fallback): it used to
+  // post [] and every save died on the self-inclusion check, whatever was edited.
+  const sentEmails = Array.isArray(c.adminEmails) ? c.adminEmails.map((e) => String(e).toLowerCase().trim()).filter(Boolean) : null
+  if (sentEmails && sentEmails.length) {
     // Refuse to hand over the last key: the caller must remain an admin, so a
     // bad edit can't lock every real admin out of the panel.
     const self = String(context.auth.token.email || '').toLowerCase()
-    if (!emails.includes(self))
+    if (!sentEmails.includes(self))
       throw new functions.https.HttpsError('invalid-argument', 'You cannot remove your own account from the admin list.')
-    clean.adminEmails = emails
+    clean.adminEmails = sentEmails
   }
   // Usage metering + controls (optional blocks; only written when provided).
   const qInt = (v, d) => { const n = parseInt(v); return Number.isFinite(n) && n >= 0 ? n : d }
   if (c.pointerQuota) clean.pointerQuota = { free: qInt(c.pointerQuota.free, 10), pro: qInt(c.pointerQuota.pro, 50), elite: qInt(c.pointerQuota.elite, 200) }
+  if (c.imageQuota) clean.imageQuota = { free: qInt(c.imageQuota.free, 2), pro: qInt(c.imageQuota.pro, 25), elite: qInt(c.imageQuota.elite, 100) }
   if (c.gemScanQuota) clean.gemScanQuota = { free: qInt(c.gemScanQuota.free, 5), pro: qInt(c.gemScanQuota.pro, 50), elite: qInt(c.gemScanQuota.elite, 200) }
   if (c.creditPack) clean.creditPack = { usd: Math.max(1, qInt(c.creditPack.usd, 10)), credits: Math.max(1, qInt(c.creditPack.credits, 50)) }
   if (c.autoTrade) clean.autoTrade = {

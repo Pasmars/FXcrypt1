@@ -1,0 +1,21 @@
+rules_version = '2';
+
+// Pointer's images live under two prefixes — pointer/{uid}/… for infographics it
+// generated, pointer-uploads/{uid}/… for chart screenshots the user sent it to
+// analyse — and BOTH are written ONLY by Cloud Functions, whose Admin SDK
+// bypasses these rules entirely. User uploads deliberately go through the
+// chatPointer callable rather than a client-side Storage write, so that path
+// stays closed.
+//
+// The app never reads them through the Storage SDK either: chatPointer returns a
+// Firebase download-token URL with the reply, and the browser loads that URL
+// directly. So no client — signed in or not — needs SDK access to this bucket,
+// and the safe default is to deny all of it. Anything added here later should be
+// opened deliberately, path by path.
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

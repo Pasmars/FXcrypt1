@@ -222,11 +222,22 @@ window.FXAPI = {
     const res = (await callGetHolderGraph({ chain, contractAddress, limit: 2000 })).data || {};
     return mapHolderGraph(res);
   },
-  // Pointer AI chat → { text, proposal }. The model is chosen by the admin
-  // (config/billing.aiProvider) — the client no longer sends a provider.
-  // opts.deep = true asks the backend to use that provider's top-tier model.
+  // Pointer AI chat → { text, proposal, images, models… }.
+  // opts.deep = true asks for that provider's top-tier model.
+  // opts.provider ('deepseek'|'openai') is a REQUEST, not a decision: model access
+  // is a plan entitlement enforced server-side, so a free account is silently
+  // resolved back to DeepSeek no matter what is sent here.
+  // opts.images = [{ dataUrl }] — chart screenshots for Pointer to read. They go
+  // in the callable payload (the app has no direct Storage access by design), so
+  // they must be downscaled first; see compressImage in pointer.jsx.
   chatPointer: async (prompt, history, opts) => {
-    const res = await callChatPointer({ prompt, history: history || [], deep: !!(opts && opts.deep) });
+    const o = opts || {};
+    const imgs = (o.images || []).filter((im) => im && typeof im.dataUrl === 'string').slice(0, 3).map((im) => ({ dataUrl: im.dataUrl }));
+    const res = await callChatPointer({
+      prompt, history: history || [], deep: !!o.deep,
+      ...(imgs.length ? { images: imgs } : {}),
+      ...(o.provider === 'openai' || o.provider === 'deepseek' ? { provider: o.provider } : {}),
+    });
     return res.data || {};
   },
   // Execute a gated trade proposal.
@@ -761,6 +772,17 @@ window.FXChats = {
       // Reference links Pointer cited (web_search sources) so they survive reload.
       sources: Array.isArray(m.sources) && m.sources.length
         ? m.sources.slice(0, 6).map((s) => ({ label: s.label || '', title: s.title || '', url: s.url || '' })).filter((s) => s.url)
+        : null,
+      // Generated infographics (assistant turns) and uploaded chart screenshots
+      // (user turns) — only the Storage URL is kept, plus a trimmed spec for alt
+      // text. The `http` filter is load-bearing, not defensive tidying: an
+      // attachment still carries its local `data:` preview until the upload
+      // comes back, and a base64 image inlined here would bloat the document
+      // toward Firestore's 1MB ceiling.
+      images: Array.isArray(m.images) && m.images.length
+        ? m.images.slice(0, 4)
+          .map((im) => ({ url: String(im.url || ''), prompt: String(im.prompt || '').slice(0, 300), style: im.style || '', orientation: im.orientation || '' }))
+          .filter((im) => im.url.startsWith('http://') || im.url.startsWith('https://'))
         : null,
     }));
     try {

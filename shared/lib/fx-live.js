@@ -4,7 +4,8 @@
 // fallback data for anything a source doesn't cover.
 import { db } from './firebase';
 import { auth } from './firebase';
-import { collection, getDocs, query, orderBy, limit, doc, getDoc } from 'firebase/firestore';
+import { onAuthStateChanged } from 'firebase/auth';
+import { collection, getDocs, query, orderBy, limit, doc, getDoc, onSnapshot } from 'firebase/firestore';
 import {
   callGetCexBalances,
   callGetBalances,
@@ -314,27 +315,92 @@ async function refreshSignals() {
   } catch (e) { /* keep fallback */ }
 }
 
-// ─── Auth-gated: profile identity → window.FX.user ───
+// ─── Auth-gated: profile identity + entitlements → window.FX ───
+// The Free/Pro/Elite badge is the most visible thing on the home screen, and a
+// one-shot getDoc made it unreliable two ways: one slow or failed read left the
+// badge stuck on "Free" for the whole session (only a page reload retried it),
+// and a plan bought mid-session — Stripe return, crypto invoice, admin grant —
+// never appeared until the next reload. So the doc is *subscribed* to instead:
+// onSnapshot reconnects on its own and pushes every later change.
+const PROFILE_CACHE = 'fx:profile:';
+
+// Fields applyProfile actually reads — cached so a cold start can paint the
+// right plan and name immediately instead of flashing "Free" for as long as the
+// first Firestore round-trip takes. Never trusted for entitlement decisions:
+// those are all server-enforced, this only drives what the badge renders.
+function readProfileCache(uid) {
+  try { return JSON.parse(localStorage.getItem(PROFILE_CACHE + uid) || 'null'); } catch (e) { return null; }
+}
+function writeProfileCache(uid, p) {
+  try {
+    localStorage.setItem(PROFILE_CACHE + uid, JSON.stringify({
+      firstName: p.firstName || '', lastName: p.lastName || '', email: p.email || '',
+      plan: p.plan || null, planExpiry: p.planExpiry || null,
+      botSettings: { wallets: (p.botSettings && p.botSettings.wallets) || {} },
+    }));
+  } catch (e) { /* storage full or blocked — the live read still works */ }
+}
+
+function applyProfile(u, p) {
+  p = p || {};
+  // Real subscription plan (server-set). Treat an expired plan as free.
+  const expired = p.planExpiry && p.planExpiry < Date.now();
+  window.FX.plan = (!p.plan || expired) ? 'free' : p.plan;
+  window.FX.planExpiry = p.planExpiry || null;
+  const name = `${p.firstName || ''} ${p.lastName || ''}`.trim() || u.displayName || (u.email ? u.email.split('@')[0] : 'Trader');
+  const initials = (((p.firstName || '')[0] || '') + ((p.lastName || '')[0] || '')).toUpperCase() || (u.email || 'A')[0].toUpperCase();
+  window.FX.user = { name, email: u.email || p.email || '', initials };
+  // Real deposit addresses (public) from the configured wallet — used by Receive.
+  const wallets = (p.botSettings && p.botSettings.wallets) || {};
+  const addrs = {};
+  for (const [chain, w] of Object.entries(wallets)) if (w && w.address) addrs[chain] = w.address;
+  window.FX.addresses = addrs;
+  emit();
+}
+
+let _profileUnsub = null;
+function stopProfileWatch() {
+  if (_profileUnsub) { try { _profileUnsub(); } catch (e) {} _profileUnsub = null; }
+}
+function watchProfile(u) {
+  stopProfileWatch();
+  if (!u) return;
+  const cached = readProfileCache(u.uid);
+  if (cached) applyProfile(u, cached);
+  _profileUnsub = onSnapshot(
+    doc(db, 'users', u.uid),
+    (snap) => {
+      const p = snap.exists() ? snap.data() : {};
+      writeProfileCache(u.uid, p);
+      applyProfile(u, p);
+    },
+    () => { /* stream dropped (offline/rules) — keep the last applied values */ },
+  );
+}
+
+// Auth-driven, not screen-driven: the plan resolves as soon as the session does,
+// whichever surface (mobile shell / Next route) happens to be mounted.
+onAuthStateChanged(auth, (u) => {
+  if (u) { watchProfile(u); return; }
+  stopProfileWatch();
+  window.FX.plan = 'free';
+  window.FX.planExpiry = null;
+  window.FX.user = null;
+  window.FX.addresses = {};
+  emit();
+});
+
+// One-shot re-read, for callers that want the profile *now* (paywall, after a
+// crypto payment verifies). The subscription above normally beats it to it.
 async function refreshProfile() {
   const u = auth.currentUser;
   if (!u) return;
   try {
     const snap = await getDoc(doc(db, 'users', u.uid));
     const p = snap.exists() ? snap.data() : {};
-    // Real subscription plan (server-set). Treat an expired plan as free.
-    const expired = p.planExpiry && p.planExpiry < Date.now();
-    window.FX.plan = (!p.plan || expired) ? 'free' : p.plan;
-    window.FX.planExpiry = p.planExpiry || null;
-    const name = `${p.firstName || ''} ${p.lastName || ''}`.trim() || u.displayName || (u.email ? u.email.split('@')[0] : 'Trader');
-    const initials = (((p.firstName || '')[0] || '') + ((p.lastName || '')[0] || '')).toUpperCase() || (u.email || 'A')[0].toUpperCase();
-    window.FX.user = { name, email: u.email || p.email || '', initials };
-    // Real deposit addresses (public) from the configured wallet — used by Receive.
-    const wallets = (p.botSettings && p.botSettings.wallets) || {};
-    const addrs = {};
-    for (const [chain, w] of Object.entries(wallets)) if (w && w.address) addrs[chain] = w.address;
-    window.FX.addresses = addrs;
-    emit();
-  } catch (e) {}
+    writeProfileCache(u.uid, p);
+    applyProfile(u, p);
+  } catch (e) { /* the live subscription will deliver it */ }
 }
 
 window.FXLive = {
@@ -345,9 +411,11 @@ window.FXLive = {
   refreshExchanges,
   refreshSignals,
   refreshProfile,
-  // called once the user is authenticated
+  // called once the user is authenticated. The profile/plan is NOT fetched here —
+  // watchProfile already subscribed to it on the auth state change, so adding a
+  // getDoc would only duplicate the read and re-introduce the ordering bug.
   bootstrapUser: async () => {
-    await Promise.allSettled([refreshProfile(), refreshWallet(), refreshSignals(), refreshExchanges()]);
+    await Promise.allSettled([refreshWallet(), refreshSignals(), refreshExchanges()]);
   },
 };
 
