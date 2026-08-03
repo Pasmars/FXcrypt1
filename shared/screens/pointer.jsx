@@ -21,31 +21,42 @@ const MAX_ATTACH = 3;
 const ATTACH_MAX_EDGE = 1600;
 const ATTACH_QUALITY = 0.85;
 
+// The source file is decoded from a `data:` URL, NOT URL.createObjectURL. Both
+// hosting configs ship `img-src 'self' data: https:` — no `blob:` — so an object
+// URL decodes happily on a dev server (which sends no CSP) and is silently
+// blocked in production. The only symptom is the generic onerror path, so every
+// upload on the live site failed with "that file isn't a readable image".
+// FileReader keeps this on a scheme the CSP already allows.
 function compressImage(file) {
   return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      const longest = Math.max(img.width, img.height);
-      const scale = longest > ATTACH_MAX_EDGE ? ATTACH_MAX_EDGE / longest : 1;
-      const w = Math.max(1, Math.round(img.width * scale));
-      const h = Math.max(1, Math.round(img.height * scale));
-      const canvas = document.createElement('canvas');
-      canvas.width = w; canvas.height = h;
-      const cx = canvas.getContext('2d');
-      if (!cx) { reject(new Error('Could not process that image.')); return; }
-      // JPEG has no alpha, so a transparent PNG would flatten onto black by
-      // default anyway — do it explicitly against the app's own background so a
-      // screenshot with rounded/transparent corners stays consistent.
-      cx.fillStyle = '#0B0E11';
-      cx.fillRect(0, 0, w, h);
-      cx.drawImage(img, 0, 0, w, h);
-      try { resolve(canvas.toDataURL('image/jpeg', ATTACH_QUALITY)); }
-      catch (e) { reject(new Error('Could not process that image.')); }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("That file couldn't be read."));
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const longest = Math.max(img.width, img.height);
+        const scale = longest > ATTACH_MAX_EDGE ? ATTACH_MAX_EDGE / longest : 1;
+        const w = Math.max(1, Math.round(img.width * scale));
+        const h = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        const cx = canvas.getContext('2d');
+        if (!cx) { reject(new Error('Could not process that image.')); return; }
+        // JPEG has no alpha, so a transparent PNG would flatten onto black by
+        // default anyway — do it explicitly against the app's own background so
+        // a screenshot with rounded/transparent corners stays consistent.
+        cx.fillStyle = '#0B0E11';
+        cx.fillRect(0, 0, w, h);
+        cx.drawImage(img, 0, 0, w, h);
+        try { resolve(canvas.toDataURL('image/jpeg', ATTACH_QUALITY)); }
+        catch (e) { reject(new Error('Could not process that image.')); }
+      };
+      // Reached when the browser genuinely cannot decode the format — most often
+      // an iPhone HEIC that Safari didn't transcode on the way out of Photos.
+      img.onerror = () => reject(new Error("Couldn't read that image — try a PNG or JPEG screenshot."));
+      img.src = String(reader.result || '');
     };
-    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("That file isn't a readable image.")); };
-    img.src = url;
+    reader.readAsDataURL(file);
   });
 }
 
