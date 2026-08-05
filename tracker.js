@@ -57,14 +57,38 @@ function fmtChange(val) {
   return { text: `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`, cls: n >= 0 ? 'price-up' : 'price-down' };
 }
 
+// Token names, symbols and logo URLs are whatever the deployer wrote into the
+// contract or the DexScreener profile — a token can be called
+// `<img src=x onerror=…>`. These panels are built with innerHTML and the CSP
+// allows inline script, so untrusted values are escaped before interpolation.
+// The holdings table matters most: it renders every token sitting in a looked-up
+// wallet, so an airdrop alone is enough to get a payload in front of a user.
+function esc(v) {
+  return String(v ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// Only http(s) may reach an href/src — a `javascript:` URL from the same feed
+// would execute on click.
+function safeUrl(u) {
+  try {
+    const parsed = new URL(String(u ?? ''), window.location.origin);
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') ? esc(parsed.href) : '';
+  } catch (_) { return ''; }
+}
+
 function chainBadge(c) {
   const l = { bsc: 'BSC', eth: 'ETH', sol: 'SOL' };
-  return `<span class="chain-badge ${c}">${l[c] || c}</span>`;
+  return `<span class="chain-badge ${esc(c)}">${esc(l[c] || c)}</span>`;
 }
 
 function shortAddr(a) {
   if (!a) return '';
-  return `${a.slice(0, 8)}...${a.slice(-6)}`;
+  return esc(`${String(a).slice(0, 8)}...${String(a).slice(-6)}`);
 }
 
 // ── DexScreener ───────────────────────────────────────────────────────────────
@@ -119,10 +143,10 @@ function renderTokenResultCard(pair, chain, addr, alreadySaved, holders) {
   return `
     <div class="token-result-card">
       <div class="token-card-header">
-        ${logo ? `<img class="token-logo" src="${logo}" alt="" onerror="this.style.display='none'"/>` : ''}
+        ${safeUrl(logo) ? `<img class="token-logo" src="${safeUrl(logo)}" alt="" onerror="this.style.display='none'"/>` : ''}
         <div class="token-card-title">
-          <strong>${pair.baseToken?.name || 'Unknown'}</strong>
-          <span class="token-symbol">${pair.baseToken?.symbol || ''}</span>
+          <strong>${esc(pair.baseToken?.name || 'Unknown')}</strong>
+          <span class="token-symbol">${esc(pair.baseToken?.symbol || '')}</span>
           ${chainBadge(chain)}
         </div>
         <div class="token-price-big">${fmtPrice(pair.priceUsd)}</div>
@@ -135,8 +159,8 @@ function renderTokenResultCard(pair, chain, addr, alreadySaved, holders) {
         <div class="stat-box"><span class="stat-label">Holders</span><span class="stat-val" id="holderCountVal">${holdersText}</span></div>
       </div>
       <div class="token-card-footer">
-        <span class="contract-addr" title="${addr}">${shortAddr(addr)}</span>
-        ${pair.url ? `<a href="${pair.url}" target="_blank" rel="noopener" class="dex-link">View on DEX ↗</a>` : ''}
+        <span class="contract-addr" title="${esc(addr)}">${shortAddr(addr)}</span>
+        ${safeUrl(pair.url) ? `<a href="${safeUrl(pair.url)}" target="_blank" rel="noopener" class="dex-link">View on DEX ↗</a>` : ''}
         ${alreadySavedHtml}
       </div>
     </div>`;
@@ -150,12 +174,12 @@ function renderWatchlistCard(token, pair, holders) {
   const liq = pair?.liquidity?.usd ? fmtUSD(pair.liquidity.usd) : '—';
   const holdersText = holders != null ? fmtNum(holders) : '—';
   return `
-    <div class="watchlist-card watchlist-card-clickable" id="wcard-${token.id}"
-         data-address="${token.contractAddress}" data-chain="${token.chain}">
+    <div class="watchlist-card watchlist-card-clickable" id="wcard-${esc(token.id)}"
+         data-address="${esc(token.contractAddress)}" data-chain="${esc(token.chain)}">
       <div class="wcard-header">
         ${chainBadge(token.chain)}
-        <strong class="wcard-name">${token.name || token.symbol}</strong>
-        <button class="remove-btn" data-id="${token.id}" title="Remove">✕</button>
+        <strong class="wcard-name">${esc(token.name || token.symbol)}</strong>
+        <button class="remove-btn" data-id="${esc(token.id)}" title="Remove">✕</button>
       </div>
       <div class="wcard-price">${price}</div>
       <div class="wcard-change ${ch.cls}">${ch.text}</div>
@@ -175,7 +199,7 @@ function renderHoldingsTable(tokens, walletAddr, chain) {
   const rows = tokens.map(t => {
     const ch = t.change24h != null ? fmtChange(t.change24h) : { text: '—', cls: '' };
     return `<tr>
-      <td>${t.symbol || t.name || shortAddr(t.contractAddress || t.mint)}</td>
+      <td>${t.symbol || t.name ? esc(t.symbol || t.name) : shortAddr(t.contractAddress || t.mint)}</td>
       <td>${t.balance.toLocaleString(undefined, { maximumFractionDigits: 4 })}</td>
       <td>${t.priceUsd ? fmtPrice(t.priceUsd) : '—'}</td>
       <td class="${ch.cls}">${ch.text}</td>
@@ -320,10 +344,10 @@ function renderSavedWallets() {
     return;
   }
   el.innerHTML = trackedWallets.map(w => `
-    <div class="saved-wallet-card" data-addr="${w.address}" data-chain="${w.chain}">
+    <div class="saved-wallet-card" data-addr="${esc(w.address)}" data-chain="${esc(w.chain)}">
       ${chainBadge(w.chain)}
-      <span class="saved-wallet-addr">${w.address}</span>
-      <button class="saved-wallet-remove" data-id="${w.id}" title="Remove">✕</button>
+      <span class="saved-wallet-addr">${esc(w.address)}</span>
+      <button class="saved-wallet-remove" data-id="${esc(w.id)}" title="Remove">✕</button>
     </div>`).join('');
   el.querySelectorAll('.saved-wallet-card').forEach(card => {
     card.addEventListener('click', e => {
@@ -369,7 +393,7 @@ async function lookupToken(addr, chain) {
       if (holderEl) holderEl.textContent = holders != null ? fmtNum(holders) : 'N/A';
     });
   } catch (e) {
-    el.innerHTML = `<div class="tracker-error">❌ ${e.message}</div>`;
+    el.innerHTML = `<div class="tracker-error">❌ ${esc(e.message)}</div>`;
   } finally { btn.disabled = false; btn.textContent = 'Track Token'; }
 }
 
@@ -428,7 +452,7 @@ async function loadWallet(addr, chain) {
       alert('Wallet saved!');
     });
   } catch (e) {
-    el.innerHTML = `<div class="tracker-error">❌ ${e.message}</div>`;
+    el.innerHTML = `<div class="tracker-error">❌ ${esc(e.message)}</div>`;
   } finally { btn.disabled = false; btn.textContent = 'Load Wallet'; }
 }
 

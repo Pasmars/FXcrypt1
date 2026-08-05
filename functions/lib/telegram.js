@@ -2758,13 +2758,28 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
 
   // ── Pending CEX Import (multi-step key import) ────────────────────────────
   const pendingCexImport = settings.pendingCexImport
+  // An abandoned import used to leave the collected credentials sitting on the
+  // user doc forever, so drop the record as soon as its window closes.
+  if (pendingCexImport?.exchange && !(pendingCexImport.expiresAt > Date.now())) {
+    await userDoc.ref.set({ botSettings: { pendingCexImport: admin.firestore.FieldValue.delete() } }, { merge: true })
+  }
   if (!text.startsWith('/') && pendingCexImport?.exchange && pendingCexImport.expiresAt > Date.now()) {
-    const { exchange, step, apiKey: storedKey, secret: storedSecret } = pendingCexImport
+    const { exchange, step } = pendingCexImport
+    // Carried between turns as ciphertext — every other credential in this
+    // system is encrypted at rest and the half-finished ones must be too.
+    const storedKey    = pendingCexImport.apiKeyEnc ? encryption.decrypt(pendingCexImport.apiKeyEnc, uid, masterSecret) : null
+    const storedSecret = pendingCexImport.secretEnc ? encryption.decrypt(pendingCexImport.secretEnc, uid, masterSecret) : null
     const input = text.trim()
 
     // Always delete the user's message and animate-delete the previous prompt
     await bot.deleteMessage(chatId, update.message?.message_id).catch(() => {})
     await animateDelete(bot, chatId, pendingCexImport.promptMsgId)
+
+    if ((step === 'secret' && !storedKey) || (step === 'passphrase' && (!storedKey || !storedSecret))) {
+      await userDoc.ref.set({ botSettings: { pendingCexImport: admin.firestore.FieldValue.delete() } }, { merge: true })
+      await bot.sendMessage(chatId, '⚠️ That import expired. Start again from Settings → CEX Setup.', { reply_markup: mainMenuKeyboard() })
+      return
+    }
 
     if (step === 'apikey') {
       if (input.length < 10) {
@@ -2776,7 +2791,7 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
         { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'settings_cex' }]] } }
       )
       await userDoc.ref.set({
-        botSettings: { pendingCexImport: { exchange, step: 'secret', apiKey: input, promptMsgId: secretPromptRes?.result?.message_id ?? null, expiresAt: Date.now() + 10 * 60 * 1000 } }
+        botSettings: { pendingCexImport: { exchange, step: 'secret', apiKeyEnc: encryption.encrypt(input, uid, masterSecret), promptMsgId: secretPromptRes?.result?.message_id ?? null, expiresAt: Date.now() + 10 * 60 * 1000 } }
       }, { merge: true })
       return
     }
@@ -2792,7 +2807,7 @@ async function handleUpdate(bot, update, admin, db, trader, encryption, masterSe
           { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'settings_cex' }]] } }
         )
         await userDoc.ref.set({
-          botSettings: { pendingCexImport: { exchange, step: 'passphrase', apiKey: storedKey, secret: input, promptMsgId: ppPromptRes?.result?.message_id ?? null, expiresAt: Date.now() + 10 * 60 * 1000 } }
+          botSettings: { pendingCexImport: { exchange, step: 'passphrase', apiKeyEnc: encryption.encrypt(storedKey, uid, masterSecret), secretEnc: encryption.encrypt(input, uid, masterSecret), promptMsgId: ppPromptRes?.result?.message_id ?? null, expiresAt: Date.now() + 10 * 60 * 1000 } }
         }, { merge: true })
         return
       }

@@ -784,54 +784,13 @@ exports.executeTrade = fn.https.onCall(async (data, context) => {
   }
 })
 
-// ── Sign & Submit Solana Transaction (callable from web app) ──────────────
-// Browser builds the Jupiter swap transaction; this function only signs + submits.
-// Private key never leaves this Cloud Function.
-exports.signAndSubmitSolTx = fn.https.onCall(async (data, context) => {
-  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in required')
-
-  const uid = context.auth.uid
-  const { serializedTxBase64, tokenAddress } = data
-
-  if (typeof serializedTxBase64 !== 'string' || serializedTxBase64.trim().length < 10)
-    throw new functions.https.HttpsError('invalid-argument', 'serializedTxBase64 is required')
-  if (typeof tokenAddress !== 'string' || !tokenAddress.trim())
-    throw new functions.https.HttpsError('invalid-argument', 'tokenAddress is required')
-  validateAddress('sol', tokenAddress.trim())
-
-  const userSnap = await db.doc(`users/${uid}`).get()
-  if (!userSnap.exists) throw new functions.https.HttpsError('not-found', 'User not found')
-
-  const settings = userSnap.data().botSettings || {}
-  const wallets  = settings.wallets || {}
-
-  if (!wallets.sol?.encryptedKey)
-    throw new functions.https.HttpsError('failed-precondition', 'No SOL wallet configured')
-
-  const pk        = encryption.decrypt(wallets.sol.encryptedKey, uid, MASTER_SECRET())
-  const heliusKey = SECRET_HELIUS.value() || null
-
-  try {
-    const result = await trader.signAndSubmitSolTx(
-      pk, serializedTxBase64.trim(), settings.solRpc || null, heliusKey
-    )
-    await db.collection(`users/${uid}/trades`).add({
-      chain: 'sol', tokenAddress: tokenAddress.trim(), type: 'buy',
-      amountIn: data.amountSol ? String(data.amountSol) : null, percentSold: null,
-      txHash: result.txHash, status: result.status, source: 'gem-hybrid',
-      timestamp: admin.firestore.FieldValue.serverTimestamp(),
-    })
-    return { txHash: result.txHash, status: result.status, chain: 'sol', tokenAddress: tokenAddress.trim() }
-  } catch (err) {
-    if (err instanceof functions.https.HttpsError) throw err
-    await db.collection(`users/${uid}/trades`).add({
-      chain: 'sol', tokenAddress: tokenAddress.trim(), type: 'buy',
-      txHash: null, status: 'failed', error: err.message, source: 'gem-hybrid',
-      timestamp: admin.firestore.FieldValue.serverTimestamp(),
-    })
-    throw new functions.https.HttpsError('internal', err.message || 'Solana transaction failed')
-  }
-})
+// signAndSubmitSolTx was removed (security review, 2026-08-05). It signed
+// client-supplied transaction bytes with the user's custodial Solana key — a
+// signing oracle whose only guard checked which programs the transaction
+// invoked, so a real Jupiter instruction plus a SystemProgram.transfer drained
+// the wallet. Nothing called it: buyTokenSOL/sellTokenSOL build their own
+// transactions server-side. Do not reintroduce a callable that signs bytes the
+// client composed.
 
 // ── Save Wallet (encrypts private key server-side) ────────────────────────
 exports.saveWallet = fn.https.onCall(async (data, context) => {
@@ -2310,6 +2269,8 @@ exports.processAgentScans = functions
     let tgToken
     try { tgToken = TG_TOKEN() } catch (_) { tgToken = null }
 
+    const billing = await payments.billingConfig(db)
+
     await Promise.allSettled(snap.docs.map(async (userDoc) => {
       const uid           = userDoc.id
       const userData      = userDoc.data()
@@ -2323,8 +2284,19 @@ exports.processAgentScans = functions
       const marketTypes   = agentSettings.marketTypes || ['spot', 'futures']
       const timeframe     = agentSettings.timeframe  || '4H'
       const minConfidence = agentSettings.minConfidence || 70
-      const autoExecute   = agentSettings.autoExecute || false
       const ms            = MASTER_SECRET()
+
+      // agentSettings is written straight from the client (it is not in the
+      // firestore rules' protectedKeys), so autoExecute is only a request. The
+      // same invariants the copy-trade and gem paths enforce are applied here:
+      // paid plan, admin kill-switch, per-user feature flag. Without this a free
+      // user can turn on live auto-trading with one setDoc from the console.
+      const userPlan  = ['free', 'pro', 'elite'].includes(userData.plan) ? userData.plan : 'free'
+      const userFlags = userData.featureFlags || {}
+      const autoExecute = !!agentSettings.autoExecute
+        && userPlan !== 'free'
+        && billing.autoTrade.globalEnabled !== false
+        && userFlags.autoExecute !== false
 
       // Fetch recent signals to deduplicate — 48h window so post-resolution
       // cooldowns (up to 18h after a stop) are enforceable.
@@ -3164,9 +3136,19 @@ exports.stripeWebhook = billingFn.https.onRequest(async (req, res) => {
   try { event = stripe.webhooks.constructEvent(req.rawBody, req.headers['stripe-signature'], wh) }
   catch (e) { console.error('stripe sig fail:', e.message); return res.status(400).send(`Webhook Error: ${e.message}`) }
   try {
-    if (event.type === 'checkout.session.completed') {
+    // async_payment_succeeded is the settlement event for delayed methods, whose
+    // checkout.session.completed arrives unpaid and is skipped just below.
+    if (event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded') {
       const s = event.data.object
       const uid = (s.metadata && s.metadata.uid) || s.client_reference_id
+      // Delayed-notification methods (ACH, SEPA/Bacs debit, boleto, OXXO) fire
+      // this event with payment_status 'unpaid' — the funds have not settled and
+      // may never. checkout.session.async_payment_succeeded is the event that
+      // grants those; here we only act once Stripe says it is actually paid.
+      if (s.payment_status && s.payment_status !== 'paid' && s.payment_status !== 'no_payment_required') {
+        console.log('stripeWebhook: session not paid yet, deferring grant', s.id, s.payment_status)
+        return res.json({ received: true })
+      }
       if (uid && s.metadata && s.metadata.kind === 'credits') {
         // Pointer credit top-up — add non-expiring credits to the user's balance.
         const credits = parseInt(s.metadata.credits) || 0
@@ -3354,8 +3336,18 @@ exports.adminGetUser = adminFn.https.onCall(async (data, context) => {
   if (safe.botSettings) {
     const bs = { ...safe.botSettings }
     if (bs.wallets) bs.wallets = Object.fromEntries(Object.entries(bs.wallets).map(([k, w]) => [k, { address: w.address }]))
-    for (const f of ['cexKeys', 'apiKeys', 'exchangeKeys']) delete bs[f]
+    for (const f of ['cexKeys', 'apiKeys', 'exchangeKeys', 'pendingCexImport']) delete bs[f]
     safe.botSettings = bs
+  }
+  // saveCexApiKey writes exchange credentials to agentSettings.cexKeys, not
+  // botSettings — redacting only botSettings above shipped every user's
+  // encrypted API key and secret to the admin panel.
+  if (safe.agentSettings) {
+    const as = { ...safe.agentSettings }
+    if (as.cexKeys) as.cexKeys = Object.fromEntries(
+      Object.entries(as.cexKeys).map(([k, v]) => [k, { maskedKey: v.maskedKey || '***' }]))
+    for (const f of ['apiKeys', 'exchangeKeys']) delete as[f]
+    safe.agentSettings = as
   }
   // recent payments
   let pays = []

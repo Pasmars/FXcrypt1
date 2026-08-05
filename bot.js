@@ -36,6 +36,33 @@ async function _decryptWalletKey(enc, password) {
   return new TextDecoder().decode(pt)
 }
 
+// ── HTML escaping ──────────────────────────────────────────────────────────
+// The gem scanner renders tokens nobody vetted: names, symbols and promo
+// descriptions come from DexScreener, which reports whatever the deployer wrote
+// into the contract, so a token can legitimately be called
+// `<img src=x onerror=…>`. Cards are built with innerHTML and the CSP allows
+// inline script, so every such value is escaped before interpolation — and the
+// scanner pulls boosted/trending tokens automatically, so the victim never has
+// to seek the malicious token out. Values persisted to gemCalls are escaped at
+// render time too, since documents written before this already hold raw text.
+function esc(v) {
+  return String(v ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+// Only http(s) may reach an href — a `javascript:` URL from the same feed would
+// execute on click.
+function safeUrl(u) {
+  try {
+    const parsed = new URL(String(u ?? ''), window.location.origin)
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') ? esc(parsed.href) : ''
+  } catch (_) { return '' }
+}
+
 // ── State ──────────────────────────────────────────────────────────────────
 let currentUser      = null
 let snipeChain       = 'bsc'
@@ -108,7 +135,7 @@ function _buildTxPopup(gem, buyAmount, chainTicker) {
       <p class="tx-popup-sub" id="txPopupSub">Please wait while your trade is being submitted…</p>
 
       <div class="tx-popup-token">
-        <span class="tx-popup-token-name">${gem.tokenSymbol || gem.tokenName}</span>
+        <span class="tx-popup-token-name">${esc(gem.tokenSymbol || gem.tokenName)}</span>
         <span class="tx-popup-token-meta">${buyAmount} ${chainTicker} · ${gem.chain.toUpperCase()}</span>
       </div>
 
@@ -250,7 +277,7 @@ function showTradeTxPopup(action, displayAmount, chainTicker) {
       <h3 class="tx-popup-title" id="trdTxTitle">Processing Trade</h3>
       <p class="tx-popup-sub" id="trdTxSub">Sending ${action} transaction…</p>
       <div class="tx-popup-token">
-        <span class="tx-popup-token-name">${tokenName}</span>
+        <span class="tx-popup-token-name">${esc(tokenName)}</span>
         <span class="tx-popup-token-meta" style="color:${accentCol}">${actionLbl}</span>
         <span class="tx-popup-token-meta">${metaLine}</span>
       </div>
@@ -637,7 +664,7 @@ async function checkToken() {
     _lastTradeToken = { symbol: best.baseToken.symbol, name: best.baseToken.name }
     box.innerHTML = `
       <div class="bot-token-info-card">
-        <div class="bot-token-name">${best.baseToken.name} <span class="bot-token-symbol">${best.baseToken.symbol}</span></div>
+        <div class="bot-token-name">${esc(best.baseToken.name)} <span class="bot-token-symbol">${esc(best.baseToken.symbol)}</span></div>
         <div class="bot-token-stats">
           <span>Price: <b>$${parseFloat(best.priceUsd || 0).toFixed(8)}</b></span>
           <span>Liq: <b>$${(best.liquidity?.usd || 0).toLocaleString()}</b></span>
@@ -645,7 +672,7 @@ async function checkToken() {
         </div>
       </div>`
   } catch (err) {
-    box.innerHTML = `<div class="bot-token-not-found">Error: ${err.message}</div>`
+    box.innerHTML = `<div class="bot-token-not-found">Error: ${esc(err.message)}</div>`
   }
 }
 
@@ -1708,7 +1735,7 @@ function renderGemCards(gems) {
                       : 'gem-risk-unknown'
       safetyHtml = `
         <div class="gem-safety-row">
-          <span class="gem-risk-badge ${riskClass}">${gem.safety.riskLevel}</span>
+          <span class="gem-risk-badge ${riskClass}">${esc(gem.safety.riskLevel)}</span>
           ${gem.safety.sellTax != null ? `<span class="gem-tax">Sell Tax: ${gem.safety.sellTax}%</span>` : ''}
           ${gem.safety.buyTax != null ? `<span class="gem-tax">Buy Tax: ${gem.safety.buyTax}%</span>` : ''}
         </div>`
@@ -1738,7 +1765,7 @@ function renderGemCards(gems) {
 
     // Description snippet
     const descSnippet = gem.description
-      ? `<div class="gem-detail-desc">${gem.description.slice(0, 200)}${gem.description.length > 200 ? '…' : ''}</div>`
+      ? `<div class="gem-detail-desc">${esc(gem.description.slice(0, 200))}${gem.description.length > 200 ? '…' : ''}</div>`
       : ''
 
     // DexScreener link
@@ -1750,8 +1777,8 @@ function renderGemCards(gems) {
         <div class="gem-card-header gem-card-clickable">
           <div class="gem-card-title">
             <span class="chain-pill-sm ${chainKey}">${chainTicker}</span>
-            <span class="gem-token-name">${gem.tokenName}</span>
-            <span class="gem-token-symbol">${gem.tokenSymbol}</span>
+            <span class="gem-token-name">${esc(gem.tokenName)}</span>
+            <span class="gem-token-symbol">${esc(gem.tokenSymbol)}</span>
             ${gem.boosted ? '<span class="gem-boost-tag">🚀 Boosted</span>' : ''}
           </div>
           <div class="gem-card-right">
@@ -1798,11 +1825,11 @@ function renderGemCards(gems) {
               </div>
               <div class="gem-stat">
                 <span class="gem-stat-label">DEX</span>
-                <span class="gem-stat-value">${gem.dexName}</span>
+                <span class="gem-stat-value">${esc(gem.dexName)}</span>
               </div>
               <div class="gem-stat">
                 <span class="gem-stat-label">Pair</span>
-                <span class="gem-stat-value">${gem.quoteSymbol ? gem.tokenSymbol + '/' + gem.quoteSymbol : '—'}</span>
+                <span class="gem-stat-value">${gem.quoteSymbol ? esc(gem.tokenSymbol + '/' + gem.quoteSymbol) : '—'}</span>
               </div>
               <div class="gem-stat">
                 <span class="gem-stat-label">Score</span>
@@ -1831,14 +1858,14 @@ function renderGemCards(gems) {
           <div class="gem-detail-section">
             <div class="gem-detail-label">Contract Address</div>
             <div class="gem-detail-ca">
-              <a href="${explorerBase}${gem.tokenAddress}" target="_blank" class="gem-ca-link">${shortCA}</a>
-              <button class="gem-copy-btn" data-copy="${gem.tokenAddress}" title="Copy CA">📋</button>
+              <a href="${safeUrl(explorerBase + gem.tokenAddress)}" target="_blank" class="gem-ca-link">${esc(shortCA)}</a>
+              <button class="gem-copy-btn" data-copy="${esc(gem.tokenAddress)}" title="Copy CA">📋</button>
             </div>
           </div>
 
           <div class="gem-detail-links">
-            <a href="${dexLink}" target="_blank" class="gem-link-btn">📊 DexScreener</a>
-            <a href="${explorerBase}${gem.tokenAddress}" target="_blank" class="gem-link-btn">
+            <a href="${safeUrl(dexLink)}" target="_blank" class="gem-link-btn">📊 DexScreener</a>
+            <a href="${safeUrl(explorerBase + gem.tokenAddress)}" target="_blank" class="gem-link-btn">
               ${gem.chain === 'bsc' ? '🔍 BscScan' : gem.chain === 'eth' ? '🔍 Etherscan' : gem.chain === 'base' ? '🔍 BaseScan' : gem.chain === 'ton' ? '🔍 TONScan' : gem.chain === 'matic' ? '🔍 PolygonScan' : '🔍 Solscan'}
             </a>
           </div>
@@ -1847,10 +1874,10 @@ function renderGemCards(gems) {
         <div class="gem-card-actions">
           ${_canBuy
             ? `<button class="gem-buy-btn" data-idx="${idx}">Buy ${buyAmount} ${chainTicker}${buyDollar}</button>`
-            : `<a href="${dexLink}" target="_blank" class="gem-buy-btn gem-trade-link">Trade on DexScreener ↗</a>`
+            : `<a href="${safeUrl(dexLink)}" target="_blank" class="gem-buy-btn gem-trade-link">Trade on DexScreener ↗</a>`
           }
-          <a href="${dexLink}" target="_blank" class="gem-explorer-link" title="DexScreener">📊</a>
-          <a href="${explorerBase}${gem.tokenAddress}"
+          <a href="${safeUrl(dexLink)}" target="_blank" class="gem-explorer-link" title="DexScreener">📊</a>
+          <a href="${safeUrl(explorerBase + gem.tokenAddress)}"
              target="_blank" class="gem-explorer-link" title="Explorer">↗</a>
         </div>
       </div>`
@@ -2182,8 +2209,8 @@ function renderGemCallsPanel(calls) {
       <div class="gem-call-card">
         <div class="gem-call-header">
           <span class="chain-pill-sm ${chainKey}">${ticker}</span>
-          <span class="gem-call-name">${call.tokenName}</span>
-          <span class="gem-token-symbol">${call.tokenSymbol}</span>
+          <span class="gem-call-name">${esc(call.tokenName)}</span>
+          <span class="gem-token-symbol">${esc(call.tokenSymbol)}</span>
           <span class="gem-score-badge ${scoreClass}" style="min-width:28px;height:28px;font-size:11px">${call.gemScore}</span>
           <span class="gem-call-time">${agoStr}</span>
         </div>

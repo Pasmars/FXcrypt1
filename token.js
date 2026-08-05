@@ -11,6 +11,30 @@ const address = params.get('address') || '';
 
 const getTokenHoldersFn = httpsCallable(fns, 'getTokenHolders');
 
+// Token names, symbols, dex ids and image URLs all come from DexScreener, which
+// reports whatever the deployer put in the contract — `<img src=x onerror=…>` is
+// a perfectly valid token name. This page builds its markup with innerHTML and
+// the CSP allows inline script, so every one of those values is escaped before
+// it is interpolated; otherwise opening a token page runs attacker script beside
+// a signed-in session that can move funds.
+function esc(v) {
+  return String(v ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// Only http(s) may reach an href/src — a `javascript:` URL from the same feed
+// would execute on click.
+function safeUrl(u) {
+  try {
+    const parsed = new URL(String(u ?? ''), window.location.origin);
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') ? esc(parsed.href) : '';
+  } catch (_) { return ''; }
+}
+
 // ── Formatters ────────────────────────────────────────────────────────────────
 function fmtUSD(n) {
   if (n == null || isNaN(n)) return 'N/A';
@@ -41,7 +65,7 @@ function fmtChange(val) {
 
 function chainBadge(c) {
   const labels = { bsc: 'BSC', eth: 'ETH', sol: 'SOL' };
-  return `<span class="chain-badge ${c}">${labels[c] || c.toUpperCase()}</span>`;
+  return `<span class="chain-badge ${esc(c)}">${esc(labels[c] || String(c).toUpperCase())}</span>`;
 }
 
 function explorerLink(c, addr) {
@@ -83,21 +107,27 @@ function renderPairs(pairs, holders) {
 
   const holdersText = holders != null ? holders.toLocaleString() : 'N/A';
 
-  const otherPairs = pairs.slice(0, 5).map(p => `
+  const otherPairs = pairs.slice(0, 5).map(p => {
+    const pUrl = safeUrl(p.url);
+    return `
     <div class="td-pair-row">
-      <span class="td-pair-dex">${p.dexId || '—'}</span>
+      <span class="td-pair-dex">${esc(p.dexId || '—')}</span>
       <span class="td-pair-liq">${p.liquidity?.usd ? fmtUSD(p.liquidity.usd) : '—'} liq</span>
       <span class="td-pair-price">${fmtPrice(p.priceUsd)}</span>
-      ${p.url ? `<a href="${p.url}" target="_blank" rel="noopener" class="td-pair-link">↗</a>` : ''}
-    </div>`).join('');
+      ${pUrl ? `<a href="${pUrl}" target="_blank" rel="noopener" class="td-pair-link">↗</a>` : ''}
+    </div>`;
+  }).join('');
+
+  const logoUrl = safeUrl(logo);
+  const bestUrl = safeUrl(best.url);
 
   return `
     <div class="td-header">
-      ${logo ? `<img class="td-logo" src="${logo}" alt="" onerror="this.style.display='none'" />` : '<div class="td-logo-placeholder"></div>'}
+      ${logoUrl ? `<img class="td-logo" src="${logoUrl}" alt="" onerror="this.style.display='none'" />` : '<div class="td-logo-placeholder"></div>'}
       <div class="td-title">
-        <h1 class="td-name">${token.name || 'Unknown Token'}</h1>
+        <h1 class="td-name">${esc(token.name || 'Unknown Token')}</h1>
         <div class="td-meta">
-          <span class="token-symbol">${token.symbol || ''}</span>
+          <span class="token-symbol">${esc(token.symbol || '')}</span>
           ${chainBadge(chain)}
         </div>
       </div>
@@ -146,11 +176,11 @@ function renderPairs(pairs, holders) {
     <div class="td-info">
       <div class="td-info-row">
         <span class="td-info-label">Top DEX</span>
-        <span class="td-info-val">${best.dexId || 'N/A'}</span>
+        <span class="td-info-val">${esc(best.dexId || 'N/A')}</span>
       </div>
       <div class="td-info-row">
         <span class="td-info-label">Pair</span>
-        <span class="td-info-val td-mono">${best.pairAddress ? best.pairAddress.slice(0, 18) + '…' : 'N/A'}</span>
+        <span class="td-info-val td-mono">${best.pairAddress ? esc(String(best.pairAddress).slice(0, 18)) + '…' : 'N/A'}</span>
       </div>
       <div class="td-info-row">
         <span class="td-info-label">Pair Created</span>
@@ -158,15 +188,15 @@ function renderPairs(pairs, holders) {
       </div>
       <div class="td-info-row">
         <span class="td-info-label">Contract</span>
-        <span class="td-info-val td-mono">${address.slice(0, 18)}…</span>
+        <span class="td-info-val td-mono">${esc(address.slice(0, 18))}…</span>
       </div>
     </div>
 
     <div class="td-links">
-      <a href="${explorerLink(chain, address)}" target="_blank" rel="noopener" class="td-link-btn">
+      <a href="${safeUrl(explorerLink(chain, address))}" target="_blank" rel="noopener" class="td-link-btn">
         View on Explorer ↗
       </a>
-      ${best.url ? `<a href="${best.url}" target="_blank" rel="noopener" class="td-link-btn td-link-dex">View on DEX ↗</a>` : ''}
+      ${bestUrl ? `<a href="${bestUrl}" target="_blank" rel="noopener" class="td-link-btn td-link-dex">View on DEX ↗</a>` : ''}
     </div>
 
     ${pairs.length > 1 ? `
@@ -191,6 +221,6 @@ requireAuth(async () => {
     el.innerHTML = renderPairs(pairs, holders);
     document.title = `${pairs[0].baseToken?.name || 'Token'} — FXcrypt`;
   } catch (e) {
-    el.innerHTML = `<div class="tracker-error">❌ ${e.message}</div>`;
+    el.innerHTML = `<div class="tracker-error">❌ ${esc(e.message)}</div>`;
   }
 });

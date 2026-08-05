@@ -410,97 +410,13 @@ async function sellTokenSOL(privateKeyBase58, tokenMint, percentToSell, slippage
   return { txHash, status: 'confirmed', chain: 'sol', tokenAddress: tokenMint, feeNative: fee.feeNative, feeTxHash: fee.feeTxHash }
 }
 
-// ── Solana: sign a pre-built Jupiter transaction and submit ───────────────
-// The browser fetches the Jupiter quote + swap transaction; this function
-// only deserializes, signs with the user's keypair, and submits to Solana RPC.
-// Programs a Jupiter swap legitimately touches. Anything else in the
-// transaction means it is not the swap the caller claims it is.
-const JUPITER_PROGRAMS = new Set([
-  'JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4', // Jupiter aggregator v6
-  'JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB', // v4 (older quotes)
-])
-const SWAP_ALLOWED_PROGRAMS = new Set([
-  ...JUPITER_PROGRAMS,
-  '11111111111111111111111111111111',             // System (wSOL wrap, rent)
-  'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',  // SPL Token
-  'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb',  // Token-2022
-  'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL', // Associated Token Account
-  'ComputeBudget111111111111111111111111111111',  // priority fee / CU limit
-])
+// The Solana signing oracle that lived here (signAndSubmitSolTx) was removed in
+// the 2026-08-05 security review. It signed whatever transaction bytes the
+// client sent with the user's custodial key, and its guard only checked which
+// programs were invoked — so a genuine Jupiter instruction paired with a
+// SystemProgram.transfer passed validation and emptied the wallet. buyTokenSOL
+// and sellTokenSOL build their transactions here on the server instead.
 
-function assertJupiterSwap(tx) {
-  const keys = tx.message.staticAccountKeys || []
-  const instructions = tx.message.compiledInstructions
-    || (tx.message.instructions || []).map((i) => ({ programIdIndex: i.programIdIndex }))
-  if (!instructions.length) throw new Error('Refusing to sign: transaction has no instructions')
-
-  let sawJupiter = false
-  for (const ix of instructions) {
-    const programId = keys[ix.programIdIndex]
-    const id = programId ? programId.toBase58() : ''
-    if (!SWAP_ALLOWED_PROGRAMS.has(id))
-      throw new Error(`Refusing to sign: transaction invokes an unexpected program (${id || 'unknown'})`)
-    if (JUPITER_PROGRAMS.has(id)) sawJupiter = true
-  }
-  if (!sawJupiter)
-    throw new Error('Refusing to sign: transaction is not a Jupiter swap')
-}
-
-async function signAndSubmitSolTx(privateKeyBase58, serializedTxBase64, rpcUrl, heliusApiKey) {
-  validateSolKey(privateKeyBase58)
-
-  if (typeof serializedTxBase64 !== 'string' || !serializedTxBase64)
-    throw new Error('serializedTxBase64 must be a non-empty string')
-
-  const { Connection, Keypair, VersionedTransaction } = require('@solana/web3.js')
-  const bs58 = require('bs58')
-
-  const solRpc = safeRpcUrl(rpcUrl)
-    || (heliusApiKey ? `https://mainnet.helius-rpc.com/?api-key=${heliusApiKey}` : null)
-    || 'https://api.mainnet-beta.solana.com'
-
-  const connection = new Connection(solRpc, 'confirmed')
-  const secretKey  = bs58.decode(privateKeyBase58)
-  const keypair    = Keypair.fromSecretKey(secretKey)
-
-  let tx
-  try {
-    tx = VersionedTransaction.deserialize(Buffer.from(serializedTxBase64, 'base64'))
-  } catch (e) {
-    throw new Error('Invalid transaction — could not deserialize: ' + e.message)
-  }
-
-  // This function is a signing oracle over a custodial key: whatever the client
-  // sends gets signed with the user's private key. Signing it blindly means any
-  // hijacked session (or XSS) could hand over a plain "drain everything to me"
-  // transfer. So only a real Jupiter swap is accepted — every program the
-  // transaction invokes must be on the allowlist, and Jupiter must be one of
-  // them. Program ids always live in the static account keys (they can never be
-  // supplied through an address lookup table), so this cannot be bypassed by
-  // hiding the program behind an ALT.
-  assertJupiterSwap(tx)
-
-  tx.sign([keypair])
-
-  // Jupiter already simulates — skip preflight for faster submission
-  const txHash = await connection.sendRawTransaction(tx.serialize(), {
-    skipPreflight: true,
-    maxRetries: 3,
-  })
-
-  // Use blockhash-context form so confirmTransaction knows when to stop polling
-  const { lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed')
-  const confirmation = await connection.confirmTransaction({
-    signature: txHash,
-    blockhash: tx.message.recentBlockhash,
-    lastValidBlockHeight,
-  }, 'confirmed')
-
-  if (confirmation.value.err)
-    throw new Error('Transaction failed on-chain: ' + JSON.stringify(confirmation.value.err))
-
-  return { txHash, status: 'confirmed', chain: 'sol' }
-}
 
 // ── Balance queries ────────────────────────────────────────────────────────
 async function getEVMBalance(address, chain, rpcUrl) {
@@ -568,4 +484,4 @@ async function checkToken(tokenAddress, chain) {
   }
 }
 
-module.exports = { buyTokenEVM, sellTokenEVM, buyTokenSOL, sellTokenSOL, signAndSubmitSolTx, getEVMBalance, getSOLBalance, getTONBalance, checkToken }
+module.exports = { buyTokenEVM, sellTokenEVM, buyTokenSOL, sellTokenSOL, getEVMBalance, getSOLBalance, getTONBalance, checkToken }
